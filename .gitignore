@@ -1,0 +1,80 @@
+## Build artifacts
+bin/
+obj/
+out/
+artifacts/
+
+## Visual Studio / Rider / VS Code
+.vs/
+.idea/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+## Logs & temp
+*.log
+logs/
+*.pid
+*.seed
+*.tmp
+*.temp
+
+## OS junk
+.DS_Store
+Thumbs.db
+
+## NuGet
+*.nupkg
+.nuget/
+packages/
+project.lock.json
+
+## Resharper / Analyzer
+_ReSharper*/
+*.DotSettings.user
+
+## Coverage
+coverage/
+*.coverage
+*.coveragexml
+TestResult.xml
+TestResults/
+
+## EF Core design-time snapshots (optional)
+Migrations/obj/
+
+## Secrets & environment
+*.env
+.env*
+secrets.json
+appsettings.*.local.json
+UserSecrets/
+
+## Publish
+publish/
+*.PublishSettings
+
+## Cache
+.cache/
+dist/
+
+## Frontend subfolders (if any)
+node_modules/
+npm-debug.log*
+yarn.lock
+pnpm-lock.yaml
+
+## JetBrains Rider cache
+.idea/
+
+## Terraform / IaC (if present)
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+
+## Docker (optional)
+docker-compose.override.yml
+*.iml
