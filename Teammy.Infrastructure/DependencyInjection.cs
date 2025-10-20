@@ -7,6 +7,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Teammy.Application.Common.Interfaces.Auth;
 using Teammy.Application.Common.Interfaces.Persistence;
+using Teammy.Application.Mentors;
 using Teammy.Infrastructure.Auth;
 using Teammy.Infrastructure.Persistence;
 using Teammy.Infrastructure.Repositories;
@@ -21,7 +22,8 @@ namespace Teammy.Infrastructure
             services.AddScoped<IExternalTokenVerifier, FirebaseTokenVerifier>();
             services.AddSingleton<ITokenService, JwtTokenService>();
             services.AddScoped<IUserRepository, UserRepository>();
-
+            services.AddScoped<IMentorService, MentorService>();
+            services.AddScoped<IMentorRepository, MentorRepository>();
             return services;
         }
     }

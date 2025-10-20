@@ -17,11 +17,4 @@
     <ProjectReference Include="..\Teammy.Application\Teammy.Application.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-  <None Include="teammyFirebase.json">
-    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    <CopyToPublishDirectory>Always</CopyToPublishDirectory>
-  </None>
-  </ItemGroup>
-
 </Project>
