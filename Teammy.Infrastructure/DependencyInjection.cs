@@ -7,10 +7,12 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Teammy.Application.Common.Interfaces.Auth;
 using Teammy.Application.Common.Interfaces.Persistence;
+using Teammy.Application.Common.Interfaces.Topics;
 using Teammy.Application.Mentors;
 using Teammy.Infrastructure.Auth;
 using Teammy.Infrastructure.Persistence;
 using Teammy.Infrastructure.Repositories;
+using Teammy.Infrastructure.Topics;
 
 namespace Teammy.Infrastructure
 {
@@ -24,6 +26,7 @@ namespace Teammy.Infrastructure
             services.AddScoped<IUserRepository, UserRepository>();
             services.AddScoped<IMentorService, MentorService>();
             services.AddScoped<IMentorRepository, MentorRepository>();
+            services.AddScoped<ITopicImportService, TopicImportService>();
             return services;
         }
     }
