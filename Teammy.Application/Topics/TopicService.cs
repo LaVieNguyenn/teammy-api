@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Teammy.Application.Common.Interfaces.Persistence;
+using Teammy.Application.Common.Pagination;
 using Teammy.Application.Common.Results;
 using Teammy.Application.Topics.ReadModels;
 
@@ -44,6 +45,8 @@ namespace Teammy.Application.Topics
             var ok = await _repo.ArchiveAsync(id, ct);
             return ok ? OperationResult.Success() : OperationResult.Fail("TOPIC_NOT_FOUND", 404);
         }
+        public Task<PagedResult<TopicReadModel>> SearchAsync(Guid termId, string? status, Guid? departmentId, Guid? majorId, string? q, string? sort, int page, int size, CancellationToken ct)
+       => _repo.SearchAsync(termId, status, departmentId, majorId, q, sort, page, size, ct);
 
     }
 }

@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
+using Teammy.Api.Contracts.Common;
 using Teammy.Api.Contracts.Topic;
 using Teammy.Application.Common.Interfaces.Topics;
 using Teammy.Application.Topics;
@@ -28,6 +29,28 @@ public sealed class TopicController : ControllerBase
         var vm = await _topics.GetByIdAsync(id, ct);
         if (vm is null) return NotFound();
         return Ok(Map(vm));
+    }
+    [HttpGet]
+    [ProducesResponseType(typeof(PagedResponse<TopicDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Search(
+       [FromQuery] Guid termId,
+       [FromQuery] string? status,
+       [FromQuery] Guid? departmentId,
+       [FromQuery] Guid? majorId,
+       [FromQuery] string? q,
+       [FromQuery] string? sort,
+       [FromQuery] int page = 1,
+       [FromQuery] int size = 20,
+       CancellationToken ct = default)
+    {
+        if (termId == Guid.Empty)
+            return BadRequest(new { error = "TERM_ID_REQUIRED" });
+
+        var res = await _topics.SearchAsync(termId, status, departmentId, majorId, q, sort, page, size, ct);
+        return Ok(new PagedResponse<TopicDto>(
+            res.Total, res.Page, res.Size,
+            res.Items.Select(Map).ToList()
+        ));
     }
     [HttpPost("import")]
     [Authorize(Roles = "moderator")]
