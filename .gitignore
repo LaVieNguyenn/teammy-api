@@ -78,3 +78,4 @@ crash.log
 ## Docker (optional)
 docker-compose.override.yml
 *.iml
+Teammy.Api/teammyFirebase.json
