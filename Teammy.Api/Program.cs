@@ -3,6 +3,7 @@ using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using Teammy.Application.Auth.Queries;
 using Teammy.Application.Auth.Services;
+using Teammy.Application.Groups.Services;
 using Teammy.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -14,6 +15,7 @@ builder.Services.AddSwaggerGen();
 // Application services
 builder.Services.AddScoped<AuthenticationService>();
 builder.Services.AddScoped<CurrentUserQueryService>();
+builder.Services.AddScoped<GroupService>();
 
 // Infrastructure (DbContext, Auth services, Repositories)
 builder.Services.AddInfrastructure(builder.Configuration);
