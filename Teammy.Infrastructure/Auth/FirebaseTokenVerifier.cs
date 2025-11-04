@@ -1,76 +1,46 @@
-// Teammy.Infrastructure/Auth/FirebaseTokenVerifier.cs
+using Google.Apis.Auth.OAuth2;
 using FirebaseAdmin;
 using FirebaseAdmin.Auth;
-using Google.Apis.Auth.OAuth2;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
-using Teammy.Application.Common.Interfaces.Auth;
-using System.Text.Json;
+using Teammy.Application.Common.Interfaces;
 
 namespace Teammy.Infrastructure.Auth;
 
+/// <summary>
+/// Verify Firebase ID token bằng Firebase Admin SDK.
+/// Đọc đường dẫn service account từ "Auth:Firebase:ServiceAccountPath".
+/// </summary>
 public sealed class FirebaseTokenVerifier : IExternalTokenVerifier
 {
-    private static bool _inited;
+    private readonly FirebaseApp _app;
 
-    public FirebaseTokenVerifier(IConfiguration cfg, IHostEnvironment env, ILogger<FirebaseTokenVerifier> logger)
+    public FirebaseTokenVerifier(IConfiguration cfg, IHostEnvironment env)
     {
-        if (_inited) return;
+        var relPath = cfg["Auth:Firebase:ServiceAccountPath"]
+            ?? throw new InvalidOperationException("Auth:Firebase:ServiceAccountPath is required");
+        var fullPath = Path.Combine(env.ContentRootPath, relPath);
+        if (!File.Exists(fullPath))
+            throw new FileNotFoundException("Firebase credential not found", fullPath);
 
-        GoogleCredential credential;
-        var saPath = cfg["Auth:Firebase:ServiceAccountPath"];
-
-        if (!string.IsNullOrWhiteSpace(saPath))
+        _app = FirebaseApp.Create(new AppOptions
         {
-            // resolve relative -> ContentRoot (thư mục chứa .csproj khi dotnet run)
-            if (!Path.IsPathRooted(saPath))
-                saPath = Path.Combine(env.ContentRootPath, saPath);
-
-            logger.LogInformation("Firebase: using ServiceAccountPath = {Path}", saPath);
-
-            if (!File.Exists(saPath))
-                throw new FileNotFoundException($"Service account file not found: {saPath}");
-
-            credential = GoogleCredential.FromFile(saPath);
-        }
-        else if (cfg.GetSection("Auth:Firebase:ServiceAccountJson").Exists()
-                 && cfg.GetSection("Auth:Firebase:ServiceAccountJson").Value is null)
-        {
-            // nếu bạn vẫn để object JSON trong appsettings
-            var raw = cfg.GetSection("Auth:Firebase:ServiceAccountJson").Get<JsonElement>().GetRawText();
-            logger.LogInformation("Firebase: using ServiceAccountJson from configuration.");
-            credential = GoogleCredential.FromJson(raw);
-        }
-        else if (!string.IsNullOrWhiteSpace(cfg["Auth:Firebase:ServiceAccountJson"]))
-        {
-            // JSON dạng string
-            logger.LogInformation("Firebase: using ServiceAccountJson (string) from configuration.");
-            credential = GoogleCredential.FromJson(cfg["Auth:Firebase:ServiceAccountJson"]!);
-        }
-        else
-        {
-            logger.LogWarning("Firebase: no ServiceAccount configured, falling back to Application Default Credentials (ADC).");
-            credential = GoogleCredential.GetApplicationDefault();
-        }
-
-        FirebaseApp.Create(new AppOptions { Credential = credential });
-        _inited = true;
+            Credential = GoogleCredential.FromFile(fullPath)
+        }, $"teammy-{Guid.NewGuid()}");
     }
 
     public async Task<ExternalUserInfo> VerifyAsync(string idToken, CancellationToken ct)
     {
-        var decoded = await FirebaseAuth.DefaultInstance.VerifyIdTokenAsync(idToken, ct);
+        var decoded = await FirebaseAuth.GetAuth(_app).VerifyIdTokenAsync(idToken, ct);
 
-        var sub  = decoded.Uid;
-        var ok   = decoded.Claims.TryGetValue("email_verified", out var v) && v is bool b && b;
-        var mail = decoded.Claims.TryGetValue("email", out var e) ? e?.ToString() : null;
-        var name = decoded.Claims.TryGetValue("name", out var n) ? n?.ToString() : mail ?? "User";
-        var pic  = decoded.Claims.TryGetValue("picture", out var p) ? p?.ToString() : null;
+        decoded.Claims.TryGetValue("email", out var emailObj);
+        decoded.Claims.TryGetValue("email_verified", out var evObj);
+        decoded.Claims.TryGetValue("name", out var nameObj);
+        decoded.Claims.TryGetValue("picture", out var picObj);
 
-        if (string.IsNullOrWhiteSpace(sub) || string.IsNullOrWhiteSpace(mail))
-            throw new UnauthorizedAccessException("Token missing sub/email.");
+        var email = emailObj?.ToString() ?? throw new InvalidOperationException("No email in Firebase token");
+        var verified = evObj is bool b && b;
 
-        return new ExternalUserInfo(sub, mail!, ok, name!, pic);
+        return new ExternalUserInfo(email, verified, nameObj?.ToString(), picObj?.ToString());
     }
 }

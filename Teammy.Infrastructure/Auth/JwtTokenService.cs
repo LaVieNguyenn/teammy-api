@@ -3,38 +3,36 @@ using System.Security.Claims;
 using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
-using Teammy.Application.Common.Interfaces.Auth;
+using Teammy.Application.Common.Interfaces;
 
 namespace Teammy.Infrastructure.Auth;
 
-public sealed class JwtTokenService : ITokenService
+public sealed class JwtTokenService(IConfiguration cfg) : ITokenService
 {
-    private readonly IConfiguration _cfg;
-    public JwtTokenService(IConfiguration cfg) => _cfg = cfg;
-
-    public string CreateAccessToken(Guid userId, string email, string displayName, string role, string? picture)
+    public string CreateAccessToken(Guid userId, string email, string displayName, string role, bool skillsCompleted)
     {
-        var issuer   = _cfg["Auth:Jwt:Issuer"]!;
-        var audience = _cfg["Auth:Jwt:Audience"]!;
-        var key      = _cfg["Auth:Jwt:Key"]!;
+        var issuer   = cfg["Auth:Jwt:Issuer"]!;
+        var audience = cfg["Auth:Jwt:Audience"]!;
+        var key      = cfg["Auth:Jwt:Key"]!;
+
+        var creds = new SigningCredentials(
+            new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key)),
+            SecurityAlgorithms.HmacSha256);
 
         var claims = new[]
         {
             new Claim(JwtRegisteredClaimNames.Sub, userId.ToString()),
-            new Claim("uid", userId.ToString()),
-            new Claim(ClaimTypes.Role, role),
             new Claim(JwtRegisteredClaimNames.Email, email),
-            new Claim("name", displayName),
-            new Claim("picture", picture ?? string.Empty)
+            new Claim(ClaimTypes.Name, displayName),
+            new Claim(ClaimTypes.Role, role),
+            new Claim("skills_completed", skillsCompleted ? "true" : "false")
         };
 
-        var creds = new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key)),
-                                           SecurityAlgorithms.HmacSha256);
-
         var token = new JwtSecurityToken(
-            issuer: issuer, audience: audience, claims: claims,
-            notBefore: DateTime.UtcNow,
-            expires:   DateTime.UtcNow.AddHours(12),
+            issuer: issuer,
+            audience: audience,
+            claims: claims,
+            expires: DateTime.UtcNow.AddHours(8),
             signingCredentials: creds);
 
         return new JwtSecurityTokenHandler().WriteToken(token);

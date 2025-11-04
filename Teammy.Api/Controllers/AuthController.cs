@@ -1,86 +1,60 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using Teammy.Api.Contracts;
-using Teammy.Application.Auth;
+using Teammy.Application.Auth.Dtos;
+using Teammy.Application.Auth.Queries;
+using Teammy.Application.Auth.Services;
 
 namespace Teammy.Api.Controllers;
 
+/// <summary>
+/// Auth endpoints: /login, /me
+/// Controller chỉ điều phối, không truy cập EF/DbContext.
+/// </summary>
 [ApiController]
-[Route("api/[controller]")]
+[Route("api/auth")]
 public sealed class AuthController : ControllerBase
 {
-    private readonly IAuthService _auth;
-    private readonly ILogger<AuthController> _log;
+    private readonly AuthenticationService _authentication;
+    private readonly CurrentUserQueryService _currentUserQuery;
 
-    public AuthController(IAuthService auth, ILogger<AuthController> log)
+    public AuthController(AuthenticationService authentication, CurrentUserQueryService currentUserQuery)
     {
-        _auth = auth;
-        _log = log;
+        _authentication = authentication;
+        _currentUserQuery = currentUserQuery;
     }
 
     [HttpPost("login")]
     [AllowAnonymous]
-    [ProducesResponseType(typeof(AuthResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(StatusCodes.Status403Forbidden)]
-    public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken ct)
+    public async Task<ActionResult<LoginResponse>> Login([FromBody] LoginRequest request, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(request.IdToken))
-            return BadRequest(new { error = "idToken required" });
         try
         {
-            var r = await _auth.LoginWithFirebaseAsync(request.IdToken, ct);
-
-            return Ok(new AuthResponse
-            {
-                AccessToken = r.AccessToken,
-                User = new UserDto
-                {
-                    Id = r.UserId,
-                    Email = r.Email,
-                    Name = r.Name,
-                    PhotoUrl = r.PhotoUrl,
-                    Role = r.Role
-                }
-            });
+            var result = await _authentication.LoginWithFirebaseAsync(request, ct);
+            return Ok(result);
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
         {
-            return Unauthorized(new { error = "USER_NOT_IMPORTED", message = "User is not provisioned. Contact administrator." });
+            return Unauthorized(ex.Message);
         }
-        catch (InvalidOperationException ex) when (ex.Message == "USER_INACTIVE")
+        catch (ArgumentException ex)
         {
-            return StatusCode(StatusCodes.Status403Forbidden, new { error = "USER_INACTIVE", message = "Account is disabled." });
+            return BadRequest(ex.Message);
         }
     }
 
-
     [HttpGet("me")]
     [Authorize]
-    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(object), StatusCodes.Status200OK)]
-    public async Task<IActionResult> Me(CancellationToken ct)
+    public async Task<ActionResult<CurrentUserDto>> Me(CancellationToken ct)
     {
-        var uid = User.FindFirstValue("uid");
-        if (!Guid.TryParse(uid, out var id))
-            return Unauthorized();
-        try
-        {
-            var me = await _auth.GetMeAsync(id, ct);
-            return Ok(new
-            {
-                id = me.Id,
-                email = me.Email,
-                name = me.Name,
-                role = me.Role,
-                photoUrl = me.PhotoUrl
-            });
-        }
-        catch (KeyNotFoundException)
-        {
-            return NotFound(new { error = "USER_NOT_FOUND" });
-        }
+        var sub = User.FindFirstValue(JwtRegisteredClaimNames.Sub)
+               ?? User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        if (!Guid.TryParse(sub, out var userId))
+            return Unauthorized("Invalid token");
+
+        var me = await _currentUserQuery.GetAsync(userId, ct);
+        return me is null ? NotFound() : Ok(me);
     }
 }
