@@ -18,10 +18,11 @@
   </ItemGroup>
 
   <ItemGroup>
-  <None Include="teammyFirebase.json">
+  <!-- Firebase configuration file OPEN it if using on local -->
+  <!-- <None Include="teammyFirebase.json">
     <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     <CopyToPublishDirectory>Always</CopyToPublishDirectory>
-  </None>
+  </None> -->
   </ItemGroup>
 
 </Project>
