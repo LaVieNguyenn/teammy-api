@@ -54,7 +54,7 @@ public sealed class TopicController : ControllerBase
     }
     [HttpPost("import")]
     [Authorize(Roles = "moderator")]
-    [Consumes("multipart/form-data")]
+    [Consumes("multipart/form-data", "application/octet-stream", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")]
     [ProducesResponseType(typeof(ImportResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Import([FromQuery] Guid termId, [FromQuery] Guid? majorId, CancellationToken ct)
