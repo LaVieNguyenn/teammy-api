@@ -46,5 +46,27 @@ public sealed class GroupService : IGroupService
         var (ok, reason) = await _repo.LeaveAsync(groupId, userId, ct);
         return ok ? OperationResult.Success() : OperationResult.Fail(reason ?? "CANNOT_LEAVE", 409);
     }
+    public async Task<IReadOnlyList<PendingMemberReadModel>> GetPendingMembersAsync(Guid groupId, Guid leaderId, CancellationToken ct)
+    {
+        if (!await _repo.IsLeaderAsync(groupId, leaderId, ct)) return Array.Empty<PendingMemberReadModel>();
+        return await _repo.GetPendingMembersAsync(groupId, ct);
+    }
+
+    public async Task<OperationResult> AcceptAsync(Guid groupId, Guid leaderId, Guid userId, CancellationToken ct)
+    {
+        if (!await _repo.IsLeaderAsync(groupId, leaderId, ct)) return OperationResult.Fail("NOT_LEADER", 403);
+        var g = await _repo.GetByIdAsync(groupId, ct);
+        if (g is null) return OperationResult.Fail("GROUP_NOT_FOUND", 404);
+        if (g.Members >= g.Capacity) return OperationResult.Fail("GROUP_FULL", 409);
+        var (ok, reason) = await _repo.AcceptPendingAsync(groupId, userId, ct);
+        return ok ? OperationResult.Success() : OperationResult.Fail(reason ?? "CANNOT_ACCEPT", 409);
+    }
+
+    public async Task<OperationResult> RejectAsync(Guid groupId, Guid leaderId, Guid userId, CancellationToken ct)
+    {
+        if (!await _repo.IsLeaderAsync(groupId, leaderId, ct)) return OperationResult.Fail("NOT_LEADER", 403);
+        var (ok, reason) = await _repo.RejectPendingAsync(groupId, userId, ct);
+        return ok ? OperationResult.Success() : OperationResult.Fail(reason ?? "CANNOT_REJECT", 409);
+    }
 }
 

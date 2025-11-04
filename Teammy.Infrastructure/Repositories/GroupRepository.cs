@@ -148,4 +148,38 @@ public sealed class GroupRepository : IGroupRepository
         await _db.SaveChangesAsync(ct);
         return (true, null);
     }
+    public Task<bool> IsLeaderAsync(Guid groupId, Guid userId, CancellationToken ct)
+        => _db.group_members.AsNoTracking().AnyAsync(m => m.group_id == groupId && m.user_id == userId && m.status == "leader", ct);
+    public async Task<IReadOnlyList<PendingMemberReadModel>> GetPendingMembersAsync(Guid groupId, CancellationToken ct)
+    {
+        var items = await (from m in _db.group_members.AsNoTracking()
+                           join u in _db.users.AsNoTracking() on m.user_id equals u.id
+                           where m.group_id == groupId && m.status == "pending"
+                           orderby m.joined_at
+                           select new PendingMemberReadModel
+                           {
+                               UserId = u.id,
+                               DisplayName = u.display_name,
+                               Email = u.email,
+                               JoinedAt = m.joined_at
+                           }).ToListAsync(ct);
+        return items;
+    }
+    public async Task<(bool Ok, string? Reason)> AcceptPendingAsync(Guid groupId, Guid userId, CancellationToken ct)
+    {
+        var m = await _db.group_members.FirstOrDefaultAsync(x => x.group_id == groupId && x.user_id == userId && x.status == "pending", ct);
+        if (m is null) return (false, "NOT_PENDING");
+        m.status = "member";
+        await _db.SaveChangesAsync(ct);
+        return (true, null);
+    }
+    public async Task<(bool Ok, string? Reason)> RejectPendingAsync(Guid groupId, Guid userId, CancellationToken ct)
+    {
+        var m = await _db.group_members.FirstOrDefaultAsync(x => x.group_id == groupId && x.user_id == userId && x.status == "pending", ct);
+        if (m is null) return (false, "NOT_PENDING");
+        m.status = "left";
+        m.left_at = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        return (true, null);
+    }
 }

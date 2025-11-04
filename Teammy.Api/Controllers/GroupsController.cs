@@ -73,6 +73,40 @@ public sealed class GroupsController : ControllerBase
         if (!r.Ok) return StatusCode(r.StatusCode, new ApiResponse(false, r.Message, null, r.StatusCode));
         return NoContent();
     }
+
+    [HttpGet("{id:guid}/members/pending")]
+    [Authorize(Roles = "student")]
+    [ProducesResponseType(typeof(IEnumerable<PendingMemberDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ListPending([FromRoute] Guid id, CancellationToken ct)
+    {
+        var uid = User.FindFirstValue("uid") ?? User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(uid, out var leaderId)) return Unauthorized();
+        var items = await _groups.GetPendingMembersAsync(id, leaderId, ct);
+        return Ok(items.Select(m => new PendingMemberDto { UserId = m.UserId, DisplayName = m.DisplayName, Email = m.Email, JoinedAt = m.JoinedAt }));
+    }
+    [HttpPost("{id:guid}/members/{userId:guid}/accept")]
+    [Authorize(Roles = "student")]
+    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Accept([FromRoute] Guid id, [FromRoute] Guid userId, CancellationToken ct)
+    {
+        var uid = User.FindFirstValue("uid") ?? User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(uid, out var leaderId)) return Unauthorized();
+        var r = await _groups.AcceptAsync(id, leaderId, userId, ct);
+        return StatusCode(r.StatusCode, new ApiResponse(r.Ok, r.Message, null, r.StatusCode));
+    }
+    [HttpPost("{id:guid}/members/{userId:guid}/reject")]
+    [Authorize(Roles = "student")]
+    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Reject([FromRoute] Guid id, [FromRoute] Guid userId, CancellationToken ct)
+    {
+        var uid = User.FindFirstValue("uid") ?? User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(uid, out var leaderId)) return Unauthorized();
+        var r = await _groups.RejectAsync(id, leaderId, userId, ct);
+        return StatusCode(r.StatusCode, new ApiResponse(r.Ok, r.Message, null, r.StatusCode));
+    }
+
     private static GroupDto Map(GroupReadModel m) => new()
     {
         Id = m.Id,
