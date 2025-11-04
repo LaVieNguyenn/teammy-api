@@ -21,6 +21,10 @@ public static class DependencyInjection
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IUserReadOnlyQueries, UserReadOnlyQueries>();
 
+        // Groups
+        services.AddScoped<IGroupRepository, GroupRepository>();
+        services.AddScoped<IGroupReadOnlyQueries, GroupReadOnlyQueries>();
+
         return services;
     }
 }
