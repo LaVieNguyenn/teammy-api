@@ -39,7 +39,6 @@ public sealed class InvitationService(
         // Create invitation
         var invitationId = await repo.CreateAsync(postId, inviteeUserId, invitedByUserId, message, null, ct);
 
-        // Notify via email + realtime (best-effort)
         var invitee = await queries.GetAsync(invitationId, ct);
         bool emailSent = false;
         if (invitee?.InviteeEmail is not null)
