@@ -83,5 +83,13 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
         var activeCount = await db.group_members.AsNoTracking().CountAsync(x => x.group_id == groupId && (x.status == "member" || x.status == "leader"), ct);
         return (g.max_members, activeCount);
     }
-}
 
+    public async Task<Guid?> GetLeaderGroupIdAsync(Guid userId, Guid semesterId, CancellationToken ct)
+    {
+        var groupId = await db.group_members.AsNoTracking()
+            .Where(m => m.user_id == userId && m.semester_id == semesterId && m.status == "leader")
+            .Select(m => (Guid?)m.group_id)
+            .FirstOrDefaultAsync(ct);
+        return groupId;
+    }
+}

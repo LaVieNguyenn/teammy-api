@@ -1,0 +1,55 @@
+using Teammy.Application.Common.Interfaces;
+using Teammy.Application.Posts.Dtos;
+
+namespace Teammy.Application.Posts.Services;
+
+public sealed class ProfilePostService(
+    IRecruitmentPostRepository repo,
+    IRecruitmentPostReadOnlyQueries queries,
+    IGroupReadOnlyQueries groupQueries,
+    IGroupRepository groupRepo)
+{
+    public async Task<Guid> CreateAsync(Guid currentUserId, CreateProfilePostRequest req, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.Title)) throw new ArgumentException("Title is required");
+        var semesterId = await queries.GetActiveSemesterIdAsync(ct) ?? throw new InvalidOperationException("No active semester");
+        // Reuse recruitment_post with post_type = 'profile' and user_id set
+        // GroupId here is null
+        return await repo.CreateRecruitmentPostAsync(semesterId, postType: "profile", groupId: null, userId: currentUserId, req.MajorId, req.Title, req.Description, req.Skills, ct);
+    }
+
+    public Task<ProfilePostDetailDto?> GetAsync(Guid id, CancellationToken ct)
+        => queries.GetAsync(id, ct).ContinueWith(t =>
+        {
+            var d = t.Result;
+            if (d is null) return (ProfilePostDetailDto?)null;
+            return new ProfilePostDetailDto(d.Id, d.SemesterId, d.Title, d.Status, null, d.MajorId, d.Description, d.CreatedAt);
+        }, ct);
+
+    public Task<IReadOnlyList<ProfilePostSummaryDto>> ListAsync(string? skills, Guid? majorId, string? status, CancellationToken ct)
+        => queries.ListAsync(skills, majorId, status, ct).ContinueWith(t =>
+        {
+            return (IReadOnlyList<ProfilePostSummaryDto>)t.Result
+                .Select(d => new ProfilePostSummaryDto(d.Id, d.SemesterId, d.Title, d.Status, null, d.MajorId))
+                .ToList();
+        }, ct);
+
+    public async Task InviteAsync(Guid profilePostId, Guid currentUserId, CancellationToken ct)
+    {
+        // Find profile post owner userId
+        var owner = await queries.GetPostOwnerAsync(profilePostId, ct);
+        if (owner.OwnerUserId is null) throw new InvalidOperationException("Not a profile post");
+
+        // Find current user's leader group in this semester
+        var groupId = await groupQueries.GetLeaderGroupIdAsync(currentUserId, owner.SemesterId, ct)
+            ?? throw new UnauthorizedAccessException("Leader group not found in this semester");
+
+        var (maxMembers, activeCount) = await groupQueries.GetGroupCapacityAsync(groupId, ct);
+        if (activeCount >= maxMembers) throw new InvalidOperationException("Group is full");
+
+        var hasActive = await groupQueries.HasActiveMembershipInSemesterAsync(owner.OwnerUserId.Value, owner.SemesterId, ct);
+        if (hasActive) throw new InvalidOperationException("User already has active/pending membership in this semester");
+
+        await groupRepo.AddMembershipAsync(groupId, owner.OwnerUserId.Value, owner.SemesterId, "pending", ct);
+    }
+}
