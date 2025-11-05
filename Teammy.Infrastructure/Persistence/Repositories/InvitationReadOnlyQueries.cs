@@ -37,6 +37,7 @@ public sealed class InvitationReadOnlyQueries(AppDbContext db) : IInvitationRead
                 from g in gg.DefaultIfEmpty()
                 join invBy in db.users.AsNoTracking() on i.invited_by equals invBy.user_id
                 where i.invitee_user_id == userId
+                  && ((status == null || status == "") || i.status == status)
                 orderby i.created_at descending
                 select new InvitationListItemDto(
                     i.invitation_id,
@@ -49,7 +50,6 @@ public sealed class InvitationReadOnlyQueries(AppDbContext db) : IInvitationRead
                     p.group_id,
                     g != null ? g.name : null
                 );
-        if (!string.IsNullOrWhiteSpace(status)) q = q.Where(x => x.Status == status);
         return q.ToListAsync(ct).ContinueWith(t => (IReadOnlyList<InvitationListItemDto>)t.Result, ct);
     }
 }
