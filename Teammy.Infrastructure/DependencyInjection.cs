@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Infrastructure.Auth;
+using Teammy.Infrastructure.Email;
 using Teammy.Infrastructure.Persistence;
 using Teammy.Infrastructure.Persistence.Repositories;
 
@@ -17,6 +18,7 @@ public static class DependencyInjection
 
         services.AddSingleton<IExternalTokenVerifier, FirebaseTokenVerifier>();
         services.AddSingleton<ITokenService, JwtTokenService>();
+        services.AddSingleton<IEmailSender, SmtpEmailSender>();
 
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IUserReadOnlyQueries, UserReadOnlyQueries>();
@@ -28,6 +30,10 @@ public static class DependencyInjection
         // Recruitment/Profile posts
         services.AddScoped<IRecruitmentPostRepository, RecruitmentPostRepository>();
         services.AddScoped<IRecruitmentPostReadOnlyQueries, RecruitmentPostReadOnlyQueries>();
+
+        // Invitations
+        services.AddScoped<IInvitationRepository, InvitationRepository>();
+        services.AddScoped<IInvitationReadOnlyQueries, InvitationReadOnlyQueries>();
 
         return services;
     }
