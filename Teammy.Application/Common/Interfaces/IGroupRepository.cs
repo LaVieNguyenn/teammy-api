@@ -15,4 +15,3 @@ public interface IGroupRepository
 
     Task<bool> LeaveGroupAsync(Guid groupId, Guid userId, CancellationToken ct);
 }
-
