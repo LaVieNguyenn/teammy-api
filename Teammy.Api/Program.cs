@@ -4,6 +4,7 @@ using System.Text;
 using Teammy.Application.Auth.Queries;
 using Teammy.Application.Auth.Services;
 using Teammy.Application.Groups.Services;
+using Teammy.Application.Posts.Services;
 using Teammy.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -16,6 +17,8 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddScoped<AuthenticationService>();
 builder.Services.AddScoped<CurrentUserQueryService>();
 builder.Services.AddScoped<GroupService>();
+builder.Services.AddScoped<RecruitmentPostService>();
+builder.Services.AddScoped<ProfilePostService>();
 
 // Infrastructure (DbContext, Auth services, Repositories)
 builder.Services.AddInfrastructure(builder.Configuration);

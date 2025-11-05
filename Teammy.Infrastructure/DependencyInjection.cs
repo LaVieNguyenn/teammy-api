@@ -25,6 +25,10 @@ public static class DependencyInjection
         services.AddScoped<IGroupRepository, GroupRepository>();
         services.AddScoped<IGroupReadOnlyQueries, GroupReadOnlyQueries>();
 
+        // Recruitment/Profile posts
+        services.AddScoped<IRecruitmentPostRepository, RecruitmentPostRepository>();
+        services.AddScoped<IRecruitmentPostReadOnlyQueries, RecruitmentPostReadOnlyQueries>();
+
         return services;
     }
 }
