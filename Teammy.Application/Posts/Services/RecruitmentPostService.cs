@@ -20,7 +20,7 @@ public sealed class RecruitmentPostService(
         if (!isLeader) throw new UnauthorizedAccessException("Leader only");
 
         var semesterId = detail.SemesterId;
-        var postId = await repo.CreateRecruitmentPostAsync(semesterId, postType: "group", groupId: req.GroupId, userId: null, req.MajorId, req.Title, req.Description, req.Skills, ct);
+        var postId = await repo.CreateRecruitmentPostAsync(semesterId, postType: "group_hiring", groupId: req.GroupId, userId: null, req.MajorId, req.Title, req.Description, req.Skills, ct);
         return postId;
     }
 

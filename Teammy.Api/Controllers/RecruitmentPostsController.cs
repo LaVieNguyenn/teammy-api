@@ -26,7 +26,7 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service) :
             var id = await service.CreateAsync(GetUserId(), req, ct);
             return CreatedAtAction(nameof(GetById), new { id }, new { id });
         }
-        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (InvalidOperationException ex) { return Conflict(ex.Message); }
         catch (ArgumentException ex) { return BadRequest(ex.Message); }
     }
@@ -71,7 +71,7 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service) :
             await service.AcceptAsync(id, appId, GetUserId(), ct);
             return NoContent();
         }
-        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (InvalidOperationException ex) { return Conflict(ex.Message); }
         catch (KeyNotFoundException) { return NotFound(); }
     }
@@ -85,7 +85,7 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service) :
             await service.RejectAsync(id, appId, GetUserId(), ct);
             return NoContent();
         }
-        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
@@ -102,4 +102,3 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service) :
         catch (KeyNotFoundException) { return NotFound(); }
     }
 }
-

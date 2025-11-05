@@ -5,6 +5,8 @@ using Teammy.Application.Auth.Queries;
 using Teammy.Application.Auth.Services;
 using Teammy.Application.Groups.Services;
 using Teammy.Application.Posts.Services;
+using Teammy.Application.Invitations.Services;
+using Teammy.Application.Common.Interfaces;
 using Teammy.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -12,6 +14,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+// SignalR removed per request
 
 // Application services
 builder.Services.AddScoped<AuthenticationService>();
@@ -19,6 +22,8 @@ builder.Services.AddScoped<CurrentUserQueryService>();
 builder.Services.AddScoped<GroupService>();
 builder.Services.AddScoped<RecruitmentPostService>();
 builder.Services.AddScoped<ProfilePostService>();
+builder.Services.AddScoped<InvitationService>();
+builder.Services.AddSingleton<IAppUrlProvider, Teammy.Api.App.AppUrlProvider>();
 
 // Infrastructure (DbContext, Auth services, Repositories)
 builder.Services.AddInfrastructure(builder.Configuration);
