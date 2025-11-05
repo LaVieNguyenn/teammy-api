@@ -52,9 +52,8 @@ public sealed class ProfilePostsController(ProfilePostService service) : Control
             await service.InviteAsync(id, GetUserId(), ct);
             return Accepted();
         }
-        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (InvalidOperationException ex) { return Conflict(ex.Message); }
         catch (KeyNotFoundException) { return NotFound(); }
     }
 }
-

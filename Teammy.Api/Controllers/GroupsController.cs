@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
 using Teammy.Application.Groups.Dtos;
 using Teammy.Application.Groups.Services;
+using Teammy.Application.Invitations.Services;
 
 namespace Teammy.Api.Controllers;
 
@@ -11,7 +12,12 @@ namespace Teammy.Api.Controllers;
 public sealed class GroupsController : ControllerBase
 {
     private readonly GroupService _service;
-    public GroupsController(GroupService service) => _service = service;
+    private readonly InvitationService _invitations;
+    public GroupsController(GroupService service, InvitationService invitations)
+    {
+        _service = service;
+        _invitations = invitations;
+    }
 
     private Guid GetUserId()
     {
@@ -86,7 +92,7 @@ public sealed class GroupsController : ControllerBase
             await _service.AcceptJoinRequestAsync(id, reqId, GetUserId(), ct);
             return NoContent();
         }
-        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (InvalidOperationException ex) { return Conflict(ex.Message); }
     }
@@ -100,7 +106,7 @@ public sealed class GroupsController : ControllerBase
             await _service.RejectJoinRequestAsync(id, reqId, GetUserId(), ct);
             return NoContent();
         }
-        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
@@ -110,10 +116,11 @@ public sealed class GroupsController : ControllerBase
     {
         try
         {
-            await _service.InviteUserAsync(id, req.UserId, GetUserId(), ct);
-            return Accepted();
+            var result = await _invitations.InviteUserAsync(id, req.UserId, GetUserId(), null, ct);
+            var leaderName = User.FindFirstValue(ClaimTypes.Name) ?? User.Identity?.Name ?? "Leader";
+            return Accepted(new { invitationId = result.InvitationId, emailSent = result.EmailSent, leaderName });
         }
-        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (InvalidOperationException ex) { return Conflict(ex.Message); }
     }
@@ -123,4 +130,3 @@ public sealed class GroupsController : ControllerBase
     public ActionResult AssignRole([FromRoute] Guid id, [FromRoute] Guid userId)
         => StatusCode(501, "Not Implemented: internal member role not yet modeled");
 }
-
