@@ -76,5 +76,28 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
             .Where(p => p.post_id == postId)
             .Select(p => new ValueTuple<Guid?, Guid, Guid?>(p.group_id, p.semester_id, p.user_id))
             .FirstOrDefaultAsync(ct);
-}
 
+    public async Task<IReadOnlyList<ProfilePostSummaryDto>> ListProfilePostsAsync(string? skills, Guid? majorId, string? status, CancellationToken ct)
+    {
+        var q = db.recruitment_posts.AsNoTracking().Where(p => p.post_type == "individual");
+        if (!string.IsNullOrWhiteSpace(status)) q = q.Where(p => p.status == status);
+        if (majorId.HasValue) q = q.Where(p => p.major_id == majorId);
+        if (!string.IsNullOrWhiteSpace(skills))
+        {
+            var term = skills.Trim();
+            q = q.Where(p => (p.position_needed ?? "").Contains(term) || p.title.Contains(term));
+        }
+
+        return await q
+            .OrderByDescending(p => p.created_at)
+            .Select(p => new ProfilePostSummaryDto(
+                p.post_id,
+                p.semester_id,
+                p.title,
+                p.status,
+                p.user_id,
+                p.major_id
+            ))
+            .ToListAsync(ct);
+    }
+}
