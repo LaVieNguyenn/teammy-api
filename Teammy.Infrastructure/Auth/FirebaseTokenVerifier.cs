@@ -8,10 +8,6 @@ using System.Text;
 
 namespace Teammy.Infrastructure.Auth;
 
-/// <summary>
-/// Verify Firebase ID token bằng Firebase Admin SDK.
-/// Đọc đường dẫn service account từ "Auth:Firebase:ServiceAccountPath".
-/// </summary>
 public sealed class FirebaseTokenVerifier : IExternalTokenVerifier
 {
     private readonly FirebaseApp _app;
