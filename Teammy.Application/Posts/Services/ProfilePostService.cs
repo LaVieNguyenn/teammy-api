@@ -27,12 +27,7 @@ public sealed class ProfilePostService(
         }, ct);
 
     public Task<IReadOnlyList<ProfilePostSummaryDto>> ListAsync(string? skills, Guid? majorId, string? status, CancellationToken ct)
-        => queries.ListAsync(skills, majorId, status, ct).ContinueWith(t =>
-        {
-            return (IReadOnlyList<ProfilePostSummaryDto>)t.Result
-                .Select(d => new ProfilePostSummaryDto(d.Id, d.SemesterId, d.Title, d.Status, null, d.MajorId))
-                .ToList();
-        }, ct);
+        => queries.ListProfilePostsAsync(skills, majorId, status, ct);
 
     public async Task InviteAsync(Guid profilePostId, Guid currentUserId, CancellationToken ct)
     {
