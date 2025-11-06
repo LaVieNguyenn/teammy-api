@@ -102,4 +102,18 @@ public sealed class GroupService(
 
     public Task<IReadOnlyList<GroupMemberDto>> ListActiveMembersAsync(Guid groupId, CancellationToken ct)
         => queries.ListActiveMembersAsync(groupId, ct);
+
+    public async Task CloseGroupAsync(Guid groupId, Guid currentUserId, CancellationToken ct)
+    {
+        var isLeader = await queries.IsLeaderAsync(groupId, currentUserId, ct);
+        if (!isLeader) throw new UnauthorizedAccessException("Leader only");
+        await repo.CloseGroupAsync(groupId, ct);
+    }
+
+    public async Task TransferLeadershipAsync(Guid groupId, Guid currentUserId, Guid newLeaderUserId, CancellationToken ct)
+    {
+        var isLeader = await queries.IsLeaderAsync(groupId, currentUserId, ct);
+        if (!isLeader) throw new UnauthorizedAccessException("Leader only");
+        await repo.TransferLeadershipAsync(groupId, currentUserId, newLeaderUserId, ct);
+    }
 }
