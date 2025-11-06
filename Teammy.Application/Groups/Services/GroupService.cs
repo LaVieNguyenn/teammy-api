@@ -96,5 +96,7 @@ public sealed class GroupService(
 
         await repo.AddMembershipAsync(groupId, inviteeUserId, detail.SemesterId, "pending", ct);
     }
-}
 
+    public Task<IReadOnlyList<MyGroupDto>> ListMyGroupsAsync(Guid currentUserId, Guid? semesterId, CancellationToken ct)
+        => queries.ListMyGroupsAsync(currentUserId, semesterId, ct);
+}
