@@ -52,7 +52,8 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                 p.position_needed,
                 p.group_id != null
                     ? db.group_members.Count(m => m.group_id == p.group_id && (m.status == "member" || m.status == "leader"))
-                    : 0
+                    : 0,
+                p.description
             ))
             .ToListAsync(ct);
     }
@@ -102,7 +103,8 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                 p.title,
                 p.status,
                 p.user_id,
-                p.major_id
+                p.major_id,
+                p.description
             ))
             .ToListAsync(ct);
     }

@@ -14,7 +14,8 @@ public sealed record ProfilePostSummaryDto(
     string Title,
     string Status,
     Guid?  UserId,
-    Guid?  MajorId
+    Guid?  MajorId,
+    string? Description
 );
 
 public sealed record ProfilePostDetailDto(
@@ -27,4 +28,3 @@ public sealed record ProfilePostDetailDto(
     string? Description,
     DateTime CreatedAt
 );
-

@@ -18,7 +18,8 @@ public sealed record RecruitmentPostSummaryDto(
     Guid?  GroupId,
     Guid?  MajorId,
     string? PositionNeeded,
-    int    CurrentMembers
+    int    CurrentMembers,
+    string? Description
 );
 
 public sealed record RecruitmentPostDetailDto(
