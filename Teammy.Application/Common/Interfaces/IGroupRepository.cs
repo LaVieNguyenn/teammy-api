@@ -14,4 +14,8 @@ public interface IGroupRepository
     Task DeleteMembershipAsync(Guid groupMemberId, CancellationToken ct);
 
     Task<bool> LeaveGroupAsync(Guid groupId, Guid userId, CancellationToken ct);
+
+    Task CloseGroupAsync(Guid groupId, CancellationToken ct);
+
+    Task TransferLeadershipAsync(Guid groupId, Guid currentLeaderUserId, Guid newLeaderUserId, CancellationToken ct);
 }

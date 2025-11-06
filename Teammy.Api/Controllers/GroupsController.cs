@@ -93,6 +93,35 @@ public sealed class GroupsController : ControllerBase
     public Task<IReadOnlyList<Teammy.Application.Groups.Dtos.GroupMemberDto>> Members([FromRoute] Guid id, CancellationToken ct)
         => _service.ListActiveMembersAsync(id, ct);
 
+    public sealed record TransferLeaderRequest(Guid NewLeaderUserId);
+
+    [HttpPost("{id:guid}/leader/transfer")]
+    [Authorize]
+    public async Task<ActionResult> TransferLeader([FromRoute] Guid id, [FromBody] TransferLeaderRequest req, CancellationToken ct)
+    {
+        try
+        {
+            await _service.TransferLeadershipAsync(id, GetUserId(), req.NewLeaderUserId, ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+    }
+
+    [HttpPost("{id:guid}/close")]
+    [Authorize]
+    public async Task<ActionResult> Close([FromRoute] Guid id, CancellationToken ct)
+    {
+        try
+        {
+            await _service.CloseGroupAsync(id, GetUserId(), ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
     [HttpPost("{id:guid}/join-requests/{reqId:guid}/accept")]
     [Authorize]
     public async Task<ActionResult> Accept([FromRoute] Guid id, [FromRoute] Guid reqId, CancellationToken ct)
