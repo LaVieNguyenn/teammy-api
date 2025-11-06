@@ -20,4 +20,6 @@ public interface IGroupReadOnlyQueries
     Task<(int MaxMembers, int ActiveCount)> GetGroupCapacityAsync(Guid groupId, CancellationToken ct);
 
     Task<Guid?> GetLeaderGroupIdAsync(Guid userId, Guid semesterId, CancellationToken ct);
+
+    Task<IReadOnlyList<Teammy.Application.Groups.Dtos.MyGroupDto>> ListMyGroupsAsync(Guid userId, Guid? semesterId, CancellationToken ct);
 }
