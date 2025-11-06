@@ -99,4 +99,7 @@ public sealed class GroupService(
 
     public Task<IReadOnlyList<MyGroupDto>> ListMyGroupsAsync(Guid currentUserId, Guid? semesterId, CancellationToken ct)
         => queries.ListMyGroupsAsync(currentUserId, semesterId, ct);
+
+    public Task<IReadOnlyList<GroupMemberDto>> ListActiveMembersAsync(Guid groupId, CancellationToken ct)
+        => queries.ListActiveMembersAsync(groupId, ct);
 }

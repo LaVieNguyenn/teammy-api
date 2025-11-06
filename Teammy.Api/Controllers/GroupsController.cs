@@ -88,6 +88,11 @@ public sealed class GroupsController : ControllerBase
     public Task<IReadOnlyList<Teammy.Application.Groups.Dtos.MyGroupDto>> My([FromQuery] Guid? semesterId, CancellationToken ct)
         => _service.ListMyGroupsAsync(GetUserId(), semesterId, ct);
 
+    [HttpGet("{id:guid}/members")]
+    [AllowAnonymous]
+    public Task<IReadOnlyList<Teammy.Application.Groups.Dtos.GroupMemberDto>> Members([FromRoute] Guid id, CancellationToken ct)
+        => _service.ListActiveMembersAsync(id, ct);
+
     [HttpPost("{id:guid}/join-requests/{reqId:guid}/accept")]
     [Authorize]
     public async Task<ActionResult> Accept([FromRoute] Guid id, [FromRoute] Guid reqId, CancellationToken ct)
