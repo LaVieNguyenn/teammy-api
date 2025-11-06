@@ -116,4 +116,21 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
                 );
         return await q.ToListAsync(ct);
     }
+
+    public async Task<IReadOnlyList<Teammy.Application.Groups.Dtos.GroupMemberDto>> ListActiveMembersAsync(Guid groupId, CancellationToken ct)
+    {
+        var q = from m in db.group_members.AsNoTracking()
+                join u in db.users.AsNoTracking() on m.user_id equals u.user_id
+                where m.group_id == groupId && (m.status == "member" || m.status == "leader")
+                orderby m.status descending, m.joined_at
+                select new Teammy.Application.Groups.Dtos.GroupMemberDto(
+                    u.user_id,
+                    u.email!,
+                    u.display_name!,
+                    m.status,
+                    m.joined_at,
+                    u.avatar_url
+                );
+        return await q.ToListAsync(ct);
+    }
 }
