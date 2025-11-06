@@ -92,4 +92,28 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
             .FirstOrDefaultAsync(ct);
         return groupId;
     }
+
+    public async Task<IReadOnlyList<Teammy.Application.Groups.Dtos.MyGroupDto>> ListMyGroupsAsync(Guid userId, Guid? semesterId, CancellationToken ct)
+    {
+        Guid? semId = semesterId;
+        if (!semId.HasValue)
+            semId = await db.semesters.AsNoTracking().Where(s => s.is_active).Select(s => (Guid?)s.semester_id).FirstOrDefaultAsync(ct);
+        if (!semId.HasValue) return Array.Empty<Teammy.Application.Groups.Dtos.MyGroupDto>();
+
+        var activeStatuses = new[] { "member", "leader" };
+
+        var q = from m in db.group_members.AsNoTracking()
+                join g in db.groups.AsNoTracking() on m.group_id equals g.group_id
+                where m.user_id == userId && g.semester_id == semId.Value
+                select new Teammy.Application.Groups.Dtos.MyGroupDto(
+                    g.group_id,
+                    g.semester_id,
+                    g.name,
+                    g.status,
+                    g.max_members,
+                    db.group_members.Count(x => x.group_id == g.group_id && activeStatuses.Contains(x.status)),
+                    m.status
+                );
+        return await q.ToListAsync(ct);
+    }
 }
