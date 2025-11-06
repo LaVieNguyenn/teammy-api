@@ -100,4 +100,19 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
             ))
             .ToListAsync(ct);
     }
+
+    public Task<ProfilePostDetailDto?> GetProfilePostAsync(Guid id, CancellationToken ct)
+        => db.recruitment_posts.AsNoTracking()
+            .Where(p => p.post_id == id && p.post_type == "individual")
+            .Select(p => new ProfilePostDetailDto(
+                p.post_id,
+                p.semester_id,
+                p.title,
+                p.status,
+                p.user_id,
+                p.major_id,
+                p.description,
+                p.created_at
+            ))
+            .FirstOrDefaultAsync(ct);
 }

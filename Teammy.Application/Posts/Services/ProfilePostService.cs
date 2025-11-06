@@ -19,12 +19,7 @@ public sealed class ProfilePostService(
     }
 
     public Task<ProfilePostDetailDto?> GetAsync(Guid id, CancellationToken ct)
-        => queries.GetAsync(id, ct).ContinueWith(t =>
-        {
-            var d = t.Result;
-            if (d is null) return (ProfilePostDetailDto?)null;
-            return new ProfilePostDetailDto(d.Id, d.SemesterId, d.Title, d.Status, null, d.MajorId, d.Description, d.CreatedAt);
-        }, ct);
+        => queries.GetProfilePostAsync(id, ct);
 
     public Task<IReadOnlyList<ProfilePostSummaryDto>> ListAsync(string? skills, Guid? majorId, string? status, CancellationToken ct)
         => queries.ListProfilePostsAsync(skills, majorId, status, ct);
