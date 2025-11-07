@@ -133,4 +133,25 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
                 );
         return await q.ToListAsync(ct);
     }
+
+    public async Task<Teammy.Application.Groups.Dtos.UserGroupCheckDto> CheckUserGroupAsync(Guid userId, Guid? semesterId, bool includePending, CancellationToken ct)
+    {
+        Guid? semId = semesterId;
+        if (!semId.HasValue)
+            semId = await db.semesters.AsNoTracking().Where(s => s.is_active).Select(s => (Guid?)s.semester_id).FirstOrDefaultAsync(ct);
+
+        if (!semId.HasValue)
+            return new Teammy.Application.Groups.Dtos.UserGroupCheckDto(false, Guid.Empty, null, null);
+
+        var statuses = includePending ? new[] { "pending", "member", "leader" } : new[] { "member", "leader" };
+
+        var row = await db.group_members.AsNoTracking()
+            .Where(m => m.user_id == userId && m.semester_id == semId.Value && statuses.Contains(m.status))
+            .Select(m => new { m.group_id, m.status })
+            .FirstOrDefaultAsync(ct);
+
+        return row is null
+            ? new Teammy.Application.Groups.Dtos.UserGroupCheckDto(false, semId.Value, null, null)
+            : new Teammy.Application.Groups.Dtos.UserGroupCheckDto(true, semId.Value, row.group_id, row.status);
+    }
 }

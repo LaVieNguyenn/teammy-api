@@ -122,6 +122,15 @@ public sealed class GroupsController : ControllerBase
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
+    [HttpGet("membership")]
+    [Authorize]
+    public Task<Teammy.Application.Groups.Dtos.UserGroupCheckDto> CheckMembership(
+        [FromQuery] Guid? userId,
+        [FromQuery] Guid? semesterId,
+        [FromQuery] bool includePending = true,
+        CancellationToken ct = default)
+        => _service.CheckUserGroupAsync(userId ?? GetUserId(), semesterId, includePending, ct);
+
     [HttpPost("{id:guid}/join-requests/{reqId:guid}/accept")]
     [Authorize]
     public async Task<ActionResult> Accept([FromRoute] Guid id, [FromRoute] Guid reqId, CancellationToken ct)

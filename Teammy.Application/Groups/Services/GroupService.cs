@@ -116,4 +116,7 @@ public sealed class GroupService(
         if (!isLeader) throw new UnauthorizedAccessException("Leader only");
         await repo.TransferLeadershipAsync(groupId, currentUserId, newLeaderUserId, ct);
     }
+
+    public Task<UserGroupCheckDto> CheckUserGroupAsync(Guid targetUserId, Guid? semesterId, bool includePending, CancellationToken ct)
+        => queries.CheckUserGroupAsync(targetUserId, semesterId, includePending, ct);
 }
