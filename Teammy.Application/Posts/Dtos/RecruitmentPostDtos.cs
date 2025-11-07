@@ -19,7 +19,9 @@ public sealed record RecruitmentPostSummaryDto(
     Guid?  MajorId,
     string? PositionNeeded,
     int    CurrentMembers,
-    string? Description
+    string? Description,
+    DateTime CreatedAt,
+    DateTime? ApplicationDeadline
 );
 
 public sealed record RecruitmentPostDetailDto(
@@ -32,7 +34,8 @@ public sealed record RecruitmentPostDetailDto(
     string? Description,
     string? PositionNeeded,
     DateTime CreatedAt,
-    int     CurrentMembers
+    int     CurrentMembers,
+    DateTime? ApplicationDeadline
 );
 
 public sealed record CreateApplicationRequest(string? Message);
