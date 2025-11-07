@@ -1,0 +1,34 @@
+# Git & tooling
+.git
+.gitignore
+.gitattributes
+.vscode
+.idea
+*.user
+*.suo
+*.swp
+*.DS_Store
+
+# Build output
+**/bin/
+**/obj/
+**/out/
+**/packages/
+artifacts/
+
+# Logs / temp
+*.log
+logs/
+temp/
+.tmp/
+
+Configs/firebase-service-account.json
+
+# Test
+**/TestResults/
+**/*.Tests/
+**/*.UnitTests/
+**/*.IntegrationTests/
+
+# Docker local
+docker-compose*.yml
