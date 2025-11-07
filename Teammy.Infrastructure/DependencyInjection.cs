@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Infrastructure.Auth;
 using Teammy.Infrastructure.Email;
+using Teammy.Infrastructure.Excel;
 using Teammy.Infrastructure.Persistence;
 using Teammy.Infrastructure.Persistence.Repositories;
 
@@ -39,6 +40,14 @@ public static class DependencyInjection
         // Invitations
         services.AddScoped<IInvitationRepository, InvitationRepository>();
         services.AddScoped<IInvitationReadOnlyQueries, InvitationReadOnlyQueries>();
+
+        // Queries & Repos
+        services.AddScoped<IRoleReadOnlyQueries, RoleReadOnlyQueries>();
+        services.AddScoped<IMajorReadOnlyQueries, MajorReadOnlyQueries>();
+        services.AddScoped<IUserWriteRepository, UserWriteRepository>();
+
+        // Excel import
+        services.AddScoped<IUserImportService, ExcelUserImportService>();
 
         return services;
     }
