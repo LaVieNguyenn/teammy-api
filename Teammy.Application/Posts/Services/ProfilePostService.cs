@@ -18,11 +18,11 @@ public sealed class ProfilePostService(
         return await repo.CreateRecruitmentPostAsync(semesterId, postType: "individual", groupId: null, userId: currentUserId, req.MajorId, req.Title, req.Description, req.Skills, ct);
     }
 
-    public Task<ProfilePostDetailDto?> GetAsync(Guid id, CancellationToken ct)
-        => queries.GetProfilePostAsync(id, ct);
+    public Task<ProfilePostDetailDto?> GetAsync(Guid id, ExpandOptions expand, CancellationToken ct)
+        => queries.GetProfilePostAsync(id, expand, ct);
 
-    public Task<IReadOnlyList<ProfilePostSummaryDto>> ListAsync(string? skills, Guid? majorId, string? status, CancellationToken ct)
-        => queries.ListProfilePostsAsync(skills, majorId, status, ct);
+    public Task<IReadOnlyList<ProfilePostSummaryDto>> ListAsync(string? skills, Guid? majorId, string? status, ExpandOptions expand, CancellationToken ct)
+        => queries.ListProfilePostsAsync(skills, majorId, status, expand, ct);
 
     public async Task InviteAsync(Guid profilePostId, Guid currentUserId, CancellationToken ct)
     {
