@@ -13,21 +13,29 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
     public Task<RecruitmentPostDetailDto?> GetAsync(Guid id, CancellationToken ct)
         => db.recruitment_posts.AsNoTracking()
             .Where(p => p.post_id == id)
-            .Select(p => new RecruitmentPostDetailDto(
-                p.post_id,
-                p.semester_id,
-                p.title,
-                p.status,
-                p.post_type,
-                p.group_id,
-                p.major_id,
-                p.description,
-                p.position_needed,
-                p.created_at,
-                p.group_id != null
-                    ? db.group_members.Count(m => m.group_id == p.group_id && (m.status == "member" || m.status == "leader"))
+            .Join(db.semesters.AsNoTracking(), p => p.semester_id, s => s.semester_id, (p, s) => new { p, s })
+            .GroupJoin(db.groups.AsNoTracking(), ps => ps.p.group_id, g => g.group_id, (ps, grps) => new { ps, grps })
+            .SelectMany(x => x.grps.DefaultIfEmpty(), (x, g) => new { x.ps.p, x.ps.s, g })
+            .GroupJoin(db.majors.AsNoTracking(), t => t.p.major_id, m => m.major_id, (t, ms) => new { t.p, t.s, t.g, ms })
+            .SelectMany(x => x.ms.DefaultIfEmpty(), (x, m) => new { x.p, x.s, x.g, m })
+            .Select(x => new RecruitmentPostDetailDto(
+                x.p.post_id,
+                x.p.semester_id,
+                string.Concat(x.s.season ?? "", " ", (x.s.year.HasValue ? x.s.year.Value.ToString() : "")),
+                x.p.title,
+                x.p.status,
+                x.p.post_type,
+                x.p.group_id,
+                x.g != null ? x.g.name : null,
+                x.p.major_id,
+                x.m != null ? x.m.major_name : null,
+                x.p.description,
+                x.p.position_needed,
+                x.p.created_at,
+                x.p.group_id != null
+                    ? db.group_members.Count(mb => mb.group_id == x.p.group_id && (mb.status == "member" || mb.status == "leader"))
                     : 0,
-                p.application_deadline
+                x.p.application_deadline
             ))
             .FirstOrDefaultAsync(ct);
 
@@ -44,21 +52,29 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
 
         return await q
             .OrderByDescending(p => p.created_at)
-            .Select(p => new RecruitmentPostSummaryDto(
-                p.post_id,
-                p.semester_id,
-                p.title,
-                p.status,
-                p.post_type,
-                p.group_id,
-                p.major_id,
-                p.position_needed,
-                p.group_id != null
-                    ? db.group_members.Count(m => m.group_id == p.group_id && (m.status == "member" || m.status == "leader"))
+            .Join(db.semesters.AsNoTracking(), p => p.semester_id, s => s.semester_id, (p, s) => new { p, s })
+            .GroupJoin(db.groups.AsNoTracking(), ps => ps.p.group_id, g => g.group_id, (ps, grps) => new { ps, grps })
+            .SelectMany(x => x.grps.DefaultIfEmpty(), (x, g) => new { x.ps.p, x.ps.s, g })
+            .GroupJoin(db.majors.AsNoTracking(), t => t.p.major_id, m => m.major_id, (t, ms) => new { t.p, t.s, t.g, ms })
+            .SelectMany(x => x.ms.DefaultIfEmpty(), (x, m) => new { x.p, x.s, x.g, m })
+            .Select(x => new RecruitmentPostSummaryDto(
+                x.p.post_id,
+                x.p.semester_id,
+                string.Concat(x.s.season ?? "", " ", (x.s.year.HasValue ? x.s.year.Value.ToString() : "")),
+                x.p.title,
+                x.p.status,
+                x.p.post_type,
+                x.p.group_id,
+                x.g != null ? x.g.name : null,
+                x.p.major_id,
+                x.m != null ? x.m.major_name : null,
+                x.p.position_needed,
+                x.p.group_id != null
+                    ? db.group_members.Count(mb => mb.group_id == x.p.group_id && (mb.status == "member" || mb.status == "leader"))
                     : 0,
-                p.description,
-                p.created_at,
-                p.application_deadline
+                x.p.description,
+                x.p.created_at,
+                x.p.application_deadline
             ))
             .ToListAsync(ct);
     }
@@ -102,17 +118,25 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
 
         return await q
             .OrderByDescending(p => p.created_at)
-            .Select(p => new ProfilePostSummaryDto(
-                p.post_id,
-                p.semester_id,
-                p.title,
-                p.status,
-                p.post_type,
-                p.user_id,
-                p.major_id,
-                p.description,
-                p.position_needed,
-                p.created_at
+            .Join(db.semesters.AsNoTracking(), p => p.semester_id, s => s.semester_id, (p, s) => new { p, s })
+            .GroupJoin(db.majors.AsNoTracking(), ps => ps.p.major_id, m => m.major_id, (ps, ms) => new { ps, ms })
+            .SelectMany(x => x.ms.DefaultIfEmpty(), (x, m) => new { x.ps.p, x.ps.s, m })
+            .GroupJoin(db.users.AsNoTracking(), t => t.p.user_id, u => u.user_id, (t, us) => new { t.p, t.s, t.m, us })
+            .SelectMany(x => x.us.DefaultIfEmpty(), (x, u) => new { x.p, x.s, x.m, u })
+            .Select(x => new ProfilePostSummaryDto(
+                x.p.post_id,
+                x.p.semester_id,
+                string.Concat(x.s.season ?? "", " ", (x.s.year.HasValue ? x.s.year.Value.ToString() : "")),
+                x.p.title,
+                x.p.status,
+                x.p.post_type,
+                x.p.user_id,
+                x.u != null ? x.u.display_name : null,
+                x.p.major_id,
+                x.m != null ? x.m.major_name : null,
+                x.p.description,
+                x.p.position_needed,
+                x.p.created_at
             ))
             .ToListAsync(ct);
     }
@@ -120,17 +144,25 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
     public Task<ProfilePostDetailDto?> GetProfilePostAsync(Guid id, CancellationToken ct)
         => db.recruitment_posts.AsNoTracking()
             .Where(p => p.post_id == id && p.post_type == "individual")
-            .Select(p => new ProfilePostDetailDto(
-                p.post_id,
-                p.semester_id,
-                p.title,
-                p.status,
-                p.post_type,
-                p.user_id,
-                p.major_id,
-                p.description,
-                p.created_at,
-                p.position_needed
+            .Join(db.semesters.AsNoTracking(), p => p.semester_id, s => s.semester_id, (p, s) => new { p, s })
+            .GroupJoin(db.majors.AsNoTracking(), ps => ps.p.major_id, m => m.major_id, (ps, ms) => new { ps, ms })
+            .SelectMany(x => x.ms.DefaultIfEmpty(), (x, m) => new { x.ps.p, x.ps.s, m })
+            .GroupJoin(db.users.AsNoTracking(), t => t.p.user_id, u => u.user_id, (t, us) => new { t.p, t.s, t.m, us })
+            .SelectMany(x => x.us.DefaultIfEmpty(), (x, u) => new { x.p, x.s, x.m, u })
+            .Select(x => new ProfilePostDetailDto(
+                x.p.post_id,
+                x.p.semester_id,
+                string.Concat(x.s.season ?? "", " ", (x.s.year.HasValue ? x.s.year.Value.ToString() : "")),
+                x.p.title,
+                x.p.status,
+                x.p.post_type,
+                x.p.user_id,
+                x.u != null ? x.u.display_name : null,
+                x.p.major_id,
+                x.m != null ? x.m.major_name : null,
+                x.p.description,
+                x.p.created_at,
+                x.p.position_needed
             ))
             .FirstOrDefaultAsync(ct);
 }
