@@ -24,15 +24,15 @@ public sealed class RecruitmentPostService(
         return postId;
     }
 
-    public async Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListAsync(string? skills, Guid? majorId, string? status, CancellationToken ct)
+    public async Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListAsync(string? skills, Guid? majorId, string? status, ExpandOptions expand, CancellationToken ct)
     {
-        var items = await queries.ListAsync(skills, majorId, status, ct);
+        var items = await queries.ListAsync(skills, majorId, status, expand, ct);
         return items.Where(x => x.GroupId != null).ToList();
     }
 
-    public async Task<RecruitmentPostDetailDto?> GetAsync(Guid id, CancellationToken ct)
+    public async Task<RecruitmentPostDetailDto?> GetAsync(Guid id, ExpandOptions expand, CancellationToken ct)
     {
-        var d = await queries.GetAsync(id, ct);
+        var d = await queries.GetAsync(id, expand, ct);
         if (d is null || d.GroupId is null) return null;
         return d;
     }
