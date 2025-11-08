@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using System.Security.Claims;
+using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Posts.Dtos;
 using Teammy.Application.Posts.Services;
 
@@ -9,9 +10,10 @@ namespace Teammy.Api.Controllers;
 
 [ApiController]
 [Route("api/profile-posts")]
-public sealed class ProfilePostsController(ProfilePostService service, IConfiguration cfg) : ControllerBase
+public sealed class ProfilePostsController(ProfilePostService service, IConfiguration cfg, IGroupReadOnlyQueries groupQueries) : ControllerBase
 {
     private readonly bool _objectOnlyDefault = string.Equals(cfg["Api:Posts:DefaultShape"], "object", StringComparison.OrdinalIgnoreCase);
+    private readonly IGroupReadOnlyQueries _groupQueries = groupQueries;
     private Guid GetUserId()
     {
         var sub = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
@@ -49,19 +51,37 @@ public sealed class ProfilePostsController(ProfilePostService service, IConfigur
         var items = await service.ListAsync(skills, majorId, status, exp, ct);
         if (!objectOnly) return Ok(items);
 
-        var shaped = items.Select(d => new
+        // Build sequentially to avoid concurrent DbContext usage
+        var shaped = new List<object>(items.Count);
+        foreach (var d in items)
         {
-            id = d.Id,
-            type = d.Type,
-            status = d.Status,
-            title = d.Title,
-            description = d.Description,
-            skills = d.Skills,
-            createdAt = d.CreatedAt,
-            semester = d.Semester,
-            user = d.User,
-            major = d.Major
-        });
+            Guid[]? memberUserIds = null;
+            Guid? userGroupId = null;
+            if (d.User?.UserId is Guid uid)
+            {
+                var check = await _groupQueries.CheckUserGroupAsync(uid, d.SemesterId, includePending: false, ct);
+                if (check.HasGroup && check.GroupId.HasValue)
+                {
+                    userGroupId = check.GroupId.Value;
+                    var members = await _groupQueries.ListActiveMembersAsync(userGroupId.Value, ct);
+                    memberUserIds = members.Select(m => m.UserId).ToArray();
+                }
+            }
+            shaped.Add(new
+            {
+                id = d.Id,
+                type = d.Type,
+                status = d.Status,
+                title = d.Title,
+                description = d.Description,
+                skills = d.Skills,
+                createdAt = d.CreatedAt,
+                semester = d.Semester,
+                user = d.User,
+                major = d.Major,
+                userGroup = userGroupId is null ? null : new { groupId = userGroupId.Value, memberUserIds }
+            });
+        }
         return Ok(shaped);
     }
 
@@ -82,6 +102,18 @@ public sealed class ProfilePostsController(ProfilePostService service, IConfigur
         var d = await service.GetAsync(id, exp, ct);
         if (d is null) return NotFound();
         if (!objectOnly) return Ok(d);
+        Guid[]? memberUserIds = null;
+        Guid? userGroupId = null;
+        if (d.User?.UserId is Guid uid)
+        {
+            var check = await _groupQueries.CheckUserGroupAsync(uid, d.SemesterId, includePending: false, ct);
+            if (check.HasGroup && check.GroupId.HasValue)
+            {
+                userGroupId = check.GroupId.Value;
+                var members = await _groupQueries.ListActiveMembersAsync(userGroupId.Value, ct);
+                memberUserIds = members.Select(m => m.UserId).ToArray();
+            }
+        }
         return Ok(new
         {
             id = d.Id,
@@ -93,7 +125,8 @@ public sealed class ProfilePostsController(ProfilePostService service, IConfigur
             createdAt = d.CreatedAt,
             semester = d.Semester,
             user = d.User,
-            major = d.Major
+            major = d.Major,
+            userGroup = userGroupId is null ? null : new { groupId = userGroupId.Value, memberUserIds }
         });
     }
 
