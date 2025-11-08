@@ -11,11 +11,14 @@ public sealed class CreateProfilePostRequest
 public sealed record ProfilePostSummaryDto(
     Guid   Id,
     Guid   SemesterId,
+    string? SemesterName,
     string Title,
     string Status,
     string Type,
     Guid?  UserId,
+    string? UserDisplayName,
     Guid?  MajorId,
+    string? MajorName,
     string? Description,
     string? Skills,
     DateTime CreatedAt
@@ -24,11 +27,14 @@ public sealed record ProfilePostSummaryDto(
 public sealed record ProfilePostDetailDto(
     Guid   Id,
     Guid   SemesterId,
+    string? SemesterName,
     string Title,
     string Status,
     string Type,
     Guid?  UserId,
+    string? UserDisplayName,
     Guid?  MajorId,
+    string? MajorName,
     string? Description,
     DateTime CreatedAt,
     string? Skills
