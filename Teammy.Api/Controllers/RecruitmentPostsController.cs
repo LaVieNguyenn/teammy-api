@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using System.Security.Claims;
+using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Posts.Dtos;
 using Teammy.Application.Posts.Services;
 
@@ -9,9 +10,10 @@ namespace Teammy.Api.Controllers;
 
 [ApiController]
 [Route("api/recruitment-posts")]
-public sealed class RecruitmentPostsController(RecruitmentPostService service, IConfiguration cfg) : ControllerBase
+public sealed class RecruitmentPostsController(RecruitmentPostService service, IConfiguration cfg, IGroupReadOnlyQueries groupQueries) : ControllerBase
 {
     private readonly bool _objectOnlyDefault = string.Equals(cfg["Api:Posts:DefaultShape"], "object", StringComparison.OrdinalIgnoreCase);
+    private readonly IGroupReadOnlyQueries _groupQueries = groupQueries;
     private Guid GetUserId()
     {
         var sub = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
@@ -50,21 +52,43 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
         var items = await service.ListAsync(skills, majorId, status, exp, ct);
         if (!objectOnly) return Ok(items);
 
-        var shaped = items.Select(d => new
+        // Build sequentially to avoid concurrent DbContext usage
+        var shaped = new List<object>(items.Count);
+        foreach (var d in items)
         {
-            id = d.Id,
-            type = d.Type,
-            status = d.Status,
-            title = d.Title,
-            description = d.Description,
-            positionNeeded = d.PositionNeeded,
-            createdAt = d.CreatedAt,
-            applicationDeadline = d.ApplicationDeadline,
-            currentMembers = d.CurrentMembers,
-            semester = d.Semester,
-            group = d.Group,
-            major = d.Major
-        });
+            Guid[]? memberUserIds = null;
+            if (d.GroupId is Guid gid)
+            {
+                var members = await _groupQueries.ListActiveMembersAsync(gid, ct);
+                memberUserIds = members.Select(m => m.UserId).ToArray();
+            }
+
+            shaped.Add(new
+            {
+                id = d.Id,
+                type = d.Type,
+                status = d.Status,
+                title = d.Title,
+                description = d.Description,
+                positionNeeded = d.PositionNeeded,
+                createdAt = d.CreatedAt,
+                applicationDeadline = d.ApplicationDeadline,
+                currentMembers = d.CurrentMembers,
+                semester = d.Semester,
+                group = d.Group is null ? null : new
+                {
+                    d.Group.GroupId,
+                    d.Group.Name,
+                    d.Group.Description,
+                    d.Group.Status,
+                    d.Group.MaxMembers,
+                    d.Group.MajorId,
+                    d.Group.TopicId,
+                    memberUserIds
+                },
+                major = d.Major
+            });
+        }
         return Ok(shaped);
     }
 
@@ -85,6 +109,15 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
         var d = await service.GetAsync(id, exp, ct);
         if (d is null) return NotFound();
         if (!objectOnly) return Ok(d);
+
+        // Enrich group with member userIds
+        Guid[]? memberUserIds = null;
+        if (d.GroupId is Guid gid)
+        {
+            var members = await _groupQueries.ListActiveMembersAsync(gid, ct);
+            memberUserIds = members.Select(m => m.UserId).ToArray();
+        }
+
         return Ok(new
         {
             id = d.Id,
@@ -97,7 +130,17 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
             applicationDeadline = d.ApplicationDeadline,
             currentMembers = d.CurrentMembers,
             semester = d.Semester,
-            group = d.Group,
+            group = d.Group is null ? null : new
+            {
+                d.Group.GroupId,
+                d.Group.Name,
+                d.Group.Description,
+                d.Group.Status,
+                d.Group.MaxMembers,
+                d.Group.MajorId,
+                d.Group.TopicId,
+                memberUserIds
+            },
             major = d.Major
         });
     }
