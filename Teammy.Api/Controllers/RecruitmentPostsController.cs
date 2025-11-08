@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 using System.Security.Claims;
 using Teammy.Application.Posts.Dtos;
 using Teammy.Application.Posts.Services;
@@ -8,8 +9,9 @@ namespace Teammy.Api.Controllers;
 
 [ApiController]
 [Route("api/recruitment-posts")]
-public sealed class RecruitmentPostsController(RecruitmentPostService service) : ControllerBase
+public sealed class RecruitmentPostsController(RecruitmentPostService service, IConfiguration cfg) : ControllerBase
 {
+    private readonly bool _objectOnlyDefault = string.Equals(cfg["Api:Posts:DefaultShape"], "object", StringComparison.OrdinalIgnoreCase);
     private Guid GetUserId()
     {
         var sub = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
@@ -33,15 +35,87 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service) :
 
     [HttpGet]
     [AllowAnonymous]
-    public Task<IReadOnlyList<RecruitmentPostSummaryDto>> List([FromQuery] string? skills, [FromQuery] Guid? majorId, [FromQuery] string? status, CancellationToken ct)
-        => service.ListAsync(skills, majorId, status, ct);
+    public async Task<ActionResult> List([FromQuery] string? skills, [FromQuery] Guid? majorId, [FromQuery] string? status, [FromQuery] string? expand, [FromQuery] string? shape, CancellationToken ct)
+    {
+        var exp = ParseExpand(expand);
+        var objectOnly = _objectOnlyDefault;
+        if (!string.IsNullOrWhiteSpace(shape))
+        {
+            objectOnly = string.Equals(shape, "object", StringComparison.OrdinalIgnoreCase);
+        }
+        if (objectOnly)
+        {
+            exp |= ExpandOptions.Semester | ExpandOptions.Group | ExpandOptions.Major;
+        }
+        var items = await service.ListAsync(skills, majorId, status, exp, ct);
+        if (!objectOnly) return Ok(items);
+
+        var shaped = items.Select(d => new
+        {
+            id = d.Id,
+            type = d.Type,
+            status = d.Status,
+            title = d.Title,
+            description = d.Description,
+            positionNeeded = d.PositionNeeded,
+            createdAt = d.CreatedAt,
+            applicationDeadline = d.ApplicationDeadline,
+            currentMembers = d.CurrentMembers,
+            semester = d.Semester,
+            group = d.Group,
+            major = d.Major
+        });
+        return Ok(shaped);
+    }
 
     [HttpGet("{id:guid}")]
     [AllowAnonymous]
-    public async Task<ActionResult<RecruitmentPostDetailDto>> GetById([FromRoute] Guid id, CancellationToken ct)
+    public async Task<ActionResult<RecruitmentPostDetailDto>> GetById([FromRoute] Guid id, [FromQuery] string? expand, [FromQuery] string? shape, CancellationToken ct)
     {
-        var d = await service.GetAsync(id, ct);
-        return d is null ? NotFound() : Ok(d);
+        var exp = ParseExpand(expand);
+        var objectOnly = _objectOnlyDefault;
+        if (!string.IsNullOrWhiteSpace(shape))
+        {
+            objectOnly = string.Equals(shape, "object", StringComparison.OrdinalIgnoreCase);
+        }
+        if (objectOnly)
+        {
+            exp |= ExpandOptions.Semester | ExpandOptions.Group | ExpandOptions.Major;
+        }
+        var d = await service.GetAsync(id, exp, ct);
+        if (d is null) return NotFound();
+        if (!objectOnly) return Ok(d);
+        return Ok(new
+        {
+            id = d.Id,
+            type = d.Type,
+            status = d.Status,
+            title = d.Title,
+            description = d.Description,
+            positionNeeded = d.PositionNeeded,
+            createdAt = d.CreatedAt,
+            applicationDeadline = d.ApplicationDeadline,
+            currentMembers = d.CurrentMembers,
+            semester = d.Semester,
+            group = d.Group,
+            major = d.Major
+        });
+    }
+
+    private static Teammy.Application.Posts.Dtos.ExpandOptions ParseExpand(string? e)
+    {
+        var opt = Teammy.Application.Posts.Dtos.ExpandOptions.None;
+        if (string.IsNullOrWhiteSpace(e)) return opt;
+        foreach (var part in e.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            switch (part.ToLowerInvariant())
+            {
+                case "semester": opt |= Teammy.Application.Posts.Dtos.ExpandOptions.Semester; break;
+                case "group": opt |= Teammy.Application.Posts.Dtos.ExpandOptions.Group; break;
+                case "major": opt |= Teammy.Application.Posts.Dtos.ExpandOptions.Major; break;
+            }
+        }
+        return opt;
     }
 
     [HttpPost("{id:guid}/applications")]

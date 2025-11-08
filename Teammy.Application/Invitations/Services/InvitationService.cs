@@ -1,5 +1,6 @@
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Invitations.Dtos;
+using Teammy.Application.Posts.Dtos;
 
 namespace Teammy.Application.Invitations.Services;
 
@@ -32,8 +33,8 @@ public sealed class InvitationService(
         if (hasActive) throw new InvalidOperationException("User already has active/pending membership in this semester");
 
         // Find or create recruitment post for the group
-        var post = await postQueries.ListAsync(null, g.MajorId, "open", ct);
-        var postId = post.FirstOrDefault(p => p.GroupId == groupId)?.Id
+        var posts = await postQueries.ListAsync(null, g.MajorId, "open", ExpandOptions.None, ct);
+        var postId = posts.FirstOrDefault(p => p.GroupId == groupId)?.Id
                      ?? await postRepo.CreateRecruitmentPostAsync(g.SemesterId, "group_hiring", groupId, null, g.MajorId, $"Invitation for {g.Name}", null, null, ct);
 
         // Create invitation
