@@ -9,12 +9,12 @@ namespace Teammy.Api.Controllers;
 [Route("api/users")]
 public sealed class UsersController(IUserReadOnlyQueries users, IGroupReadOnlyQueries groups, ICatalogReadOnlyQueries catalog) : ControllerBase
 {
-    // Search users to invite into a group/semester
-    // GET /api/users?q=hoang&groupId=...&semesterId=...&limit=20&onlyFree=true
+    // Search users by email to invite into a group/semester
+    // GET /api/users?email=user@example.com&groupId=...&semesterId=...&limit=20&onlyFree=true
     [HttpGet]
     [Authorize]
     public async Task<ActionResult<IReadOnlyList<UserSearchDto>>> Search(
-        [FromQuery(Name = "q")] string? query,
+        [FromQuery] string? email,
         [FromQuery] Guid? groupId,
         [FromQuery] Guid? semesterId,
         [FromQuery] int? limit,
@@ -35,10 +35,9 @@ public sealed class UsersController(IUserReadOnlyQueries users, IGroupReadOnlyQu
             semId = active.SemesterId;
         }
 
-        var list = await users.SearchInvitableAsync(query, semId.Value, limit ?? 20, ct);
+        var list = await users.SearchInvitableAsync(email, semId.Value, limit ?? 20, ct);
         if (onlyFree)
             list = list.Where(x => !x.HasGroupInSemester).ToList();
         return Ok(list);
     }
 }
-
