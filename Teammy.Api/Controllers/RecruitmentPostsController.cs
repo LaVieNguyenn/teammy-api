@@ -57,10 +57,12 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
         foreach (var d in items)
         {
             Guid[]? memberUserIds = null;
+            Guid? leaderUserId = null;
             if (d.GroupId is Guid gid)
             {
                 var members = await _groupQueries.ListActiveMembersAsync(gid, ct);
                 memberUserIds = members.Select(m => m.UserId).ToArray();
+                leaderUserId = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase))?.UserId;
             }
 
             shaped.Add(new
@@ -70,7 +72,7 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
                 status = d.Status,
                 title = d.Title,
                 description = d.Description,
-                positionNeeded = d.PositionNeeded,
+                position_needed = d.PositionNeeded,
                 createdAt = d.CreatedAt,
                 applicationDeadline = d.ApplicationDeadline,
                 currentMembers = d.CurrentMembers,
@@ -84,7 +86,8 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
                     d.Group.MaxMembers,
                     d.Group.MajorId,
                     d.Group.TopicId,
-                    memberUserIds
+                    memberUserIds,
+                    leader_user_id = leaderUserId
                 },
                 major = d.Major
             });
@@ -112,10 +115,12 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
 
         // Enrich group with member userIds
         Guid[]? memberUserIds = null;
+        Guid? leaderUserId = null;
         if (d.GroupId is Guid gid)
         {
             var members = await _groupQueries.ListActiveMembersAsync(gid, ct);
             memberUserIds = members.Select(m => m.UserId).ToArray();
+            leaderUserId = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase))?.UserId;
         }
 
         return Ok(new
@@ -125,7 +130,7 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
             status = d.Status,
             title = d.Title,
             description = d.Description,
-            positionNeeded = d.PositionNeeded,
+            position_needed = d.PositionNeeded,
             createdAt = d.CreatedAt,
             applicationDeadline = d.ApplicationDeadline,
             currentMembers = d.CurrentMembers,
@@ -139,7 +144,8 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
                 d.Group.MaxMembers,
                 d.Group.MajorId,
                 d.Group.TopicId,
-                memberUserIds
+                memberUserIds,
+                leader_user_id = leaderUserId
             },
             major = d.Major
         });
