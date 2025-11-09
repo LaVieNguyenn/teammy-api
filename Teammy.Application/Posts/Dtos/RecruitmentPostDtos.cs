@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Teammy.Application.Posts.Dtos;
 
 public sealed class CreateRecruitmentPostRequest
@@ -8,6 +10,21 @@ public sealed class CreateRecruitmentPostRequest
     public string? Skills { get; set; }
     public int? Limit { get; set; }
     public Guid? MajorId { get; set; }
+
+    // Aliases to accept alternative names from clients
+    [JsonPropertyName("position_needed")]
+    public string? PositionNeeded
+    {
+        get => Skills;
+        set => Skills = value;
+    }
+
+    [JsonPropertyName("positionNeeded")]
+    public string? PositionNeededCamel
+    {
+        get => Skills;
+        set => Skills = value;
+    }
 }
 
 public sealed record RecruitmentPostSummaryDto(
@@ -71,4 +88,19 @@ public sealed class UpdateRecruitmentPostRequest
     public string? Title { get; set; }
     public string? Description { get; set; }
     public string? Skills { get; set; }
+
+    // Aliases to accept alternative names from clients
+    [JsonPropertyName("position_needed")]
+    public string? PositionNeeded
+    {
+        get => Skills;
+        set => Skills = value;
+    }
+
+    [JsonPropertyName("positionNeeded")]
+    public string? PositionNeededCamel
+    {
+        get => Skills;
+        set => Skills = value;
+    }
 }
