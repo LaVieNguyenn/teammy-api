@@ -9,7 +9,7 @@ namespace Teammy.Infrastructure.Auth;
 
 public sealed class JwtTokenService(IConfiguration cfg) : ITokenService
 {
-    public string CreateAccessToken(Guid userId, string email, string displayName, string role, bool skillsCompleted)
+    public string CreateAccessToken(Guid userId, string email, string displayName, string role)
     {
         var issuer   = cfg["Auth:Jwt:Issuer"]!;
         var audience = cfg["Auth:Jwt:Audience"]!;
@@ -25,7 +25,6 @@ public sealed class JwtTokenService(IConfiguration cfg) : ITokenService
             new Claim(JwtRegisteredClaimNames.Email, email),
             new Claim(ClaimTypes.Name, displayName),
             new Claim(ClaimTypes.Role, role),
-            new Claim("skills_completed", skillsCompleted ? "true" : "false")
         };
 
         var token = new JwtSecurityToken(
