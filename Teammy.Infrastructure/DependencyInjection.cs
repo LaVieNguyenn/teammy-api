@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Infrastructure.Auth;
 using Teammy.Infrastructure.Email;
+using Teammy.Infrastructure.Excel;
 using Teammy.Infrastructure.Persistence;
 using Teammy.Infrastructure.Persistence.Repositories;
 
@@ -42,6 +43,14 @@ public static class DependencyInjection
 
         // Catalog (semesters, majors, topics)
         services.AddScoped<ICatalogReadOnlyQueries, CatalogReadOnlyQueries>();
+
+        // Queries & Repos
+        services.AddScoped<IRoleReadOnlyQueries, RoleReadOnlyQueries>();
+        services.AddScoped<IMajorReadOnlyQueries, MajorReadOnlyQueries>();
+        services.AddScoped<IUserWriteRepository, UserWriteRepository>();
+
+        // Excel import
+        services.AddScoped<IUserImportService, ExcelUserImportService>();
 
         return services;
     }
