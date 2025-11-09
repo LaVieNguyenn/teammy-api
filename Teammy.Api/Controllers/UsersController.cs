@@ -7,7 +7,7 @@ namespace Teammy.Api.Controllers;
 
 [ApiController]
 [Route("api/users")]
-public sealed class UsersController(IUserReadOnlyQueries users, IGroupReadOnlyQueries groups, ICatalogReadOnlyQueries catalog) : ControllerBase
+public sealed class UsersController(IUserReadOnlyQueries users, IGroupReadOnlyQueries groups) : ControllerBase
 {
     // Search users by email to invite into a group/semester
     // GET /api/users?email=user@example.com&groupId=...&semesterId=...&limit=20&onlyFree=true
@@ -30,9 +30,8 @@ public sealed class UsersController(IUserReadOnlyQueries users, IGroupReadOnlyQu
         }
         if (!semId.HasValue)
         {
-            var active = await catalog.GetActiveSemesterAsync(ct);
-            if (active is null) return Conflict("No active semester");
-            semId = active.SemesterId;
+            semId = await groups.GetActiveSemesterIdAsync(ct);
+            if (!semId.HasValue) return Conflict("No active semester");
         }
 
         var list = await users.SearchInvitableAsync(email, semId.Value, limit ?? 20, ct);

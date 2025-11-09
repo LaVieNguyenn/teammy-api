@@ -65,20 +65,30 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
         var m = await db.group_members
             .FirstOrDefaultAsync(x => x.group_id == groupId && x.user_id == userId && (x.status == "member" || x.status == "leader" || x.status == "pending"), ct);
         if (m is null) return false;
-
-        if (m.status == "leader") return false; // leader cannot leave via this endpoint
-
-        if (m.status == "pending")
-        {
-            db.group_members.Remove(m);
-        }
-        else
-        {
-            m.status = "left";
-            m.left_at = DateTime.UtcNow;
-        }
-
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        db.group_members.Remove(m);
         await db.SaveChangesAsync(ct);
+
+        var remaining = await db.group_members.AsNoTracking().CountAsync(x => x.group_id == groupId, ct);
+        if (remaining == 0)
+        {
+            // Remove group's recruitment posts first (defensive, though FK is Cascade)
+            var posts = await db.recruitment_posts.Where(p => p.group_id == groupId).ToListAsync(ct);
+            if (posts.Count > 0)
+            {
+                db.recruitment_posts.RemoveRange(posts);
+                await db.SaveChangesAsync(ct);
+            }
+
+            var g = await db.groups.FirstOrDefaultAsync(x => x.group_id == groupId, ct);
+            if (g != null)
+            {
+                db.groups.Remove(g);
+                await db.SaveChangesAsync(ct);
+            }
+        }
+
+        await tx.CommitAsync(ct);
         return true;
     }
 
