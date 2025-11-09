@@ -40,6 +40,9 @@ public static class DependencyInjection
         services.AddScoped<IInvitationRepository, InvitationRepository>();
         services.AddScoped<IInvitationReadOnlyQueries, InvitationReadOnlyQueries>();
 
+        // Catalog (semesters, majors, topics)
+        services.AddScoped<ICatalogReadOnlyQueries, CatalogReadOnlyQueries>();
+
         return services;
     }
 }
