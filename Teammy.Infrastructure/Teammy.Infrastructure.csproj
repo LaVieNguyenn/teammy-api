@@ -13,6 +13,7 @@
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.14.0" />
     <PackageReference Include="Google.Apis.Auth" Version="1.71.0" />
     <PackageReference Include="FirebaseAdmin" Version="3.4.0" />
+    <PackageReference Include="ClosedXML" Version="0.102.2" />
   </ItemGroup>
     <ItemGroup>
     <ProjectReference Include="..\Teammy.Domain\Teammy.Domain.csproj" />

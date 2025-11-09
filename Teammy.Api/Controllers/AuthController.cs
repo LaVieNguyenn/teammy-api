@@ -8,10 +8,6 @@ using Teammy.Application.Auth.Services;
 
 namespace Teammy.Api.Controllers;
 
-/// <summary>
-/// Auth endpoints: /login, /me
-/// Controller chỉ điều phối, không truy cập EF/DbContext.
-/// </summary>
 [ApiController]
 [Route("api/auth")]
 public sealed class AuthController : ControllerBase
