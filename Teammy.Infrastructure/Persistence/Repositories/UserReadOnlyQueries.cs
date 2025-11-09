@@ -37,10 +37,8 @@ namespace Teammy.Infrastructure.Persistence.Repositories
 
             var q = _db.users.AsNoTracking()
                 .Where(u => u.is_active)
-                .Where(u => string.IsNullOrEmpty(term)
-                    || u.display_name.Contains(term)
-                    || u.email.Contains(term)
-                    || ((u.skills ?? string.Empty).Contains(term)))
+                // Search by email only (case-insensitive, PostgreSQL ILIKE)
+                .Where(u => string.IsNullOrEmpty(term) || EF.Functions.ILike(u.email, "%" + term + "%"))
                 .OrderBy(u => u.display_name)
                 .Select(u => new UserSearchDto(
                     u.user_id,
