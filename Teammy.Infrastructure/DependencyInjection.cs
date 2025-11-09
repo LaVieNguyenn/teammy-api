@@ -41,14 +41,6 @@ public static class DependencyInjection
         services.AddScoped<IInvitationRepository, InvitationRepository>();
         services.AddScoped<IInvitationReadOnlyQueries, InvitationReadOnlyQueries>();
 
-        // Catalog (semesters, majors, topics)
-        services.AddScoped<ICatalogReadOnlyQueries, CatalogReadOnlyQueries>();
-
-        // Queries & Repos
-        services.AddScoped<IRoleReadOnlyQueries, RoleReadOnlyQueries>();
-        services.AddScoped<IMajorReadOnlyQueries, MajorReadOnlyQueries>();
-        services.AddScoped<IUserWriteRepository, UserWriteRepository>();
-
         // Excel import
         services.AddScoped<IUserImportService, ExcelUserImportService>();
 
