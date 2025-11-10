@@ -154,4 +154,18 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
             ? new Teammy.Application.Groups.Dtos.UserGroupCheckDto(false, semId.Value, null, null)
             : new Teammy.Application.Groups.Dtos.UserGroupCheckDto(true, semId.Value, row.group_id, row.status);
     }
+
+    public Task<(Guid SemesterId, string? Season, int? Year, DateOnly? StartDate, DateOnly? EndDate, bool IsActive)?> GetSemesterAsync(Guid semesterId, CancellationToken ct)
+        => db.semesters.AsNoTracking()
+            .Where(s => s.semester_id == semesterId)
+            .Select(s => new ValueTuple<Guid, string?, int?, DateOnly?, DateOnly?, bool>(s.semester_id, s.season, s.year, s.start_date, s.end_date, s.is_active))
+            .FirstOrDefaultAsync(ct)
+            .ContinueWith(t => t.Result == default ? (ValueTuple<Guid, string?, int?, DateOnly?, DateOnly?, bool>?)null : t.Result, ct);
+
+    public Task<(Guid MajorId, string MajorName)?> GetMajorAsync(Guid majorId, CancellationToken ct)
+        => db.majors.AsNoTracking()
+            .Where(m => m.major_id == majorId)
+            .Select(m => new ValueTuple<Guid, string>(m.major_id, m.major_name))
+            .FirstOrDefaultAsync(ct)
+            .ContinueWith(t => t.Result == default ? (ValueTuple<Guid, string>?)null : t.Result, ct);
 }
