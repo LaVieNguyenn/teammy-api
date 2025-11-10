@@ -2,9 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Infrastructure.Persistence;
 using Teammy.Infrastructure.Persistence.Models;
-
 namespace Teammy.Infrastructure.Persistence.Repositories;
-
 public sealed class GroupRepository(AppDbContext db) : IGroupRepository
 {
     public async Task<Guid> CreateGroupAsync(Guid semesterId, Guid? topicId, Guid? majorId, string name, string? description, int maxMembers, CancellationToken ct)
@@ -62,8 +60,9 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
 
     public async Task<bool> LeaveGroupAsync(Guid groupId, Guid userId, CancellationToken ct)
     {
+        // Do not filter by status; allow leaving regardless of current status value
         var m = await db.group_members
-            .FirstOrDefaultAsync(x => x.group_id == groupId && x.user_id == userId && (x.status == "member" || x.status == "leader" || x.status == "pending"), ct);
+            .FirstOrDefaultAsync(x => x.group_id == groupId && x.user_id == userId, ct);
         if (m is null) return false;
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         db.group_members.Remove(m);
@@ -91,7 +90,6 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
         await tx.CommitAsync(ct);
         return true;
     }
-
     public async Task CloseGroupAsync(Guid groupId, CancellationToken ct)
     {
         // Set group status to 'closed' and mark active memberships as left; remove pendings
