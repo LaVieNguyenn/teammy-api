@@ -4,6 +4,8 @@ using System.Security.Claims;
 using Teammy.Application.Groups.Dtos;
 using Teammy.Application.Groups.Services;
 using Teammy.Application.Invitations.Services;
+using Teammy.Application.Common.Interfaces;
+using Teammy.Application.Posts.Dtos;
 
 namespace Teammy.Api.Controllers;
 
@@ -13,10 +15,12 @@ public sealed class GroupsController : ControllerBase
 {
     private readonly GroupService _service;
     private readonly InvitationService _invitations;
-    public GroupsController(GroupService service, InvitationService invitations)
+    private readonly IGroupReadOnlyQueries _groupQueries;
+    public GroupsController(GroupService service, InvitationService invitations, IGroupReadOnlyQueries groupQueries)
     {
         _service = service;
         _invitations = invitations;
+        _groupQueries = groupQueries;
     }
 
     private Guid GetUserId()
@@ -46,10 +50,51 @@ public sealed class GroupsController : ControllerBase
 
     [HttpGet("{id:guid}")]
     [AllowAnonymous]
-    public async Task<ActionResult<GroupDetailDto>> GetById([FromRoute] Guid id, CancellationToken ct)
+    public async Task<ActionResult> GetById([FromRoute] Guid id, CancellationToken ct)
     {
         var g = await _service.GetGroupAsync(id, ct);
-        return g is null ? NotFound() : Ok(g);
+        if (g is null) return NotFound();
+
+        // Build enriched object similar to recruitment object-only
+        var members = await _service.ListActiveMembersAsync(id, ct);
+        var leaderMember = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase));
+        var nonLeaderMembers = members.Where(m => !string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase)).ToList();
+
+        PostSemesterDto? semesterObj = null;
+        if (g.SemesterId != Guid.Empty)
+        {
+            var s = await _groupQueries.GetSemesterAsync(g.SemesterId, ct);
+            if (s.HasValue)
+            {
+                var (semId, season, year, start, end, active) = s.Value;
+                semesterObj = new PostSemesterDto(semId, season, year, start, end, active);
+            }
+        }
+
+        PostMajorDto? majorObj = null;
+        if (g.MajorId.HasValue)
+        {
+            var m = await _groupQueries.GetMajorAsync(g.MajorId.Value, ct);
+            if (m.HasValue)
+            {
+                var (mid, mname) = m.Value;
+                majorObj = new PostMajorDto(mid, mname);
+            }
+        }
+
+        return Ok(new
+        {
+            id = g.Id,
+            name = g.Name,
+            description = g.Description,
+            status = g.Status,
+            maxMembers = g.MaxMembers,
+            currentMembers = g.CurrentMembers,
+            semester = semesterObj,
+            major = majorObj,
+            leader = leaderMember,
+            members = nonLeaderMembers // exclude leader
+        });
     }
 
     [HttpPost("{id:guid}/join-requests")]
