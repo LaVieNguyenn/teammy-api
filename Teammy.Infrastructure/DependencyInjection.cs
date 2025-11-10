@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Teammy.Application.Common.Interfaces;
+using Teammy.Application.Topics.Services;
 using Teammy.Infrastructure.Auth;
 using Teammy.Infrastructure.Email;
 using Teammy.Infrastructure.Excel;
@@ -28,6 +29,7 @@ public static class DependencyInjection
 
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IUserReadOnlyQueries, UserReadOnlyQueries>();
+        services.AddScoped<IUserWriteRepository, UserWriteRepository>();
 
         // Groups
         services.AddScoped<IGroupRepository, GroupRepository>();
@@ -43,6 +45,22 @@ public static class DependencyInjection
 
         // Excel import
         services.AddScoped<IUserImportService, ExcelUserImportService>();
+
+        // Topics
+        services.AddScoped<ITopicReadOnlyQueries, TopicReadOnlyQueries>();
+        services.AddScoped<ITopicWriteRepository, TopicWriteRepository>();
+        services.AddScoped<ITopicImportService, ExcelTopicImportService>();
+        services.AddScoped<TopicService>();
+
+        // Roles
+        services.AddScoped<IRoleReadOnlyQueries, RoleReadOnlyQueries>();
+
+        // Majors
+        services.AddScoped<IMajorReadOnlyQueries, MajorReadOnlyQueries>();
+
+        // Semesters
+        services.AddScoped<ISemesterWriteRepository, SemesterWriteRepository>();
+
 
         return services;
     }
