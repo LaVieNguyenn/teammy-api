@@ -33,6 +33,8 @@ public partial class recruitment_post
 
     public DateTime updated_at { get; set; }
 
+    public string? required_skills { get; set; }
+
     public virtual ICollection<candidate> candidates { get; set; } = new List<candidate>();
 
     public virtual group? group { get; set; }

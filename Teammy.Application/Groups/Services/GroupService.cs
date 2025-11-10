@@ -51,7 +51,7 @@ public sealed class GroupService(
     {
         var ok = await repo.LeaveGroupAsync(groupId, userId, ct);
         if (!ok)
-            throw new InvalidOperationException("Not a member of this group or cannot leave as leader");
+            throw new InvalidOperationException("Not a member of this group");
     }
 
     public async Task<IReadOnlyList<JoinRequestDto>> ListJoinRequestsAsync(Guid groupId, Guid currentUserId, CancellationToken ct)
