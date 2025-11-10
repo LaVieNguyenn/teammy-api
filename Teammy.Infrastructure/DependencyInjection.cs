@@ -2,8 +2,10 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Teammy.Application.Common.Interfaces;
+using Teammy.Application.Topics.Services;
 using Teammy.Infrastructure.Auth;
 using Teammy.Infrastructure.Email;
+using Teammy.Infrastructure.Excel;
 using Teammy.Infrastructure.Persistence;
 using Teammy.Infrastructure.Persistence.Repositories;
 
@@ -27,6 +29,7 @@ public static class DependencyInjection
 
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IUserReadOnlyQueries, UserReadOnlyQueries>();
+        services.AddScoped<IUserWriteRepository, UserWriteRepository>();
 
         // Groups
         services.AddScoped<IGroupRepository, GroupRepository>();
@@ -39,7 +42,26 @@ public static class DependencyInjection
         // Invitations
         services.AddScoped<IInvitationRepository, InvitationRepository>();
         services.AddScoped<IInvitationReadOnlyQueries, InvitationReadOnlyQueries>();
-      
+
+        // Excel import
+        services.AddScoped<IUserImportService, ExcelUserImportService>();
+
+        // Topics
+        services.AddScoped<ITopicReadOnlyQueries, TopicReadOnlyQueries>();
+        services.AddScoped<ITopicWriteRepository, TopicWriteRepository>();
+        services.AddScoped<ITopicImportService, ExcelTopicImportService>();
+        services.AddScoped<TopicService>();
+
+        // Roles
+        services.AddScoped<IRoleReadOnlyQueries, RoleReadOnlyQueries>();
+
+        // Majors
+        services.AddScoped<IMajorReadOnlyQueries, MajorReadOnlyQueries>();
+
+        // Semesters
+        services.AddScoped<ISemesterWriteRepository, SemesterWriteRepository>();
+
+
         return services;
     }
 }
