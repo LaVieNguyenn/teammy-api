@@ -101,7 +101,7 @@ public sealed class InvitationService(
         if (inv.InviteeUserId != currentUserId) throw new UnauthorizedAccessException("Not your invitation");
         if (inv.Status != "pending") throw new InvalidOperationException("Invitation already handled");
 
-        await repo.UpdateStatusAsync(invitationId, "declined", DateTime.UtcNow, ct);
+        await repo.UpdateStatusAsync(invitationId, "rejected", DateTime.UtcNow, ct);
     }
 
     public Task<IReadOnlyList<InvitationListItemDto>> ListMyInvitationsAsync(Guid currentUserId, string? status, CancellationToken ct)
