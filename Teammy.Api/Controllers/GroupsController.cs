@@ -215,7 +215,24 @@ public sealed class GroupsController : ControllerBase
         }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (KeyNotFoundException) { return NotFound(); }
-        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+        catch (InvalidOperationException ex)
+        {
+            if (ex.Message.StartsWith("already_invited:"))
+            {
+                var idText = ex.Message.Split(':', 2)[1];
+                if (Guid.TryParse(idText, out var invId))
+                    return Conflict(new { code = "already_invited", invitationId = invId });
+                return Conflict(new { code = "already_invited" });
+            }
+            if (ex.Message.StartsWith("invite_exists:"))
+            {
+                var parts = ex.Message.Split(':');
+                Guid.TryParse(parts.ElementAtOrDefault(1), out var invId);
+                var status = parts.ElementAtOrDefault(2) ?? "unknown";
+                return Conflict(new { code = "invite_exists", invitationId = invId, status });
+            }
+            return Conflict(ex.Message);
+        }
     }
 
     [HttpPatch("{id:guid}/members/{userId:guid}")]
