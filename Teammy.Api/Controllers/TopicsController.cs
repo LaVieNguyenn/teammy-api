@@ -37,15 +37,15 @@ public sealed class TopicsController(TopicService service) : ControllerBase
     }
 
     [HttpPost]
-    //[Authorize]
+    [Authorize]
     public async Task<ActionResult<Guid>> Create([FromBody] CreateTopicRequest req, CancellationToken ct)
     {
-        var id = await service.CreateAsync(Guid.Parse("3772df41-8efe-44af-bf74-3f165a31bb02"), req, ct);
+        var id = await service.CreateAsync(GetUserId(), req, ct);
         return CreatedAtAction(nameof(GetById), new { id }, id);
     }
 
     [HttpPut("{id:guid}")]
-    //[Authorize]
+    [Authorize]
     public async Task<IActionResult> Update([FromRoute] Guid id, [FromBody] UpdateTopicRequest req, CancellationToken ct)
     {
         await service.UpdateAsync(id, req, ct);
@@ -53,7 +53,7 @@ public sealed class TopicsController(TopicService service) : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
-    //[Authorize(Roles = "admin")]
+    [Authorize(Roles = "admin")]
     public async Task<IActionResult> Delete([FromRoute] Guid id, CancellationToken ct)
     {
         await service.DeleteAsync(id, ct);
@@ -61,7 +61,7 @@ public sealed class TopicsController(TopicService service) : ControllerBase
     }
 
     [HttpGet("import/template")]
-    //[Authorize(Roles = "admin")]
+    [Authorize(Roles = "admin")]
     public async Task<IActionResult> Template(CancellationToken ct)
     {
         var bytes = await service.BuildTemplateAsync(ct);
@@ -69,13 +69,13 @@ public sealed class TopicsController(TopicService service) : ControllerBase
     }
 
     [HttpPost("import")]
-    //[Authorize(Roles = "admin")]
+    [Authorize]
     [Consumes("multipart/form-data")] 
     public async Task<IActionResult> Import(IFormFile file, CancellationToken ct)
     {
         if (file is null || file.Length == 0) return BadRequest("File is required.");
         await using var s = file.OpenReadStream();
-        var result = await service.ImportAsync(Guid.Parse("3772df41-8efe-44af-bf74-3f165a31bb02"), s, ct);
+        var result = await service.ImportAsync(GetUserId(), s, ct);
         return Ok(result);
     }
 }
