@@ -52,4 +52,17 @@ public sealed class InvitationReadOnlyQueries(AppDbContext db) : IInvitationRead
                 );
         return q.ToListAsync(ct).ContinueWith(t => (IReadOnlyList<InvitationListItemDto>)t.Result, ct);
     }
+
+    public Task<Guid?> FindPendingIdAsync(Guid postId, Guid inviteeUserId, CancellationToken ct)
+        => db.invitations.AsNoTracking()
+            .Where(i => i.post_id == postId && i.invitee_user_id == inviteeUserId && i.status == "pending")
+            .Select(i => (Guid?)i.invitation_id)
+            .FirstOrDefaultAsync(ct);
+
+    public Task<(Guid InvitationId, string Status)?> FindAnyAsync(Guid postId, Guid inviteeUserId, CancellationToken ct)
+        => db.invitations.AsNoTracking()
+            .Where(i => i.post_id == postId && i.invitee_user_id == inviteeUserId)
+            .Select(i => new ValueTuple<Guid, string>(i.invitation_id, i.status))
+            .FirstOrDefaultAsync(ct)
+            .ContinueWith(t => t.Result == default ? (ValueTuple<Guid,string>?)null : t.Result, ct);
 }
