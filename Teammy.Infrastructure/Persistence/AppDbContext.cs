@@ -74,8 +74,7 @@ public partial class AppDbContext : DbContext
     {
         modelBuilder
             .HasPostgresExtension("citext")
-            .HasPostgresExtension("pgcrypto")
-            .HasPostgresExtension("unaccent");
+            .HasPostgresExtension("pgcrypto");
 
         modelBuilder.Entity<announcement>(entity =>
         {
@@ -377,11 +376,15 @@ public partial class AppDbContext : DbContext
 
             entity.HasIndex(e => new { e.semester_id, e.status, e.post_type }, "ix_posts_semester_status_type");
 
+            entity.HasIndex(e => e.required_skills, "ix_rp_required_skills_gin")
+                .HasMethod("gin")
+                .HasOperators(new[] { "jsonb_path_ops" });
+
             entity.Property(e => e.post_id).HasDefaultValueSql("gen_random_uuid()");
             entity.Property(e => e.created_at).HasDefaultValueSql("now()");
+            entity.Property(e => e.required_skills).HasColumnType("jsonb");
             entity.Property(e => e.status).HasDefaultValueSql("'open'::text");
             entity.Property(e => e.updated_at).HasDefaultValueSql("now()");
-
             entity.HasOne(d => d.group).WithMany(p => p.recruitment_posts)
                 .HasForeignKey(d => d.group_id)
                 .OnDelete(DeleteBehavior.Cascade)
