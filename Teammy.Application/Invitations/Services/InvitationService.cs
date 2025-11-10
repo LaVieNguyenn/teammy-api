@@ -37,19 +37,23 @@ public sealed class InvitationService(
         var postId = posts.FirstOrDefault(p => p.GroupId == groupId)?.Id
                      ?? await postRepo.CreateRecruitmentPostAsync(g.SemesterId, "group_hiring", groupId, null, g.MajorId, $"Invitation for {g.Name}", null, null, ct);
 
-        // Avoid duplicate invite due to unique index (no filter by status in DB)
+        // Handle duplicate by reusing/reactivating existing invitation
         var existingAny = await queries.FindAnyAsync(postId, inviteeUserId, ct);
+        Guid invitationId;
         if (existingAny.HasValue)
         {
             var (dupId, dupStatus) = existingAny.Value;
-            if (string.Equals(dupStatus, "pending", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException($"already_invited:{dupId}");
-            else
-                throw new InvalidOperationException($"invite_exists:{dupId}:{dupStatus}");
+            if (!string.Equals(dupStatus, "pending", StringComparison.OrdinalIgnoreCase))
+            {
+                await repo.UpdateStatusAsync(dupId, "pending", null, ct);
+            }
+            invitationId = dupId;
         }
-
-        // Create invitation
-        var invitationId = await repo.CreateAsync(postId, inviteeUserId, invitedByUserId, message, null, ct);
+        else
+        {
+            // Create new invitation
+            invitationId = await repo.CreateAsync(postId, inviteeUserId, invitedByUserId, message, null, ct);
+        }
 
         var invitee = await queries.GetAsync(invitationId, ct);
         bool emailSent = false;
