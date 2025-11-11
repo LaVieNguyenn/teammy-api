@@ -168,4 +168,8 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
             .Select(m => new ValueTuple<Guid, string>(m.major_id, m.major_name))
             .FirstOrDefaultAsync(ct)
             .ContinueWith(t => t.Result == default ? (ValueTuple<Guid, string>?)null : t.Result, ct);
+
+    public Task<bool> GroupNameExistsAsync(Guid semesterId, string name, Guid? excludeGroupId, CancellationToken ct)
+        => db.groups.AsNoTracking()
+            .AnyAsync(g => g.semester_id == semesterId && g.name == name && (!excludeGroupId.HasValue || g.group_id != excludeGroupId.Value), ct);
 }

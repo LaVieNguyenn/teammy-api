@@ -21,6 +21,13 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
         return userId;
     }
 
+    private Guid? TryGetUserId()
+    {
+        var sub = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (Guid.TryParse(sub, out var userId)) return userId;
+        return null;
+    }
+
     [HttpPost]
     [Authorize]
     public async Task<ActionResult> Create([FromBody] CreateRecruitmentPostRequest req, CancellationToken ct)
@@ -49,7 +56,7 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
         {
             exp |= ExpandOptions.Semester | ExpandOptions.Group | ExpandOptions.Major;
         }
-        var items = await service.ListAsync(skills, majorId, status, exp, ct);
+        var items = await service.ListAsync(skills, majorId, status, exp, TryGetUserId(), ct);
         if (!objectOnly) return Ok(items);
 
         // Build sequentially to avoid concurrent DbContext usage
@@ -76,6 +83,9 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
                 createdAt = d.CreatedAt,
                 applicationDeadline = d.ApplicationDeadline,
                 currentMembers = d.CurrentMembers,
+                hasApplied = d.HasApplied,
+                myApplicationId = d.MyApplicationId,
+                myApplicationStatus = d.MyApplicationStatus,
                 semester = d.Semester,
                 group = d.Group is null ? null : new
                 {
@@ -109,7 +119,7 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
         {
             exp |= ExpandOptions.Semester | ExpandOptions.Group | ExpandOptions.Major;
         }
-        var d = await service.GetAsync(id, exp, ct);
+        var d = await service.GetAsync(id, exp, TryGetUserId(), ct);
         if (d is null) return NotFound();
         if (!objectOnly) return Ok(d);
 
@@ -134,6 +144,9 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
             createdAt = d.CreatedAt,
             applicationDeadline = d.ApplicationDeadline,
             currentMembers = d.CurrentMembers,
+            hasApplied = d.HasApplied,
+            myApplicationId = d.MyApplicationId,
+            myApplicationStatus = d.MyApplicationStatus,
             semester = d.Semester,
             group = d.Group is null ? null : new
             {

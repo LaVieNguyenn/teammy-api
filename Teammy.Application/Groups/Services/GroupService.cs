@@ -119,4 +119,26 @@ public sealed class GroupService(
 
     public Task<UserGroupCheckDto> CheckUserGroupAsync(Guid targetUserId, Guid? semesterId, bool includePending, CancellationToken ct)
         => queries.CheckUserGroupAsync(targetUserId, semesterId, includePending, ct);
+
+    public async Task UpdateGroupAsync(Guid groupId, Guid currentUserId, UpdateGroupRequest req, CancellationToken ct)
+    {
+        var detail = await queries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
+        var isLeader = await queries.IsLeaderAsync(groupId, currentUserId, ct);
+        if (!isLeader) throw new UnauthorizedAccessException("Leader only");
+
+        if (!string.IsNullOrWhiteSpace(req.Name))
+        {
+            var exists = await queries.GroupNameExistsAsync(detail.SemesterId, req.Name!, groupId, ct);
+            if (exists) throw new InvalidOperationException("Group name already exists in this semester");
+        }
+
+        if (req.MaxMembers.HasValue)
+        {
+            var (_, activeCount) = await queries.GetGroupCapacityAsync(groupId, ct);
+            if (req.MaxMembers.Value < activeCount)
+                throw new InvalidOperationException($"MaxMembers cannot be less than current active members ({activeCount})");
+        }
+
+        await repo.UpdateGroupAsync(groupId, req.Name, req.Description, req.MaxMembers, req.MajorId, req.TopicId, ct);
+    }
 }

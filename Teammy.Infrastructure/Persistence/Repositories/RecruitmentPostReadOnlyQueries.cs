@@ -10,7 +10,7 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
     public Task<Guid?> GetActiveSemesterIdAsync(CancellationToken ct)
         => db.semesters.Where(s => s.is_active).Select(s => (Guid?)s.semester_id).FirstOrDefaultAsync(ct);
 
-    public Task<RecruitmentPostDetailDto?> GetAsync(Guid id, Teammy.Application.Posts.Dtos.ExpandOptions expand, CancellationToken ct)
+    public Task<RecruitmentPostDetailDto?> GetAsync(Guid id, Teammy.Application.Posts.Dtos.ExpandOptions expand, Guid? currentUserId, CancellationToken ct)
         => db.recruitment_posts.AsNoTracking()
             .Where(p => p.post_id == id)
             .Join(db.semesters.AsNoTracking(), p => p.semester_id, s => s.semester_id, (p, s) => new { p, s })
@@ -44,11 +44,22 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                 x.p.group_id != null
                     ? db.group_members.Count(mb => mb.group_id == x.p.group_id && (mb.status == "member" || mb.status == "leader"))
                     : 0,
-                x.p.application_deadline
+                x.p.application_deadline,
+                currentUserId.HasValue && db.candidates.Any(c => c.post_id == x.p.post_id && c.applicant_user_id == currentUserId.Value),
+                currentUserId.HasValue
+                    ? db.candidates.Where(c => c.post_id == x.p.post_id && c.applicant_user_id == currentUserId.Value)
+                        .Select(c => (Guid?)c.candidate_id)
+                        .FirstOrDefault()
+                    : null,
+                currentUserId.HasValue
+                    ? db.candidates.Where(c => c.post_id == x.p.post_id && c.applicant_user_id == currentUserId.Value)
+                        .Select(c => c.status)
+                        .FirstOrDefault()
+                    : null
             ))
             .FirstOrDefaultAsync(ct);
 
-    public async Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListAsync(string? skills, Guid? majorId, string? status, Teammy.Application.Posts.Dtos.ExpandOptions expand, CancellationToken ct)
+    public async Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListAsync(string? skills, Guid? majorId, string? status, Teammy.Application.Posts.Dtos.ExpandOptions expand, Guid? currentUserId, CancellationToken ct)
     {
         var q = db.recruitment_posts.AsNoTracking().AsQueryable();
         if (!string.IsNullOrWhiteSpace(status)) q = q.Where(p => p.status == status);
@@ -92,7 +103,18 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                     : 0,
                 x.p.description,
                 x.p.created_at,
-                x.p.application_deadline
+                x.p.application_deadline,
+                currentUserId.HasValue && db.candidates.Any(c => c.post_id == x.p.post_id && c.applicant_user_id == currentUserId.Value),
+                currentUserId.HasValue
+                    ? db.candidates.Where(c => c.post_id == x.p.post_id && c.applicant_user_id == currentUserId.Value)
+                        .Select(c => (Guid?)c.candidate_id)
+                        .FirstOrDefault()
+                    : null,
+                currentUserId.HasValue
+                    ? db.candidates.Where(c => c.post_id == x.p.post_id && c.applicant_user_id == currentUserId.Value)
+                        .Select(c => c.status)
+                        .FirstOrDefault()
+                    : null
             ))
             .ToListAsync(ct);
     }
