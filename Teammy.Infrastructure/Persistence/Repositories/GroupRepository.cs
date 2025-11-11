@@ -139,4 +139,19 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
 
         await tx.CommitAsync(ct);
     }
+
+    public async Task UpdateGroupAsync(Guid groupId, string? name, string? description, int? maxMembers, Guid? majorId, Guid? topicId, CancellationToken ct)
+    {
+        var g = await db.groups.FirstOrDefaultAsync(x => x.group_id == groupId, ct)
+            ?? throw new KeyNotFoundException("Group not found");
+
+        if (name is not null) g.name = name;
+        if (description is not null) g.description = description;
+        if (maxMembers.HasValue) g.max_members = maxMembers.Value;
+        if (majorId.HasValue) g.major_id = majorId;
+        if (topicId.HasValue) g.topic_id = topicId;
+        g.updated_at = DateTime.UtcNow;
+
+        await db.SaveChangesAsync(ct);
+    }
 }

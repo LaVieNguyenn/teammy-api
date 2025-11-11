@@ -18,4 +18,6 @@ public interface IGroupRepository
     Task CloseGroupAsync(Guid groupId, CancellationToken ct);
 
     Task TransferLeadershipAsync(Guid groupId, Guid currentLeaderUserId, Guid newLeaderUserId, CancellationToken ct);
+
+    Task UpdateGroupAsync(Guid groupId, string? name, string? description, int? maxMembers, Guid? majorId, Guid? topicId, CancellationToken ct);
 }

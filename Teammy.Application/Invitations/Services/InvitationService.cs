@@ -33,7 +33,7 @@ public sealed class InvitationService(
         if (hasActive) throw new InvalidOperationException("User already has active/pending membership in this semester");
 
         // Find or create recruitment post for the group
-        var posts = await postQueries.ListAsync(null, g.MajorId, "open", ExpandOptions.None, ct);
+        var posts = await postQueries.ListAsync(null, g.MajorId, "open", ExpandOptions.None, null, ct);
         var postId = posts.FirstOrDefault(p => p.GroupId == groupId)?.Id
                      ?? await postRepo.CreateRecruitmentPostAsync(g.SemesterId, "group_hiring", groupId, null, g.MajorId, $"Invitation for {g.Name}", null, null, ct);
 
