@@ -39,7 +39,7 @@ public sealed class UserRepository(AppDbContext db) : IUserRepository
         ef.display_name = user.DisplayName;
         ef.email_verified = user.EmailVerified;
         ef.avatar_url = user.AvatarUrl;
-        ef.updated_at = DateTime.Now;
+        ef.updated_at = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
     }
 }
