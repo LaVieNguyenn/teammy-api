@@ -61,7 +61,6 @@ public static class DependencyInjection
         // Semesters
         services.AddScoped<ISemesterWriteRepository, SemesterWriteRepository>();
 
-
         return services;
     }
 }
