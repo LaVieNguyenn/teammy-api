@@ -2,14 +2,6 @@ using Teammy.Application.Auth.Dtos;
 using Teammy.Application.Common.Interfaces;
 
 namespace Teammy.Application.Auth.Services;
-
-/// <summary>
-/// Xử lý use-case đăng nhập:
-/// - Verify Firebase ID token (IExternalTokenVerifier)
-/// - Tìm user đã được import & đang active (IUserRepository)
-/// - Cấp JWT (ITokenService)
-/// Không tạo user mới theo business rule.
-/// </summary>
 public sealed class AuthenticationService(
     IExternalTokenVerifier externalTokenVerifier,
     IUserRepository userRepository,
@@ -26,9 +18,23 @@ public sealed class AuthenticationService(
         if (user is null)
             throw new UnauthorizedAccessException("Account is not provisioned or inactive.");
 
-        var jwt = tokenService.CreateAccessToken(
-            user.Id, user.Email, user.DisplayName, user.RoleName, user.SkillsCompleted);
+        if (String.IsNullOrEmpty(user.AvatarUrl))
+        {
+            await userRepository.UpdateAsync(new Domain.Users.User(
+                user.Id,
+                user.Email,
+                user.DisplayName,
+                ext.PhotoUrl,
+                user.EmailVerified,
+                user.SkillsCompleted,
+                user.IsActive,
+                user.RoleName), ct);
+            
+        }
 
-        return new LoginResponse(jwt, user.Id, user.Email, user.DisplayName, user.RoleName, user.SkillsCompleted);
+        var jwt = tokenService.CreateAccessToken(
+            user.Id, user.Email, user.DisplayName, user.RoleName);
+
+        return new LoginResponse(jwt, user.Id, user.Email, user.DisplayName, user.RoleName);
     }
 }

@@ -5,6 +5,5 @@ public sealed record LoginResponse(
     Guid   UserId,
     string Email,
     string DisplayName,
-    string Role,
-    bool   SkillsCompleted
+    string Role
 );
