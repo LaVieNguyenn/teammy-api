@@ -130,8 +130,61 @@ public sealed class GroupsController : ControllerBase
 
     [HttpGet("my")]
     [Authorize]
-    public Task<IReadOnlyList<Teammy.Application.Groups.Dtos.MyGroupDto>> My([FromQuery] Guid? semesterId, CancellationToken ct)
-        => _service.ListMyGroupsAsync(GetUserId(), semesterId, ct);
+    public async Task<ActionResult> My([FromQuery] Guid? semesterId, CancellationToken ct)
+    {
+        var userId = GetUserId();
+        var list = await _service.ListMyGroupsAsync(userId, semesterId, ct);
+
+        // Shape to object-only similar to recruitment post details
+        var shaped = new List<object>(list.Count);
+        foreach (var g in list)
+        {
+            // Semester object
+            PostSemesterDto? semesterObj = null;
+            var s = await _groupQueries.GetSemesterAsync(g.SemesterId, ct);
+            if (s.HasValue)
+            {
+                var (semId, season, year, start, end, active) = s.Value;
+                semesterObj = new PostSemesterDto(semId, season, year, start, end, active);
+            }
+
+            // Detail for optional fields (description/major)
+            var detail = await _service.GetGroupAsync(g.GroupId, ct);
+
+            PostMajorDto? majorObj = null;
+            if (detail?.MajorId is Guid mid)
+            {
+                var m = await _groupQueries.GetMajorAsync(mid, ct);
+                if (m.HasValue)
+                {
+                    var (majorId, majorName) = m.Value;
+                    majorObj = new PostMajorDto(majorId, majorName);
+                }
+            }
+
+            // Members (leader separated)
+            var members = await _service.ListActiveMembersAsync(g.GroupId, ct);
+            var leaderMember = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase));
+            var nonLeaderMembers = members.Where(m => !string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase)).ToList();
+
+            shaped.Add(new
+            {
+                id = g.GroupId,
+                name = g.Name,
+                description = detail?.Description,
+                status = g.Status,
+                maxMembers = g.MaxMembers,
+                currentMembers = g.CurrentMembers,
+                role = g.Role,
+                semester = semesterObj,
+                major = majorObj,
+                leader = leaderMember,
+                members = nonLeaderMembers
+            });
+        }
+
+        return Ok(shaped);
+    }
 
     [HttpGet("{id:guid}/members")]
     [AllowAnonymous]
