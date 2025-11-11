@@ -53,7 +53,7 @@ public sealed class TopicsController(TopicService service) : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
-    [Authorize(Roles = "admin")]
+    [Authorize]
     public async Task<IActionResult> Delete([FromRoute] Guid id, CancellationToken ct)
     {
         await service.DeleteAsync(id, ct);
@@ -61,7 +61,7 @@ public sealed class TopicsController(TopicService service) : ControllerBase
     }
 
     [HttpGet("import/template")]
-    [Authorize(Roles = "admin")]
+    [Authorize]
     public async Task<IActionResult> Template(CancellationToken ct)
     {
         var bytes = await service.BuildTemplateAsync(ct);

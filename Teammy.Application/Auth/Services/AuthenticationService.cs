@@ -18,6 +18,20 @@ public sealed class AuthenticationService(
         if (user is null)
             throw new UnauthorizedAccessException("Account is not provisioned or inactive.");
 
+        if (String.IsNullOrEmpty(user.AvatarUrl))
+        {
+            await userRepository.UpdateAsync(new Domain.Users.User(
+                user.Id,
+                user.Email,
+                user.DisplayName,
+                ext.PhotoUrl,
+                user.EmailVerified,
+                user.SkillsCompleted,
+                user.IsActive,
+                user.RoleName), ct);
+            
+        }
+
         var jwt = tokenService.CreateAccessToken(
             user.Id, user.Email, user.DisplayName, user.RoleName);
 
