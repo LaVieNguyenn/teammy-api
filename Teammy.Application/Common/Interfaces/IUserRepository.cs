@@ -6,4 +6,6 @@ public interface IUserRepository
 {
     Task<User?> FindActiveByEmailAsync(string email, CancellationToken ct);
     Task<User?> FindByIdAsync(Guid id, CancellationToken ct);
+    Task UpdateAsync(User user, CancellationToken ct);
+
 }

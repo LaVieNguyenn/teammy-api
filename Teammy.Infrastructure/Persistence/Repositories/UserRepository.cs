@@ -32,4 +32,14 @@ public sealed class UserRepository(AppDbContext db) : IUserRepository
         var row = await query.AsNoTracking().FirstOrDefaultAsync(ct);
         return row is null ? null : PersistenceToDomainMapper.ToDomainUser(row.u, row.RoleName!);
     }
+
+    public async Task UpdateAsync(User user, CancellationToken ct)
+    {
+        var ef = await db.users.FirstAsync(x => x.user_id == user.Id, ct);
+        ef.display_name = user.DisplayName;
+        ef.email_verified = user.EmailVerified;
+        ef.avatar_url = user.AvatarUrl;
+        ef.updated_at = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+    }
 }
