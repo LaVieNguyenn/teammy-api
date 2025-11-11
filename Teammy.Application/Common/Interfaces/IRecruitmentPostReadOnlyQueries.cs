@@ -6,9 +6,9 @@ public interface IRecruitmentPostReadOnlyQueries
 {
     Task<Guid?> GetActiveSemesterIdAsync(CancellationToken ct);
 
-    Task<RecruitmentPostDetailDto?> GetAsync(Guid id, ExpandOptions expand, CancellationToken ct);
+    Task<RecruitmentPostDetailDto?> GetAsync(Guid id, ExpandOptions expand, Guid? currentUserId, CancellationToken ct);
 
-    Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListAsync(string? skills, Guid? majorId, string? status, ExpandOptions expand, CancellationToken ct);
+    Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListAsync(string? skills, Guid? majorId, string? status, ExpandOptions expand, Guid? currentUserId, CancellationToken ct);
 
     // Profile posts (student looking for group)
     Task<IReadOnlyList<ProfilePostSummaryDto>> ListProfilePostsAsync(string? skills, Guid? majorId, string? status, ExpandOptions expand, CancellationToken ct);

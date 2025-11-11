@@ -192,6 +192,7 @@ public sealed class GroupsController : ControllerBase
         => _service.ListActiveMembersAsync(id, ct);
 
     public sealed record TransferLeaderRequest(Guid NewLeaderUserId);
+    public sealed record UpdateGroupRequestBody(string? Name, string? Description, int? MaxMembers, Guid? MajorId, Guid? TopicId);
 
     [HttpPost("{id:guid}/leader/transfer")]
     [Authorize]
@@ -217,6 +218,29 @@ public sealed class GroupsController : ControllerBase
             return NoContent();
         }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    // Update group info (leader only)
+    [HttpPatch("{id:guid}")]
+    [Authorize]
+    public async Task<ActionResult> Update([FromRoute] Guid id, [FromBody] UpdateGroupRequestBody body, CancellationToken ct)
+    {
+        try
+        {
+            var req = new Teammy.Application.Groups.Dtos.UpdateGroupRequest
+            {
+                Name = body.Name,
+                Description = body.Description,
+                MaxMembers = body.MaxMembers,
+                MajorId = body.MajorId,
+                TopicId = body.TopicId
+            };
+            await _service.UpdateGroupAsync(id, GetUserId(), req, ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
         catch (KeyNotFoundException) { return NotFound(); }
     }
 

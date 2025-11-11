@@ -1,0 +1,11 @@
+*** Begin Patch
+*** Update File: Teammy.Application/Common/Interfaces/IGroupRepository.cs
+@@
+ public interface IGroupRepository
+ {
+@@
+     Task TransferLeadershipAsync(Guid groupId, Guid currentLeaderUserId, Guid newLeaderUserId, CancellationToken ct);
++
++    Task UpdateGroupAsync(Guid groupId, string? name, string? description, int? maxMembers, Guid? majorId, Guid? topicId, CancellationToken ct);
+ }
+*** End Patch
