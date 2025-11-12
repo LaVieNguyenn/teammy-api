@@ -105,6 +105,69 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
         return Ok(shaped);
     }
 
+    [HttpGet("my-applications")]
+    [Authorize]
+    public async Task<ActionResult> MyApplications([FromQuery] string? expand, [FromQuery] string? shape, CancellationToken ct)
+    {
+        var exp = ParseExpand(expand);
+        var objectOnly = _objectOnlyDefault;
+        if (!string.IsNullOrWhiteSpace(shape))
+        {
+            objectOnly = string.Equals(shape, "object", StringComparison.OrdinalIgnoreCase);
+        }
+        if (objectOnly)
+        {
+            exp |= ExpandOptions.Semester | ExpandOptions.Group | ExpandOptions.Major;
+        }
+        var items = await service.ListAppliedByUserAsync(GetUserId(), exp, ct);
+        if (!objectOnly) return Ok(items);
+
+        // Build sequentially like List() to avoid DbContext concurrency
+        var shaped = new List<object>(items.Count);
+        foreach (var d in items)
+        {
+            Guid[]? memberUserIds = null;
+            Guid? leaderUserId = null;
+            if (d.GroupId is Guid gid)
+            {
+                var members = await _groupQueries.ListActiveMembersAsync(gid, ct);
+                memberUserIds = members.Select(m => m.UserId).ToArray();
+                leaderUserId = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase))?.UserId;
+            }
+
+            shaped.Add(new
+            {
+                id = d.Id,
+                type = d.Type,
+                status = d.Status,
+                title = d.Title,
+                description = d.Description,
+                position_needed = d.PositionNeeded,
+                createdAt = d.CreatedAt,
+                applicationDeadline = d.ApplicationDeadline,
+                currentMembers = d.CurrentMembers,
+                hasApplied = d.HasApplied,
+                myApplicationId = d.MyApplicationId,
+                myApplicationStatus = d.MyApplicationStatus,
+                semester = d.Semester,
+                group = d.Group is null ? null : new
+                {
+                    d.Group.GroupId,
+                    d.Group.Name,
+                    d.Group.Description,
+                    d.Group.Status,
+                    d.Group.MaxMembers,
+                    d.Group.MajorId,
+                    d.Group.TopicId,
+                    memberUserIds,
+                    leader_user_id = leaderUserId
+                },
+                major = d.Major
+            });
+        }
+        return Ok(shaped);
+    }
+
     [HttpGet("{id:guid}")]
     [AllowAnonymous]
     public async Task<ActionResult<RecruitmentPostDetailDto>> GetById([FromRoute] Guid id, [FromQuery] string? expand, [FromQuery] string? shape, CancellationToken ct)
