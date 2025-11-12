@@ -37,6 +37,12 @@ public sealed class RecruitmentPostService(
         return d;
     }
 
+    public async Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListAppliedByUserAsync(Guid currentUserId, ExpandOptions expand, CancellationToken ct)
+    {
+        var items = await queries.ListAppliedByUserAsync(currentUserId, expand, ct);
+        return items.Where(x => x.GroupId != null).ToList();
+    }
+
     public async Task ApplyAsync(Guid postId, Guid userId, string? message, CancellationToken ct)
     {
         var owner = await queries.GetPostOwnerAsync(postId, ct);
