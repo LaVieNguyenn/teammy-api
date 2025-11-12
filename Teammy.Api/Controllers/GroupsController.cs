@@ -49,14 +49,20 @@ public sealed class GroupsController : ControllerBase
         => _service.ListGroupsAsync(status, majorId, topicId, ct);
 
     [HttpGet("{id:guid}")]
-    [AllowAnonymous]
+    [Authorize]
     public async Task<ActionResult> GetById([FromRoute] Guid id, CancellationToken ct)
     {
         var g = await _service.GetGroupAsync(id, ct);
         if (g is null) return NotFound();
 
-        // Build enriched object similar to recruitment object-only
+        // Only leader/member can view details (exclude pending/non-members)
         var members = await _service.ListActiveMembersAsync(id, ct);
+        var currentUserId = GetUserId();
+        var isActiveMember = members.Any(m => m.UserId == currentUserId);
+        if (!isActiveMember)
+            return StatusCode(403, "Members only");
+
+        // Build enriched object similar to recruitment object-only
         var leaderMember = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase));
         var nonLeaderMembers = members.Where(m => !string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase)).ToList();
 
@@ -187,9 +193,16 @@ public sealed class GroupsController : ControllerBase
     }
 
     [HttpGet("{id:guid}/members")]
-    [AllowAnonymous]
-    public Task<IReadOnlyList<Teammy.Application.Groups.Dtos.GroupMemberDto>> Members([FromRoute] Guid id, CancellationToken ct)
-        => _service.ListActiveMembersAsync(id, ct);
+    [Authorize]
+    public async Task<ActionResult<IReadOnlyList<Teammy.Application.Groups.Dtos.GroupMemberDto>>> Members([FromRoute] Guid id, CancellationToken ct)
+    {
+        var members = await _service.ListActiveMembersAsync(id, ct);
+        var currentUserId = GetUserId();
+        var isActiveMember = members.Any(m => m.UserId == currentUserId);
+        if (!isActiveMember)
+            return StatusCode(403, "Members only");
+        return Ok(members);
+    }
 
     public sealed record TransferLeaderRequest(Guid NewLeaderUserId);
     public sealed record UpdateGroupRequestBody(string? Name, string? Description, int? MaxMembers, Guid? MajorId, Guid? TopicId);
