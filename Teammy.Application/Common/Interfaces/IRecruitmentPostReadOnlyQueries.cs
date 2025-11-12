@@ -18,4 +18,7 @@ public interface IRecruitmentPostReadOnlyQueries
     Task<IReadOnlyList<ApplicationDto>> ListApplicationsAsync(Guid postId, CancellationToken ct);
 
     Task<(Guid? GroupId, Guid SemesterId, Guid? OwnerUserId)> GetPostOwnerAsync(Guid postId, CancellationToken ct);
+
+    // Posts the given user has applied to (via candidates)
+    Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListAppliedByUserAsync(Guid userId, ExpandOptions expand, CancellationToken ct);
 }
