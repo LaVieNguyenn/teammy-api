@@ -21,4 +21,10 @@ public interface IRecruitmentPostReadOnlyQueries
 
     // Posts the given user has applied to (via candidates)
     Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListAppliedByUserAsync(Guid userId, ExpandOptions expand, CancellationToken ct);
+
+    // Find pending application by user to any post of a specific group
+    Task<(Guid ApplicationId, Guid PostId)?> FindPendingApplicationInGroupAsync(Guid groupId, Guid userId, CancellationToken ct);
+
+    // Find any application by user for a specific post
+    Task<(Guid ApplicationId, string Status)?> FindApplicationByPostAndUserAsync(Guid postId, Guid userId, CancellationToken ct);
 }

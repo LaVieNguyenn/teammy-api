@@ -172,4 +172,70 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
     public Task<bool> GroupNameExistsAsync(Guid semesterId, string name, Guid? excludeGroupId, CancellationToken ct)
         => db.groups.AsNoTracking()
             .AnyAsync(g => g.semester_id == semesterId && g.name == name && (!excludeGroupId.HasValue || g.group_id != excludeGroupId.Value), ct);
+
+    public async Task<IReadOnlyList<Teammy.Application.Groups.Dtos.GroupPendingItemDto>> GetUnifiedPendingAsync(Guid groupId, CancellationToken ct)
+    {
+        // join-requests (group_members pending)
+        var joins = await (
+            from m in db.group_members.AsNoTracking()
+            join u in db.users.AsNoTracking() on m.user_id equals u.user_id
+            where m.group_id == groupId && m.status == "pending"
+            select new Teammy.Application.Groups.Dtos.GroupPendingItemDto(
+                "join_request",
+                m.group_member_id,
+                null,
+                u.user_id,
+                u.email!,
+                u.display_name!,
+                u.avatar_url,
+                m.joined_at,
+                null)
+        ).ToListAsync(ct);
+
+        // applications (candidates pending → group via post)
+        var apps = await (
+            from c in db.candidates.AsNoTracking()
+            join p in db.recruitment_posts.AsNoTracking() on c.post_id equals p.post_id
+            join u in db.users.AsNoTracking() on c.applicant_user_id equals u.user_id
+            where p.group_id == groupId && c.status == "pending" && c.applicant_user_id != null
+            orderby c.created_at descending
+            select new Teammy.Application.Groups.Dtos.GroupPendingItemDto(
+                "application",
+                c.candidate_id,
+                p.post_id,
+                u.user_id,
+                u.email!,
+                u.display_name!,
+                u.avatar_url,
+                c.created_at,
+                c.message)
+        ).ToListAsync(ct);
+
+        // invitations (pending → group via post)
+        var invs = await (
+            from i in db.invitations.AsNoTracking()
+            join p in db.recruitment_posts.AsNoTracking() on i.post_id equals p.post_id
+            join u in db.users.AsNoTracking() on i.invitee_user_id equals u.user_id into uu
+            from u in uu.DefaultIfEmpty()
+            where p.group_id == groupId && i.status == "pending"
+            orderby i.created_at descending
+            select new Teammy.Application.Groups.Dtos.GroupPendingItemDto(
+                "invitation",
+                i.invitation_id,
+                p.post_id,
+                i.invitee_user_id,
+                u != null ? u.email! : string.Empty,
+                u != null ? u.display_name! : string.Empty,
+                u != null ? u.avatar_url : null,
+                i.created_at,
+                i.message)
+        ).ToListAsync(ct);
+
+        var merged = joins
+            .Concat(apps)
+            .Concat(invs)
+            .OrderByDescending(x => x.CreatedAt)
+            .ToList();
+        return merged;
+    }
 }
