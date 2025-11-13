@@ -214,15 +214,14 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
         // invitations (pending → group via post)
         var invs = await (
             from i in db.invitations.AsNoTracking()
-            join p in db.recruitment_posts.AsNoTracking() on i.post_id equals p.post_id
             join u in db.users.AsNoTracking() on i.invitee_user_id equals u.user_id into uu
             from u in uu.DefaultIfEmpty()
-            where p.group_id == groupId && i.status == "pending"
+            where i.group_id == groupId && i.status == "pending"
             orderby i.created_at descending
             select new Teammy.Application.Groups.Dtos.GroupPendingItemDto(
                 "invitation",
                 i.invitation_id,
-                p.post_id,
+                null,
                 i.invitee_user_id,
                 u != null ? u.email! : string.Empty,
                 u != null ? u.display_name! : string.Empty,
