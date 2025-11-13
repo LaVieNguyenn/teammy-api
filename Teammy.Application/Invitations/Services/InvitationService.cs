@@ -32,23 +32,8 @@ public sealed class InvitationService(
         var hasActive = await groupQueries.HasActiveMembershipInSemesterAsync(inviteeUserId, g.SemesterId, ct);
         if (hasActive) throw new InvalidOperationException("User already has active/pending membership in this semester");
 
-        // Find or create recruitment post for the group; enforce one-open-post-per-group
-        var posts = await postQueries.ListAsync(null, g.MajorId, "open", ExpandOptions.None, null, ct);
-        var openForGroup = posts.Where(p => p.GroupId == groupId).Select(p => p.Id).ToList();
-        Guid postId;
-        if (openForGroup.Count == 0)
-        {
-            postId = await postRepo.CreateRecruitmentPostAsync(g.SemesterId, "group_hiring", groupId, null, g.MajorId, $"Invitation for {g.Name}", null, null, ct);
-        }
-        else
-        {
-            postId = openForGroup[0];
-            // Close any other open posts for this group
-            await postRepo.CloseAllOpenPostsExceptAsync(groupId, postId, ct);
-        }
-
-        // Handle duplicate by reusing/reactivating existing invitation
-        var existingAny = await queries.FindAnyAsync(postId, inviteeUserId, ct);
+        // Handle duplicate by reusing/reactivating existing invitation (group-based)
+        var existingAny = await queries.FindAnyAsync(groupId, inviteeUserId, ct);
         Guid invitationId;
         if (existingAny.HasValue)
         {
@@ -62,7 +47,7 @@ public sealed class InvitationService(
         else
         {
             // Create new invitation
-            invitationId = await repo.CreateAsync(postId, inviteeUserId, invitedByUserId, message, null, ct);
+            invitationId = await repo.CreateAsync(groupId, inviteeUserId, invitedByUserId, message, null, ct);
         }
 
         var invitee = await queries.GetAsync(invitationId, ct);
@@ -93,31 +78,29 @@ public sealed class InvitationService(
         var inv = await queries.GetAsync(invitationId, ct) ?? throw new KeyNotFoundException("Invitation not found");
         if (inv.InviteeUserId != currentUserId) throw new UnauthorizedAccessException("Not your invitation");
         if (inv.Status != "pending") throw new InvalidOperationException("Invitation already handled");
-        if (inv.GroupId is null) throw new InvalidOperationException("Invitation not bound to a group post");
-
-        var (maxMembers, activeCount) = await groupQueries.GetGroupCapacityAsync(inv.GroupId.Value, ct);
+        var (maxMembers, activeCount) = await groupQueries.GetGroupCapacityAsync(inv.GroupId, ct);
         if (activeCount >= maxMembers) throw new InvalidOperationException("Group is full");
 
         var hasActive = await groupQueries.HasActiveMembershipInSemesterAsync(currentUserId, inv.SemesterId, ct);
         if (hasActive) throw new InvalidOperationException("User already has active/pending membership in this semester");
 
         // If user has a pending join-request to this group, promote it; else add new membership
-        var pendings = await groupQueries.GetPendingJoinRequestsAsync(inv.GroupId.Value, ct);
+        var pendings = await groupQueries.GetPendingJoinRequestsAsync(inv.GroupId, ct);
         var existingJoin = pendings.FirstOrDefault(x => x.UserId == currentUserId);
         if (existingJoin is not null)
             await groupRepo.UpdateMembershipStatusAsync(existingJoin.RequestId, "member", ct);
         else
-            await groupRepo.AddMembershipAsync(inv.GroupId.Value, currentUserId, inv.SemesterId, "member", ct);
+            await groupRepo.AddMembershipAsync(inv.GroupId, currentUserId, inv.SemesterId, "member", ct);
         await repo.UpdateStatusAsync(invitationId, "accepted", DateTime.UtcNow, ct);
 
         // Cleanup: reject other pending applications by this user to the same group
-        await postRepo.RejectPendingApplicationsForUserInGroupAsync(inv.GroupId.Value, currentUserId, ct);
+        await postRepo.RejectPendingApplicationsForUserInGroupAsync(inv.GroupId, currentUserId, ct);
 
         // If group became full, mark open posts as full
-        var (maxMembersAfter, activeCountAfter) = await groupQueries.GetGroupCapacityAsync(inv.GroupId.Value, ct);
+        var (maxMembersAfter, activeCountAfter) = await groupQueries.GetGroupCapacityAsync(inv.GroupId, ct);
         if (activeCountAfter >= maxMembersAfter)
         {
-            await postRepo.SetOpenPostsStatusForGroupAsync(inv.GroupId.Value, "full", ct);
+            await postRepo.SetOpenPostsStatusForGroupAsync(inv.GroupId, "full", ct);
         }
     }
 
@@ -134,8 +117,7 @@ public sealed class InvitationService(
     public async Task CancelAsync(Guid invitationId, Guid currentUserId, CancellationToken ct)
     {
         var inv = await queries.GetAsync(invitationId, ct) ?? throw new KeyNotFoundException("Invitation not found");
-        if (inv.GroupId is null) throw new InvalidOperationException("Invitation not bound to a group post");
-        var isLeader = await groupQueries.IsLeaderAsync(inv.GroupId.Value, currentUserId, ct);
+        var isLeader = await groupQueries.IsLeaderAsync(inv.GroupId, currentUserId, ct);
         if (!isLeader) throw new UnauthorizedAccessException("Leader only");
         if (inv.Status != "pending") throw new InvalidOperationException("Invitation already handled");
         await repo.UpdateStatusAsync(invitationId, "rejected", DateTime.UtcNow, ct);
