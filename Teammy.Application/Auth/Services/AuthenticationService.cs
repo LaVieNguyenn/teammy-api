@@ -31,7 +31,6 @@ public sealed class AuthenticationService(
                 user.RoleName), ct);
             
         }
-
         var jwt = tokenService.CreateAccessToken(
             user.Id, user.Email, user.DisplayName, user.RoleName);
 

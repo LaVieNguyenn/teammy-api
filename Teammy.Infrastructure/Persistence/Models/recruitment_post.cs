@@ -39,8 +39,6 @@ public partial class recruitment_post
 
     public virtual group? group { get; set; }
 
-    public virtual ICollection<invitation> invitations { get; set; } = new List<invitation>();
-
     public virtual major? major { get; set; }
 
     public virtual semester semester { get; set; } = null!;
