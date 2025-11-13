@@ -68,5 +68,50 @@ public sealed class RecruitmentPostRepository(AppDbContext db) : IRecruitmentPos
         c.updated_at = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
     }
-}
 
+    public async Task ReactivateApplicationAsync(Guid applicationId, string? message, CancellationToken ct)
+    {
+        var c = await db.candidates.FirstOrDefaultAsync(x => x.candidate_id == applicationId, ct)
+            ?? throw new KeyNotFoundException("Application not found");
+        c.status = "pending";
+        if (message is not null) c.message = message;
+        c.updated_at = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task<int> CloseAllOpenPostsForGroupAsync(Guid groupId, CancellationToken ct)
+    {
+        var posts = await db.recruitment_posts.Where(p => p.group_id == groupId && p.status == "open").ToListAsync(ct);
+        if (posts.Count == 0) return 0;
+        foreach (var p in posts) { p.status = "closed"; p.updated_at = DateTime.UtcNow; }
+        return await db.SaveChangesAsync(ct);
+    }
+
+    public async Task<int> CloseAllOpenPostsExceptAsync(Guid groupId, Guid keepPostId, CancellationToken ct)
+    {
+        var posts = await db.recruitment_posts.Where(p => p.group_id == groupId && p.status == "open" && p.post_id != keepPostId).ToListAsync(ct);
+        if (posts.Count == 0) return 0;
+        foreach (var p in posts) { p.status = "closed"; p.updated_at = DateTime.UtcNow; }
+        return await db.SaveChangesAsync(ct);
+    }
+
+    public async Task<int> SetOpenPostsStatusForGroupAsync(Guid groupId, string newStatus, CancellationToken ct)
+    {
+        var posts = await db.recruitment_posts.Where(p => p.group_id == groupId && p.status == "open").ToListAsync(ct);
+        if (posts.Count == 0) return 0;
+        foreach (var p in posts) { p.status = newStatus; p.updated_at = DateTime.UtcNow; }
+        return await db.SaveChangesAsync(ct);
+    }
+
+    public async Task<int> RejectPendingApplicationsForUserInGroupAsync(Guid groupId, Guid userId, CancellationToken ct)
+    {
+        var q = from c in db.candidates
+                join p in db.recruitment_posts on c.post_id equals p.post_id
+                where p.group_id == groupId && c.applicant_user_id == userId && c.status == "pending"
+                select c;
+        var items = await q.ToListAsync(ct);
+        if (items.Count == 0) return 0;
+        foreach (var c in items) { c.status = "rejected"; c.updated_at = DateTime.UtcNow; }
+        return await db.SaveChangesAsync(ct);
+    }
+}

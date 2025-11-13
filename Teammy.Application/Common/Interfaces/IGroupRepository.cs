@@ -20,4 +20,7 @@ public interface IGroupRepository
     Task TransferLeadershipAsync(Guid groupId, Guid currentLeaderUserId, Guid newLeaderUserId, CancellationToken ct);
 
     Task UpdateGroupAsync(Guid groupId, string? name, string? description, int? maxMembers, Guid? majorId, Guid? topicId, CancellationToken ct);
+
+    // Update only group status
+    Task SetStatusAsync(Guid groupId, string newStatus, CancellationToken ct);
 }

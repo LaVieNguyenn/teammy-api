@@ -8,7 +8,6 @@ public sealed class CreateRecruitmentPostRequest
     public string Title { get; set; } = string.Empty;
     public string? Description { get; set; }
     public string? Skills { get; set; }
-    public int? Limit { get; set; }
     public Guid? MajorId { get; set; }
 
     // Aliases to accept alternative names from clients
@@ -48,7 +47,8 @@ public sealed record RecruitmentPostSummaryDto(
     DateTime? ApplicationDeadline,
     bool HasApplied,
     Guid? MyApplicationId,
-    string? MyApplicationStatus
+    string? MyApplicationStatus,
+    int ApplicationsCount
 );
 
 public sealed record RecruitmentPostDetailDto(
@@ -72,7 +72,8 @@ public sealed record RecruitmentPostDetailDto(
     DateTime? ApplicationDeadline,
     bool HasApplied,
     Guid? MyApplicationId,
-    string? MyApplicationStatus
+    string? MyApplicationStatus,
+    int ApplicationsCount
 );
 
 public sealed record CreateApplicationRequest(string? Message);
