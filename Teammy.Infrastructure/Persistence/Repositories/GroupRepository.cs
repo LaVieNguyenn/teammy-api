@@ -154,4 +154,13 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
 
         await db.SaveChangesAsync(ct);
     }
+
+    public async Task SetStatusAsync(Guid groupId, string newStatus, CancellationToken ct)
+    {
+        var g = await db.groups.FirstOrDefaultAsync(x => x.group_id == groupId, ct)
+            ?? throw new KeyNotFoundException("Group not found");
+        g.status = newStatus;
+        g.updated_at = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+    }
 }

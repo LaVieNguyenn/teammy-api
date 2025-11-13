@@ -8,7 +8,6 @@ public sealed class CreateRecruitmentPostRequest
     public string Title { get; set; } = string.Empty;
     public string? Description { get; set; }
     public string? Skills { get; set; }
-    public int? Limit { get; set; }
     public Guid? MajorId { get; set; }
 
     // Aliases to accept alternative names from clients
