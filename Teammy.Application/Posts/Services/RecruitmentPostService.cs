@@ -20,6 +20,8 @@ public sealed class RecruitmentPostService(
         if (!isLeader) throw new UnauthorizedAccessException("Leader only");
 
         var semesterId = detail.SemesterId;
+        // Enforce one-open-post-per-group: close any existing open posts before creating a new one
+        await repo.CloseAllOpenPostsForGroupAsync(req.GroupId, ct);
         var postId = await repo.CreateRecruitmentPostAsync(semesterId, postType: "group_hiring", groupId: req.GroupId, userId: null, req.MajorId, req.Title, req.Description, req.Skills, ct);
         return postId;
     }
@@ -54,6 +56,27 @@ public sealed class RecruitmentPostService(
         var hasActive = await groupQueries.HasActiveMembershipInSemesterAsync(userId, owner.SemesterId, ct);
         if (hasActive) throw new InvalidOperationException("User already has active/pending membership in this semester");
 
+        // Guard: if user has a pending join-request to this group, block apply to avoid dual pending
+        var pendings = await groupQueries.GetPendingJoinRequestsAsync(owner.GroupId.Value, ct);
+        var existingJoin = pendings.FirstOrDefault(x => x.UserId == userId);
+        if (existingJoin is not null)
+            throw new InvalidOperationException($"already_join_requested:{existingJoin.RequestId}");
+
+        // If an application exists for this post+user: handle by status
+        var existingApp = await queries.FindApplicationByPostAndUserAsync(postId, userId, ct);
+        if (existingApp.HasValue)
+        {
+            var (appId, status) = existingApp.Value;
+            if (string.Equals(status, "pending", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"already_applied:{appId}");
+            if (string.Equals(status, "accepted", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"already_accepted:{appId}");
+
+            // status == rejected -> reactivate to pending and update message
+            await repo.ReactivateApplicationAsync(appId, message, ct);
+            return;
+        }
+
         await repo.CreateApplicationAsync(postId, userId, null, userId, message, ct);
     }
 
@@ -76,8 +99,24 @@ public sealed class RecruitmentPostService(
         var hasActive = await groupQueries.HasActiveMembershipInSemesterAsync(app.ApplicantUserId.Value, owner.SemesterId, ct);
         if (hasActive) throw new InvalidOperationException("User already has active/pending membership in this semester");
 
-        await groupRepo.AddMembershipAsync(owner.GroupId.Value, app.ApplicantUserId.Value, owner.SemesterId, "member", ct);
+        // If there's a pending join-request for this user->group, promote it to member; else add new membership
+        var pendings = await groupQueries.GetPendingJoinRequestsAsync(owner.GroupId.Value, ct);
+        var existingJoin = pendings.FirstOrDefault(x => x.UserId == app.ApplicantUserId.Value);
+        if (existingJoin is not null)
+            await groupRepo.UpdateMembershipStatusAsync(existingJoin.RequestId, "member", ct);
+        else
+            await groupRepo.AddMembershipAsync(owner.GroupId.Value, app.ApplicantUserId.Value, owner.SemesterId, "member", ct);
         await repo.UpdateApplicationStatusAsync(appId, "accepted", ct);
+
+        // Cleanup duplicates: reject other pending applications by this user to the same group
+        await repo.RejectPendingApplicationsForUserInGroupAsync(owner.GroupId.Value, app.ApplicantUserId.Value, ct);
+
+        // If group is now full, mark remaining open posts as full
+        var (_, newActiveCount) = await groupQueries.GetGroupCapacityAsync(owner.GroupId.Value, ct);
+        if (newActiveCount >= maxMembers)
+        {
+            await repo.SetOpenPostsStatusForGroupAsync(owner.GroupId.Value, "full", ct);
+        }
     }
 
     public async Task RejectAsync(Guid postId, Guid appId, Guid currentUserId, CancellationToken ct)

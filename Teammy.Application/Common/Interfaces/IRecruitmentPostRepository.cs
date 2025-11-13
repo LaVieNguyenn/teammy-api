@@ -20,4 +20,16 @@ public interface IRecruitmentPostRepository
     Task UpdatePostAsync(Guid postId, string? title, string? description, string? skills, string? status, CancellationToken ct);
 
     Task UpdateApplicationStatusAsync(Guid applicationId, string newStatus, CancellationToken ct);
+
+    // Enforce one-open-post-per-group and cleanup helpers
+    Task<int> CloseAllOpenPostsForGroupAsync(Guid groupId, CancellationToken ct);
+
+    Task<int> CloseAllOpenPostsExceptAsync(Guid groupId, Guid keepPostId, CancellationToken ct);
+
+    Task<int> SetOpenPostsStatusForGroupAsync(Guid groupId, string newStatus, CancellationToken ct);
+
+    Task<int> RejectPendingApplicationsForUserInGroupAsync(Guid groupId, Guid userId, CancellationToken ct);
+
+    // Reactivate a rejected application (set status back to pending and update message)
+    Task ReactivateApplicationAsync(Guid applicationId, string? message, CancellationToken ct);
 }

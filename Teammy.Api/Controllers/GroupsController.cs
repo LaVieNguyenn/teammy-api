@@ -6,6 +6,7 @@ using Teammy.Application.Groups.Services;
 using Teammy.Application.Invitations.Services;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Posts.Dtos;
+using Teammy.Application.Posts.Services;
 
 namespace Teammy.Api.Controllers;
 
@@ -16,11 +17,13 @@ public sealed class GroupsController : ControllerBase
     private readonly GroupService _service;
     private readonly InvitationService _invitations;
     private readonly IGroupReadOnlyQueries _groupQueries;
-    public GroupsController(GroupService service, InvitationService invitations, IGroupReadOnlyQueries groupQueries)
+    private readonly RecruitmentPostService _postService;
+    public GroupsController(GroupService service, InvitationService invitations, IGroupReadOnlyQueries groupQueries, RecruitmentPostService postService)
     {
         _service = service;
         _invitations = invitations;
         _groupQueries = groupQueries;
+        _postService = postService;
     }
 
     private Guid GetUserId()
@@ -329,4 +332,70 @@ public sealed class GroupsController : ControllerBase
     [Authorize]
     public ActionResult AssignRole([FromRoute] Guid id, [FromRoute] Guid userId)
         => StatusCode(501, "Not Implemented: internal member role not yet modeled");
+
+    // Unified pending list (leader-only)
+    [HttpGet("{id:guid}/pending")]
+    [Authorize]
+    public async Task<ActionResult<IReadOnlyList<GroupPendingItemDto>>> UnifiedPending([FromRoute] Guid id, CancellationToken ct)
+    {
+        var isLeader = await _groupQueries.IsLeaderAsync(id, GetUserId(), ct);
+        if (!isLeader) return StatusCode(403, "Leader only");
+        var items = await _groupQueries.GetUnifiedPendingAsync(id, ct);
+        return Ok(items);
+    }
+
+    public sealed record PendingActionBody(string Type, Guid? PostId);
+
+    [HttpPost("{id:guid}/pending/{pendingId:guid}/accept")]
+    [Authorize]
+    public async Task<ActionResult> UnifiedAccept([FromRoute] Guid id, [FromRoute] Guid pendingId, [FromBody] PendingActionBody body, CancellationToken ct)
+    {
+        try
+        {
+            var type = (body?.Type ?? string.Empty).ToLowerInvariant();
+            switch (type)
+            {
+                case "join_request":
+                    await _service.AcceptJoinRequestAsync(id, pendingId, GetUserId(), ct);
+                    return NoContent();
+                case "application":
+                    if (!body.PostId.HasValue) return BadRequest("postId is required for application");
+                    await _postService.AcceptAsync(body.PostId.Value, pendingId, GetUserId(), ct);
+                    return NoContent();
+                default:
+                    return BadRequest("Unsupported type for accept");
+            }
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+    }
+
+    [HttpPost("{id:guid}/pending/{pendingId:guid}/reject")]
+    [Authorize]
+    public async Task<ActionResult> UnifiedReject([FromRoute] Guid id, [FromRoute] Guid pendingId, [FromBody] PendingActionBody body, CancellationToken ct)
+    {
+        try
+        {
+            var type = (body?.Type ?? string.Empty).ToLowerInvariant();
+            switch (type)
+            {
+                case "join_request":
+                    await _service.RejectJoinRequestAsync(id, pendingId, GetUserId(), ct);
+                    return NoContent();
+                case "application":
+                    if (!body.PostId.HasValue) return BadRequest("postId is required for application");
+                    await _postService.RejectAsync(body.PostId.Value, pendingId, GetUserId(), ct);
+                    return NoContent();
+                case "invitation":
+                    await _invitations.CancelAsync(pendingId, GetUserId(), ct);
+                    return NoContent();
+                default:
+                    return BadRequest("Unsupported type for reject");
+            }
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+    }
 }

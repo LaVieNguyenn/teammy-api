@@ -5,7 +5,9 @@ namespace Teammy.Application.Groups.Services;
 
 public sealed class GroupService(
     IGroupRepository repo,
-    IGroupReadOnlyQueries queries)
+    IGroupReadOnlyQueries queries,
+    IRecruitmentPostRepository postRepo,
+    IRecruitmentPostReadOnlyQueries postReadQueries)
 {
     public async Task<Guid> CreateGroupAsync(Guid creatorUserId, CreateGroupRequest req, CancellationToken ct)
     {
@@ -44,6 +46,14 @@ public sealed class GroupService(
         if (hasActive)
             throw new InvalidOperationException("User already has active/pending membership in this semester");
 
+        // Guard: if user already has a pending application to this group via any post -> conflict
+        var pendingApp = await postReadQueries.FindPendingApplicationInGroupAsync(groupId, userId, ct);
+        if (pendingApp.HasValue)
+        {
+            var (appId, postId) = pendingApp.Value;
+            throw new InvalidOperationException($"already_applied:{appId}:{postId}");
+        }
+
         await repo.AddMembershipAsync(groupId, userId, detail.SemesterId, "pending", ct);
     }
 
@@ -70,7 +80,21 @@ public sealed class GroupService(
         if (activeCount >= maxMembers)
             throw new InvalidOperationException("Group is full");
 
+        // Find requester userId from pending list
+        var pendings = await queries.GetPendingJoinRequestsAsync(groupId, ct);
+        var req = pendings.FirstOrDefault(x => x.RequestId == reqId) ?? throw new KeyNotFoundException("Join request not found");
+
         await repo.UpdateMembershipStatusAsync(reqId, "member", ct);
+
+        // Cleanup duplicate applications for this user to the same group
+        await postRepo.RejectPendingApplicationsForUserInGroupAsync(groupId, req.UserId, ct);
+
+        // If group now full, set open posts to full
+        var (_, newActiveCount) = await queries.GetGroupCapacityAsync(groupId, ct);
+        if (newActiveCount >= maxMembers)
+        {
+            await postRepo.SetOpenPostsStatusForGroupAsync(groupId, "full", ct);
+        }
     }
 
     public async Task RejectJoinRequestAsync(Guid groupId, Guid reqId, Guid currentUserId, CancellationToken ct)

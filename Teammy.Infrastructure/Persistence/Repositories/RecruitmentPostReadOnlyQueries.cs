@@ -145,6 +145,23 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
             .Select(p => new ValueTuple<Guid?, Guid, Guid?>(p.group_id, p.semester_id, p.user_id))
             .FirstOrDefaultAsync(ct);
 
+    public Task<(Guid ApplicationId, Guid PostId)?> FindPendingApplicationInGroupAsync(Guid groupId, Guid userId, CancellationToken ct)
+        => (from c in db.candidates.AsNoTracking()
+            join p in db.recruitment_posts.AsNoTracking() on c.post_id equals p.post_id
+            where p.group_id == groupId && c.applicant_user_id == userId && c.status == "pending"
+            orderby c.created_at descending
+            select new ValueTuple<Guid, Guid>(c.candidate_id, c.post_id))
+            .FirstOrDefaultAsync(ct)
+            .ContinueWith(t => t.Result == default ? (ValueTuple<Guid,Guid>?)null : t.Result, ct);
+
+    public Task<(Guid ApplicationId, string Status)?> FindApplicationByPostAndUserAsync(Guid postId, Guid userId, CancellationToken ct)
+        => db.candidates.AsNoTracking()
+            .Where(c => c.post_id == postId && c.applicant_user_id == userId)
+            .OrderByDescending(c => c.created_at)
+            .Select(c => new ValueTuple<Guid, string>(c.candidate_id, c.status))
+            .FirstOrDefaultAsync(ct)
+            .ContinueWith(t => t.Result == default ? (ValueTuple<Guid,string>?)null : t.Result, ct);
+
     public async Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListAppliedByUserAsync(Guid userId, Teammy.Application.Posts.Dtos.ExpandOptions expand, CancellationToken ct)
     {
         var q = db.recruitment_posts.AsNoTracking()

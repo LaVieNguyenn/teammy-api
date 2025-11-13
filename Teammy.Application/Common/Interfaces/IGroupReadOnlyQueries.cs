@@ -32,4 +32,7 @@ public interface IGroupReadOnlyQueries
     Task<(Guid MajorId, string MajorName)?> GetMajorAsync(Guid majorId, CancellationToken ct);
 
     Task<bool> GroupNameExistsAsync(Guid semesterId, string name, Guid? excludeGroupId, CancellationToken ct);
+
+    // Unified pending (join-requests, applications, invitations)
+    Task<IReadOnlyList<Teammy.Application.Groups.Dtos.GroupPendingItemDto>> GetUnifiedPendingAsync(Guid groupId, CancellationToken ct);
 }
