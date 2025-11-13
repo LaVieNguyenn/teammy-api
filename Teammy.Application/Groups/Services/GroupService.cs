@@ -15,6 +15,8 @@ public sealed class GroupService(
             throw new ArgumentException("Name is required");
         if (req.MaxMembers <= 0)
             throw new ArgumentException("MaxMembers must be > 0");
+        if (req.MaxMembers < 4 || req.MaxMembers > 6)
+            throw new ArgumentException("MaxMembers must be between 4 and 6");
 
         var semesterId = req.SemesterId ?? await queries.GetActiveSemesterIdAsync(ct)
             ?? throw new InvalidOperationException("No active semester and no semesterId provided");
@@ -159,10 +161,45 @@ public sealed class GroupService(
         if (req.MaxMembers.HasValue)
         {
             var (_, activeCount) = await queries.GetGroupCapacityAsync(groupId, ct);
+            if (req.MaxMembers.Value < 4 || req.MaxMembers.Value > 5)
+                throw new InvalidOperationException("MaxMembers must be between 4 and 5");
             if (req.MaxMembers.Value < activeCount)
                 throw new InvalidOperationException($"MaxMembers cannot be less than current active members ({activeCount})");
         }
 
+        // Only allow selecting a topic when the group is full
+        var setTopicAndActivate = false;
+        if (req.TopicId.HasValue)
+        {
+            var (maxMembers, activeCount) = await queries.GetGroupCapacityAsync(groupId, ct);
+            if (activeCount < maxMembers)
+                throw new InvalidOperationException("Group must be full to select a topic");
+            setTopicAndActivate = true;
+        }
+
         await repo.UpdateGroupAsync(groupId, req.Name, req.Description, req.MaxMembers, req.MajorId, req.TopicId, ct);
+
+        if (setTopicAndActivate)
+        {
+            // Set group to active and mark open posts as full
+            await repo.SetStatusAsync(groupId, "active", ct);
+            await postRepo.SetOpenPostsStatusForGroupAsync(groupId, "full", ct);
+        }
+    }
+
+    // Leader kicks a member or cancels a pending join-request
+    public async Task ForceRemoveMemberAsync(Guid groupId, Guid leaderUserId, Guid targetUserId, CancellationToken ct)
+    {
+        var isLeader = await queries.IsLeaderAsync(groupId, leaderUserId, ct);
+        if (!isLeader) throw new UnauthorizedAccessException("Leader only");
+        if (leaderUserId == targetUserId)
+            throw new InvalidOperationException("Cannot remove yourself. Use leave or transfer leadership");
+
+        var targetIsLeader = await queries.IsLeaderAsync(groupId, targetUserId, ct);
+        if (targetIsLeader)
+            throw new InvalidOperationException("Cannot remove leader. Transfer leadership first");
+
+        var ok = await repo.LeaveGroupAsync(groupId, targetUserId, ct);
+        if (!ok) throw new KeyNotFoundException("Member not found");
     }
 }

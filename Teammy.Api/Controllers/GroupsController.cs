@@ -333,6 +333,21 @@ public sealed class GroupsController : ControllerBase
     public ActionResult AssignRole([FromRoute] Guid id, [FromRoute] Guid userId)
         => StatusCode(501, "Not Implemented: internal member role not yet modeled");
 
+    // Leader removes a member or cancels a pending member
+    [HttpDelete("{id:guid}/members/{userId:guid}")]
+    [Authorize]
+    public async Task<ActionResult> ForceRemoveMember([FromRoute] Guid id, [FromRoute] Guid userId, CancellationToken ct)
+    {
+        try
+        {
+            await _service.ForceRemoveMemberAsync(id, GetUserId(), userId, ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
     // Unified pending list (leader-only)
     [HttpGet("{id:guid}/pending")]
     [Authorize]
