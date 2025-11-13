@@ -47,7 +47,8 @@ public sealed record RecruitmentPostSummaryDto(
     DateTime? ApplicationDeadline,
     bool HasApplied,
     Guid? MyApplicationId,
-    string? MyApplicationStatus
+    string? MyApplicationStatus,
+    int ApplicationsCount
 );
 
 public sealed record RecruitmentPostDetailDto(
@@ -71,7 +72,8 @@ public sealed record RecruitmentPostDetailDto(
     DateTime? ApplicationDeadline,
     bool HasApplied,
     Guid? MyApplicationId,
-    string? MyApplicationStatus
+    string? MyApplicationStatus,
+    int ApplicationsCount
 );
 
 public sealed record CreateApplicationRequest(string? Message);
