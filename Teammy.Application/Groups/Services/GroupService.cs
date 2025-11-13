@@ -161,8 +161,8 @@ public sealed class GroupService(
         if (req.MaxMembers.HasValue)
         {
             var (_, activeCount) = await queries.GetGroupCapacityAsync(groupId, ct);
-            if (req.MaxMembers.Value < 4 || req.MaxMembers.Value > 5)
-                throw new InvalidOperationException("MaxMembers must be between 4 and 5");
+            if (req.MaxMembers.Value < 4 || req.MaxMembers.Value > 6)
+                throw new InvalidOperationException("MaxMembers must be between 4 and 6");
             if (req.MaxMembers.Value < activeCount)
                 throw new InvalidOperationException($"MaxMembers cannot be less than current active members ({activeCount})");
         }
