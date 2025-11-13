@@ -63,13 +63,13 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
         var shaped = new List<object>(items.Count);
         foreach (var d in items)
         {
-            Guid[]? memberUserIds = null;
-            Guid? leaderUserId = null;
+            IReadOnlyList<Teammy.Application.Groups.Dtos.GroupMemberDto>? membersDetail = null;
+            Teammy.Application.Groups.Dtos.GroupMemberDto? leaderDetail = null;
             if (d.GroupId is Guid gid)
             {
                 var members = await _groupQueries.ListActiveMembersAsync(gid, ct);
-                memberUserIds = members.Select(m => m.UserId).ToArray();
-                leaderUserId = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase))?.UserId;
+                leaderDetail = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase));
+                membersDetail = members.Where(m => !string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase)).ToList();
             }
 
             shaped.Add(new
@@ -83,6 +83,7 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
                 createdAt = d.CreatedAt,
                 applicationDeadline = d.ApplicationDeadline,
                 currentMembers = d.CurrentMembers,
+                applicationsCount = d.ApplicationsCount,
                 hasApplied = d.HasApplied,
                 myApplicationId = d.MyApplicationId,
                 myApplicationStatus = d.MyApplicationStatus,
@@ -96,8 +97,8 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
                     d.Group.MaxMembers,
                     d.Group.MajorId,
                     d.Group.TopicId,
-                    memberUserIds,
-                    leader_user_id = leaderUserId
+                    leader = leaderDetail,
+                    members = membersDetail
                 },
                 major = d.Major
             });
@@ -146,6 +147,7 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
                 createdAt = d.CreatedAt,
                 applicationDeadline = d.ApplicationDeadline,
                 currentMembers = d.CurrentMembers,
+                applicationsCount = d.ApplicationsCount,
                 hasApplied = d.HasApplied,
                 myApplicationId = d.MyApplicationId,
                 myApplicationStatus = d.MyApplicationStatus,
@@ -187,13 +189,13 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
         if (!objectOnly) return Ok(d);
 
         // Enrich group with member userIds
-        Guid[]? memberUserIds = null;
-        Guid? leaderUserId = null;
+        IReadOnlyList<Teammy.Application.Groups.Dtos.GroupMemberDto>? membersDetail2 = null;
+        Teammy.Application.Groups.Dtos.GroupMemberDto? leaderDetail2 = null;
         if (d.GroupId is Guid gid)
         {
             var members = await _groupQueries.ListActiveMembersAsync(gid, ct);
-            memberUserIds = members.Select(m => m.UserId).ToArray();
-            leaderUserId = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase))?.UserId;
+            leaderDetail2 = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase));
+            membersDetail2 = members.Where(m => !string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase)).ToList();
         }
 
         return Ok(new
@@ -207,6 +209,7 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
             createdAt = d.CreatedAt,
             applicationDeadline = d.ApplicationDeadline,
             currentMembers = d.CurrentMembers,
+            applicationsCount = d.ApplicationsCount,
             hasApplied = d.HasApplied,
             myApplicationId = d.MyApplicationId,
             myApplicationStatus = d.MyApplicationStatus,
@@ -220,8 +223,8 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
                 d.Group.MaxMembers,
                 d.Group.MajorId,
                 d.Group.TopicId,
-                memberUserIds,
-                leader_user_id = leaderUserId
+                leader = leaderDetail2,
+                members = membersDetail2
             },
             major = d.Major
         });

@@ -61,6 +61,7 @@ public static class DependencyInjection
 
         // Majors
         services.AddScoped<IMajorReadOnlyQueries, MajorReadOnlyQueries>();
+        services.AddScoped<IMajorWriteRepository, MajorWriteRepository>();
 
         // Semesters
         services.AddScoped<ISemesterWriteRepository, SemesterWriteRepository>();

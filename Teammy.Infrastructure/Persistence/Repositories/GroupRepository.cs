@@ -68,6 +68,32 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
         db.group_members.Remove(m);
         await db.SaveChangesAsync(ct);
 
+        // Cleanup user-related applications and invitations for this group's posts
+        var postIds = await db.recruitment_posts.AsNoTracking()
+            .Where(p => p.group_id == groupId)
+            .Select(p => p.post_id)
+            .ToListAsync(ct);
+        if (postIds.Count > 0)
+        {
+            var userCands = await db.candidates
+                .Where(c => postIds.Contains(c.post_id) && (c.applicant_user_id == userId || c.applied_by_user_id == userId))
+                .ToListAsync(ct);
+            if (userCands.Count > 0)
+            {
+                db.candidates.RemoveRange(userCands);
+                await db.SaveChangesAsync(ct);
+            }
+
+            var userInvs = await db.invitations
+                .Where(i => postIds.Contains(i.post_id) && i.invitee_user_id == userId)
+                .ToListAsync(ct);
+            if (userInvs.Count > 0)
+            {
+                db.invitations.RemoveRange(userInvs);
+                await db.SaveChangesAsync(ct);
+            }
+        }
+
         var remaining = await db.group_members.AsNoTracking().CountAsync(x => x.group_id == groupId, ct);
         if (remaining == 0)
         {
@@ -152,6 +178,15 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
         if (topicId.HasValue) g.topic_id = topicId;
         g.updated_at = DateTime.UtcNow;
 
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task SetStatusAsync(Guid groupId, string newStatus, CancellationToken ct)
+    {
+        var g = await db.groups.FirstOrDefaultAsync(x => x.group_id == groupId, ct)
+            ?? throw new KeyNotFoundException("Group not found");
+        g.status = newStatus;
+        g.updated_at = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
     }
 }
