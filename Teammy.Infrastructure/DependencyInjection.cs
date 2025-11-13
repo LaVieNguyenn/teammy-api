@@ -2,10 +2,14 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Teammy.Application.Common.Interfaces;
+using Teammy.Application.Files;
+using Teammy.Application.Kanban.Interfaces;
+using Teammy.Application.Kanban.Services;
 using Teammy.Application.Topics.Services;
 using Teammy.Infrastructure.Auth;
 using Teammy.Infrastructure.Email;
 using Teammy.Infrastructure.Excel;
+using Teammy.Infrastructure.Files;
 using Teammy.Infrastructure.Persistence;
 using Teammy.Infrastructure.Persistence.Repositories;
 
@@ -61,6 +65,13 @@ public static class DependencyInjection
 
         // Semesters
         services.AddScoped<ISemesterWriteRepository, SemesterWriteRepository>();
+
+        // Kanban
+        services.AddScoped<IKanbanReadOnlyQueries, KanbanReadOnlyQueries>();
+        services.AddScoped<IKanbanRepository, KanbanRepository>();
+        services.AddScoped<IGroupAccessQueries, GroupAccessQueries>();
+        services.AddScoped<IFileStorage, GoogleDriveStorage>(); 
+        services.AddScoped<KanbanService>();
 
         return services;
     }

@@ -7,8 +7,6 @@ public partial class invitation
 {
     public Guid invitation_id { get; set; }
 
-    public Guid post_id { get; set; }
-
     public Guid invitee_user_id { get; set; }
 
     public Guid invited_by { get; set; }
@@ -23,9 +21,11 @@ public partial class invitation
 
     public DateTime? expires_at { get; set; }
 
+    public Guid group_id { get; set; }
+
+    public virtual group group { get; set; } = null!;
+
     public virtual user invited_byNavigation { get; set; } = null!;
 
     public virtual user invitee_user { get; set; } = null!;
-
-    public virtual recruitment_post post { get; set; } = null!;
 }

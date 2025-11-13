@@ -7,7 +7,7 @@ public partial class semester
 {
     public Guid semester_id { get; set; }
 
-    public string? season { get; set; }
+    public string season { get; set; } = null!;
 
     public int? year { get; set; }
 
