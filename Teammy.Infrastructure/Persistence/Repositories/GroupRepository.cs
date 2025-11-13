@@ -83,15 +83,16 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
                 db.candidates.RemoveRange(userCands);
                 await db.SaveChangesAsync(ct);
             }
+        }
 
-            var userInvs = await db.invitations
-                .Where(i => postIds.Contains(i.post_id) && i.invitee_user_id == userId)
-                .ToListAsync(ct);
-            if (userInvs.Count > 0)
-            {
-                db.invitations.RemoveRange(userInvs);
-                await db.SaveChangesAsync(ct);
-            }
+        // Invitations are now group-based; clean by group_id
+        var userInvs = await db.invitations
+            .Where(i => i.group_id == groupId && i.invitee_user_id == userId)
+            .ToListAsync(ct);
+        if (userInvs.Any())
+        {
+            db.invitations.RemoveRange(userInvs);
+            await db.SaveChangesAsync(ct);
         }
 
         var remaining = await db.group_members.AsNoTracking().CountAsync(x => x.group_id == groupId, ct);

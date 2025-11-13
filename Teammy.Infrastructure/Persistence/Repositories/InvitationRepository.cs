@@ -7,12 +7,12 @@ namespace Teammy.Infrastructure.Persistence.Repositories;
 
 public sealed class InvitationRepository(AppDbContext db) : IInvitationRepository
 {
-    public async Task<Guid> CreateAsync(Guid postId, Guid inviteeUserId, Guid invitedBy, string? message, DateTime? expiresAt, CancellationToken ct)
+    public async Task<Guid> CreateAsync(Guid groupId, Guid inviteeUserId, Guid invitedBy, string? message, DateTime? expiresAt, CancellationToken ct)
     {
         var inv = new invitation
         {
             invitation_id = Guid.NewGuid(),
-            post_id = postId,
+            group_id = groupId,
             invitee_user_id = inviteeUserId,
             invited_by = invitedBy,
             status = "pending",
@@ -33,4 +33,3 @@ public sealed class InvitationRepository(AppDbContext db) : IInvitationRepositor
         await db.SaveChangesAsync(ct);
     }
 }
-

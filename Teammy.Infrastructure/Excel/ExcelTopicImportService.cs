@@ -35,6 +35,8 @@ public sealed class ExcelTopicImportService(
 
         using var ms = new MemoryStream();
         wb.SaveAs(ms);
+        // ensure method remains async-friendly
+        await Task.CompletedTask;
         return ms.ToArray();
     }
 
