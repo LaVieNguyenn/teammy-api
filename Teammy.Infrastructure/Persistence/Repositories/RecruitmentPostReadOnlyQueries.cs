@@ -55,7 +55,8 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                     ? db.candidates.Where(c => c.post_id == x.p.post_id && c.applicant_user_id == currentUserId.Value)
                         .Select(c => c.status)
                         .FirstOrDefault()
-                    : null
+                    : null,
+                db.candidates.Count(c => c.post_id == x.p.post_id)
             ))
             .FirstOrDefaultAsync(ct);
 
@@ -114,7 +115,8 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                     ? db.candidates.Where(c => c.post_id == x.p.post_id && c.applicant_user_id == currentUserId.Value)
                         .Select(c => c.status)
                         .FirstOrDefault()
-                    : null
+                    : null,
+                db.candidates.Count(c => c.post_id == x.p.post_id)
             ))
             .ToListAsync(ct);
     }
@@ -205,7 +207,8 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                 db.candidates.Where(c => c.post_id == x.p.post_id && c.applicant_user_id == userId)
                     .Select(c => (Guid?)c.candidate_id).FirstOrDefault(),
                 db.candidates.Where(c => c.post_id == x.p.post_id && c.applicant_user_id == userId)
-                    .Select(c => c.status).FirstOrDefault()
+                    .Select(c => c.status).FirstOrDefault(),
+                db.candidates.Count(c => c.post_id == x.p.post_id)
             ))
             .ToListAsync(ct);
     }
