@@ -37,6 +37,8 @@ public partial class group
 
     public virtual group_member? group_member { get; set; }
 
+    public virtual ICollection<invitation> invitations { get; set; } = new List<invitation>();
+
     public virtual major? major { get; set; }
 
     public virtual user? mentor { get; set; }
