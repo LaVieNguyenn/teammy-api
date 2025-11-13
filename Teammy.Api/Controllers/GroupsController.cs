@@ -7,6 +7,7 @@ using Teammy.Application.Invitations.Services;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Posts.Dtos;
 using Teammy.Application.Posts.Services;
+using Teammy.Application.Common.Interfaces;
 
 namespace Teammy.Api.Controllers;
 
@@ -18,12 +19,14 @@ public sealed class GroupsController : ControllerBase
     private readonly InvitationService _invitations;
     private readonly IGroupReadOnlyQueries _groupQueries;
     private readonly RecruitmentPostService _postService;
-    public GroupsController(GroupService service, InvitationService invitations, IGroupReadOnlyQueries groupQueries, RecruitmentPostService postService)
+    private readonly ITopicReadOnlyQueries _topics;
+    public GroupsController(GroupService service, InvitationService invitations, IGroupReadOnlyQueries groupQueries, RecruitmentPostService postService, ITopicReadOnlyQueries topics)
     {
         _service = service;
         _invitations = invitations;
         _groupQueries = groupQueries;
         _postService = postService;
+        _topics = topics;
     }
 
     private Guid GetUserId()
@@ -91,6 +94,15 @@ public sealed class GroupsController : ControllerBase
             }
         }
 
+        // Topic info (topicId + topicName)
+        Guid? topicId = g.TopicId;
+        string? topicName = null;
+        if (topicId.HasValue)
+        {
+            var t = await _topics.GetByIdAsync(topicId.Value, ct);
+            topicName = t?.Title;
+        }
+
         return Ok(new
         {
             id = g.Id,
@@ -101,6 +113,8 @@ public sealed class GroupsController : ControllerBase
             currentMembers = g.CurrentMembers,
             semester = semesterObj,
             major = majorObj,
+            topicId,
+            topicName,
             leader = leaderMember,
             members = nonLeaderMembers // exclude leader
         });
