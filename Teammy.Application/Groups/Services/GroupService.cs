@@ -48,7 +48,6 @@ public sealed class GroupService(
         if (hasActive)
             throw new InvalidOperationException("User already has active/pending membership in this semester");
 
-        // Guard: if user already has a pending application to this group via any post -> conflict
         var pendingApp = await postReadQueries.FindPendingApplicationInGroupAsync(groupId, userId, ct);
         if (pendingApp.HasValue)
         {
@@ -61,6 +60,14 @@ public sealed class GroupService(
 
     public async Task LeaveGroupAsync(Guid groupId, Guid userId, CancellationToken ct)
     {
+        var isLeader = await queries.IsLeaderAsync(groupId, userId, ct);
+        if (isLeader)
+        {
+            var (_, activeCount) = await queries.GetGroupCapacityAsync(groupId, ct); 
+            if (activeCount > 1)
+                throw new InvalidOperationException("Change Leaderfirst");
+        }
+
         var ok = await repo.LeaveGroupAsync(groupId, userId, ct);
         if (!ok)
             throw new InvalidOperationException("Not a member of this group");
