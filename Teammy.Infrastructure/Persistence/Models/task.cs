@@ -25,6 +25,8 @@ public partial class task
 
     public DateTime updated_at { get; set; }
 
+    public decimal sort_order { get; set; }
+
     public virtual column column { get; set; } = null!;
 
     public virtual ICollection<comment> comments { get; set; } = new List<comment>();

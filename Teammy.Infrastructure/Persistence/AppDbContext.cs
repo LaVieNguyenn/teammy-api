@@ -73,8 +73,10 @@ public partial class AppDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder
+            .HasPostgresEnum("teammy", "season_enum", new[] { "SPRING", "SUMMER", "FALL" })
             .HasPostgresExtension("citext")
-            .HasPostgresExtension("pgcrypto");
+            .HasPostgresExtension("pgcrypto")
+            .HasPostgresExtension("unaccent");
 
         modelBuilder.Entity<announcement>(entity =>
         {
@@ -293,11 +295,13 @@ public partial class AppDbContext : DbContext
 
             entity.ToTable("invitations", "teammy");
 
-            entity.HasIndex(e => new { e.post_id, e.invitee_user_id }, "ux_invite_active").IsUnique();
-
             entity.Property(e => e.invitation_id).HasDefaultValueSql("gen_random_uuid()");
             entity.Property(e => e.created_at).HasDefaultValueSql("now()");
             entity.Property(e => e.status).HasDefaultValueSql("'pending'::text");
+
+            entity.HasOne(d => d.group).WithMany(p => p.invitations)
+                .HasForeignKey(d => d.group_id)
+                .HasConstraintName("fk_invitations_group");
 
             entity.HasOne(d => d.invited_byNavigation).WithMany(p => p.invitationinvited_byNavigations)
                 .HasForeignKey(d => d.invited_by)
@@ -307,10 +311,6 @@ public partial class AppDbContext : DbContext
             entity.HasOne(d => d.invitee_user).WithMany(p => p.invitationinvitee_users)
                 .HasForeignKey(d => d.invitee_user_id)
                 .HasConstraintName("invitations_invitee_user_id_fkey");
-
-            entity.HasOne(d => d.post).WithMany(p => p.invitations)
-                .HasForeignKey(d => d.post_id)
-                .HasConstraintName("invitations_post_id_fkey");
         });
 
         modelBuilder.Entity<major>(entity =>
@@ -385,6 +385,7 @@ public partial class AppDbContext : DbContext
             entity.Property(e => e.required_skills).HasColumnType("jsonb");
             entity.Property(e => e.status).HasDefaultValueSql("'open'::text");
             entity.Property(e => e.updated_at).HasDefaultValueSql("now()");
+
             entity.HasOne(d => d.group).WithMany(p => p.recruitment_posts)
                 .HasForeignKey(d => d.group_id)
                 .OnDelete(DeleteBehavior.Cascade)
@@ -422,6 +423,8 @@ public partial class AppDbContext : DbContext
             entity.HasKey(e => e.semester_id).HasName("semesters_pkey");
 
             entity.ToTable("semesters", "teammy");
+
+            entity.HasIndex(e => new { e.season, e.year }, "uq_semesters_season_year").IsUnique();
 
             entity.Property(e => e.semester_id).HasDefaultValueSql("gen_random_uuid()");
             entity.Property(e => e.is_active).HasDefaultValue(false);
@@ -497,8 +500,11 @@ public partial class AppDbContext : DbContext
 
             entity.ToTable("tasks", "teammy");
 
+            entity.HasIndex(e => new { e.column_id, e.sort_order }, "idx_tasks_column_sort");
+
             entity.Property(e => e.task_id).HasDefaultValueSql("gen_random_uuid()");
             entity.Property(e => e.created_at).HasDefaultValueSql("now()");
+            entity.Property(e => e.sort_order).HasPrecision(20, 6);
             entity.Property(e => e.updated_at).HasDefaultValueSql("now()");
 
             entity.HasOne(d => d.column).WithMany(p => p.tasks)
