@@ -13,4 +13,8 @@ public sealed class GroupAccessQueries(AppDbContext db) : IGroupAccessQueries
     public Task<bool> IsLeaderAsync(Guid groupId, Guid userId, CancellationToken ct)
         => db.group_members.AsNoTracking()
            .AnyAsync(m => m.group_id == groupId && m.user_id == userId && m.status == "leader", ct);
+
+    public Task<bool> IsGroupActiveAsync(Guid groupId, CancellationToken ct)
+        => db.groups.AsNoTracking()
+           .AnyAsync(g => g.group_id == groupId && g.status == "active", ct);
 }

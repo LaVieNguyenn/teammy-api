@@ -16,8 +16,9 @@ public sealed class KanbanService(
     {
         if (!await access.IsMemberAsync(groupId, currentUserId, ct))
             throw new UnauthorizedAccessException("Not a group member");
-
-        await repo.EnsureBoardForGroupAsync(groupId, ct); // seed nếu thiếu
+        if( !await access.IsGroupActiveAsync(groupId, ct))
+            throw new InvalidOperationException("Group is not active");
+        await repo.EnsureBoardForGroupAsync(groupId, ct); 
         var vm = await read.GetBoardAsync(groupId, ct);
         return vm ?? throw new KeyNotFoundException("Board not found");
     }
