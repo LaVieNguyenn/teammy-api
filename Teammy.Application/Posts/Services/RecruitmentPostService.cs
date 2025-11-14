@@ -56,12 +56,6 @@ public sealed class RecruitmentPostService(
         var hasActive = await groupQueries.HasActiveMembershipInSemesterAsync(userId, owner.SemesterId, ct);
         if (hasActive) throw new InvalidOperationException("User already has active/pending membership in this semester");
 
-        // Guard: if user has a pending join-request to this group, block apply to avoid dual pending
-        var pendings = await groupQueries.GetPendingJoinRequestsAsync(owner.GroupId.Value, ct);
-        var existingJoin = pendings.FirstOrDefault(x => x.UserId == userId);
-        if (existingJoin is not null)
-            throw new InvalidOperationException($"already_join_requested:{existingJoin.RequestId}");
-
         // If an application exists for this post+user: handle by status
         var existingApp = await queries.FindApplicationByPostAndUserAsync(postId, userId, ct);
         if (existingApp.HasValue)
@@ -86,6 +80,9 @@ public sealed class RecruitmentPostService(
     public Task UpdateAsync(Guid postId, Guid currentUserId, UpdateRecruitmentPostRequest req, CancellationToken ct)
         => EnsureOwner(postId, currentUserId, ct, () => repo.UpdatePostAsync(postId, req.Title, req.Description, req.Skills, req.Status, ct));
 
+    public Task DeleteAsync(Guid postId, Guid currentUserId, CancellationToken ct)
+        => EnsureOwner(postId, currentUserId, ct, () => repo.DeletePostAsync(postId, ct));
+
     public async Task AcceptAsync(Guid postId, Guid appId, Guid currentUserId, CancellationToken ct)
     {
         var owner = await EnsureOwnerAndGet(postId, currentUserId, ct);
@@ -99,13 +96,7 @@ public sealed class RecruitmentPostService(
         var hasActive = await groupQueries.HasActiveMembershipInSemesterAsync(app.ApplicantUserId.Value, owner.SemesterId, ct);
         if (hasActive) throw new InvalidOperationException("User already has active/pending membership in this semester");
 
-        // If there's a pending join-request for this user->group, promote it to member; else add new membership
-        var pendings = await groupQueries.GetPendingJoinRequestsAsync(owner.GroupId.Value, ct);
-        var existingJoin = pendings.FirstOrDefault(x => x.UserId == app.ApplicantUserId.Value);
-        if (existingJoin is not null)
-            await groupRepo.UpdateMembershipStatusAsync(existingJoin.RequestId, "member", ct);
-        else
-            await groupRepo.AddMembershipAsync(owner.GroupId.Value, app.ApplicantUserId.Value, owner.SemesterId, "member", ct);
+        await groupRepo.AddMembershipAsync(owner.GroupId.Value, app.ApplicantUserId.Value, owner.SemesterId, "member", ct);
         await repo.UpdateApplicationStatusAsync(appId, "accepted", ct);
 
         // Cleanup duplicates: reject other pending applications by this user to the same group

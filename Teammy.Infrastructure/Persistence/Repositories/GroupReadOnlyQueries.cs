@@ -58,18 +58,6 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
             .FirstOrDefaultAsync(ct);
     }
 
-    public async Task<IReadOnlyList<JoinRequestDto>> GetPendingJoinRequestsAsync(Guid groupId, CancellationToken ct)
-    {
-        var q =
-            from m in db.group_members.AsNoTracking()
-            join u in db.users.AsNoTracking() on m.user_id equals u.user_id
-            where m.group_id == groupId && m.status == "pending"
-            orderby m.joined_at
-            select new JoinRequestDto(m.group_member_id, u.user_id, u.email!, u.display_name!, m.joined_at);
-
-        return await q.ToListAsync(ct);
-    }
-
     public Task<bool> IsLeaderAsync(Guid groupId, Guid userId, CancellationToken ct)
         => db.group_members.AsNoTracking().AnyAsync(x => x.group_id == groupId && x.user_id == userId && x.status == "leader", ct);
 
@@ -175,24 +163,6 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
 
     public async Task<IReadOnlyList<Teammy.Application.Groups.Dtos.GroupPendingItemDto>> GetUnifiedPendingAsync(Guid groupId, CancellationToken ct)
     {
-        // join-requests (group_members pending)
-        var joins = await (
-            from m in db.group_members.AsNoTracking()
-            join u in db.users.AsNoTracking() on m.user_id equals u.user_id
-            where m.group_id == groupId && m.status == "pending"
-            select new Teammy.Application.Groups.Dtos.GroupPendingItemDto(
-                "join_request",
-                m.group_member_id,
-                null,
-                u.user_id,
-                u.email!,
-                u.display_name!,
-                u.avatar_url,
-                m.joined_at,
-                null)
-        ).ToListAsync(ct);
-
-        // applications (candidates pending → group via post)
         var apps = await (
             from c in db.candidates.AsNoTracking()
             join p in db.recruitment_posts.AsNoTracking() on c.post_id equals p.post_id
@@ -211,7 +181,6 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
                 c.message)
         ).ToListAsync(ct);
 
-        // invitations (pending → group via post)
         var invs = await (
             from i in db.invitations.AsNoTracking()
             join u in db.users.AsNoTracking() on i.invitee_user_id equals u.user_id into uu
@@ -230,11 +199,9 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
                 i.message)
         ).ToListAsync(ct);
 
-        var merged = joins
-            .Concat(apps)
+        return apps
             .Concat(invs)
             .OrderByDescending(x => x.CreatedAt)
             .ToList();
-        return merged;
     }
 }

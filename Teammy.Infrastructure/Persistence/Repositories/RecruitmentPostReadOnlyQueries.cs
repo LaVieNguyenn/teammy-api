@@ -18,6 +18,10 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
             .SelectMany(x => x.grps.DefaultIfEmpty(), (x, g) => new { x.ps.p, x.ps.s, g })
             .GroupJoin(db.majors.AsNoTracking(), t => t.p.major_id, m => m.major_id, (t, ms) => new { t.p, t.s, t.g, ms })
             .SelectMany(x => x.ms.DefaultIfEmpty(), (x, m) => new { x.p, x.s, x.g, m })
+            .GroupJoin(db.majors.AsNoTracking(), t => t.g != null ? (Guid?)t.g.major_id : null, gm => (Guid?)gm.major_id, (t, gms) => new { t.p, t.s, t.g, t.m, gms })
+            .SelectMany(x => x.gms.DefaultIfEmpty(), (x, gm) => new { x.p, x.s, x.g, x.m, gm })
+            .GroupJoin(db.topics.AsNoTracking(), t => t.g != null ? (Guid?)t.g.topic_id : null, tp => (Guid?)tp.topic_id, (t, tps) => new { t.p, t.s, t.g, t.m, t.gm, tps })
+            .SelectMany(x => x.tps.DefaultIfEmpty(), (x, topic) => new { x.p, x.s, x.g, x.m, x.gm, topic })
             .Select(x => new RecruitmentPostDetailDto(
                 x.p.post_id,
                 x.p.semester_id,
@@ -31,7 +35,28 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                 x.p.group_id,
                 x.g != null ? x.g.name : null,
                 (expand & Teammy.Application.Posts.Dtos.ExpandOptions.Group) != 0 && x.g != null
-                    ? new PostGroupDto(x.g.group_id, x.g.name, x.g.description, x.g.status, x.g.max_members, x.g.major_id, x.g.topic_id)
+                    ? new PostGroupDto(
+                        x.g.group_id,
+                        x.g.semester_id,
+                        x.g.mentor_id,
+                        x.g.name,
+                        x.g.description,
+                        x.g.status,
+                        x.g.max_members,
+                        x.g.major_id,
+                        x.g.topic_id,
+                        x.g.created_at,
+                        x.g.updated_at,
+                        x.gm != null ? new PostMajorDto(x.gm.major_id, x.gm.major_name) : null,
+                        x.topic != null ? new PostTopicDto(
+                            x.topic.topic_id,
+                            x.topic.semester_id,
+                            x.topic.major_id,
+                            x.topic.title,
+                            x.topic.description,
+                            x.topic.status,
+                            x.topic.created_by,
+                            x.topic.created_at) : null)
                     : null,
                 x.p.major_id,
                 x.m != null ? x.m.major_name : null,
@@ -78,6 +103,10 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
             .SelectMany(x => x.grps.DefaultIfEmpty(), (x, g) => new { x.ps.p, x.ps.s, g })
             .GroupJoin(db.majors.AsNoTracking(), t => t.p.major_id, m => m.major_id, (t, ms) => new { t.p, t.s, t.g, ms })
             .SelectMany(x => x.ms.DefaultIfEmpty(), (x, m) => new { x.p, x.s, x.g, m })
+            .GroupJoin(db.majors.AsNoTracking(), t => t.g != null ? (Guid?)t.g.major_id : null, gm => (Guid?)gm.major_id, (t, gms) => new { t.p, t.s, t.g, t.m, gms })
+            .SelectMany(x => x.gms.DefaultIfEmpty(), (x, gm) => new { x.p, x.s, x.g, x.m, gm })
+            .GroupJoin(db.topics.AsNoTracking(), t => t.g != null ? (Guid?)t.g.topic_id : null, tp => (Guid?)tp.topic_id, (t, tps) => new { t.p, t.s, t.g, t.m, t.gm, tps })
+            .SelectMany(x => x.tps.DefaultIfEmpty(), (x, topic) => new { x.p, x.s, x.g, x.m, x.gm, topic })
             .Select(x => new RecruitmentPostSummaryDto(
                 x.p.post_id,
                 x.p.semester_id,
@@ -91,7 +120,28 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                 x.p.group_id,
                 x.g != null ? x.g.name : null,
                 (expand & Teammy.Application.Posts.Dtos.ExpandOptions.Group) != 0 && x.g != null
-                    ? new PostGroupDto(x.g.group_id, x.g.name, x.g.description, x.g.status, x.g.max_members, x.g.major_id, x.g.topic_id)
+                    ? new PostGroupDto(
+                        x.g.group_id,
+                        x.g.semester_id,
+                        x.g.mentor_id,
+                        x.g.name,
+                        x.g.description,
+                        x.g.status,
+                        x.g.max_members,
+                        x.g.major_id,
+                        x.g.topic_id,
+                        x.g.created_at,
+                        x.g.updated_at,
+                        x.gm != null ? new PostMajorDto(x.gm.major_id, x.gm.major_name) : null,
+                        x.topic != null ? new PostTopicDto(
+                            x.topic.topic_id,
+                            x.topic.semester_id,
+                            x.topic.major_id,
+                            x.topic.title,
+                            x.topic.description,
+                            x.topic.status,
+                            x.topic.created_by,
+                            x.topic.created_at) : null)
                     : null,
                 x.p.major_id,
                 x.m != null ? x.m.major_name : null,
@@ -176,6 +226,10 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
             .SelectMany(x => x.grps.DefaultIfEmpty(), (x, g) => new { x.ps.p, x.ps.s, g })
             .GroupJoin(db.majors.AsNoTracking(), t => t.p.major_id, m => m.major_id, (t, ms) => new { t.p, t.s, t.g, ms })
             .SelectMany(x => x.ms.DefaultIfEmpty(), (x, m) => new { x.p, x.s, x.g, m })
+            .GroupJoin(db.majors.AsNoTracking(), t => t.g != null ? (Guid?)t.g.major_id : null, gm => (Guid?)gm.major_id, (t, gms) => new { t.p, t.s, t.g, t.m, gms })
+            .SelectMany(x => x.gms.DefaultIfEmpty(), (x, gm) => new { x.p, x.s, x.g, x.m, gm })
+            .GroupJoin(db.topics.AsNoTracking(), t => t.g != null ? (Guid?)t.g.topic_id : null, tp => (Guid?)tp.topic_id, (t, tps) => new { t.p, t.s, t.g, t.m, t.gm, tps })
+            .SelectMany(x => x.tps.DefaultIfEmpty(), (x, topic) => new { x.p, x.s, x.g, x.m, x.gm, topic })
             .Select(x => new RecruitmentPostSummaryDto(
                 x.p.post_id,
                 x.p.semester_id,
@@ -189,7 +243,28 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                 x.p.group_id,
                 x.g != null ? x.g.name : null,
                 (expand & Teammy.Application.Posts.Dtos.ExpandOptions.Group) != 0 && x.g != null
-                    ? new PostGroupDto(x.g.group_id, x.g.name, x.g.description, x.g.status, x.g.max_members, x.g.major_id, x.g.topic_id)
+                    ? new PostGroupDto(
+                        x.g.group_id,
+                        x.g.semester_id,
+                        x.g.mentor_id,
+                        x.g.name,
+                        x.g.description,
+                        x.g.status,
+                        x.g.max_members,
+                        x.g.major_id,
+                        x.g.topic_id,
+                        x.g.created_at,
+                        x.g.updated_at,
+                        x.gm != null ? new PostMajorDto(x.gm.major_id, x.gm.major_name) : null,
+                        x.topic != null ? new PostTopicDto(
+                            x.topic.topic_id,
+                            x.topic.semester_id,
+                            x.topic.major_id,
+                            x.topic.title,
+                            x.topic.description,
+                            x.topic.status,
+                            x.topic.created_by,
+                            x.topic.created_at) : null)
                     : null,
                 x.p.major_id,
                 x.m != null ? x.m.major_name : null,
