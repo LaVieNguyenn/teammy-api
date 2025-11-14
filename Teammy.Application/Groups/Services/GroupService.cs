@@ -6,8 +6,7 @@ namespace Teammy.Application.Groups.Services;
 public sealed class GroupService(
     IGroupRepository repo,
     IGroupReadOnlyQueries queries,
-    IRecruitmentPostRepository postRepo,
-    IRecruitmentPostReadOnlyQueries postReadQueries)
+    IRecruitmentPostRepository postRepo)
 {
     public async Task<Guid> CreateGroupAsync(Guid creatorUserId, CreateGroupRequest req, CancellationToken ct)
     {
@@ -36,30 +35,12 @@ public sealed class GroupService(
     public Task<GroupDetailDto?> GetGroupAsync(Guid id, CancellationToken ct)
         => queries.GetGroupAsync(id, ct);
 
-    public async Task ApplyToGroupAsync(Guid groupId, Guid userId, CancellationToken ct)
-    {
-        var (maxMembers, activeCount) = await queries.GetGroupCapacityAsync(groupId, ct);
-        if (activeCount >= maxMembers)
-            throw new InvalidOperationException("Group is full");
-
-        var detail = await queries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
-
-        var hasActive = await queries.HasActiveMembershipInSemesterAsync(userId, detail.SemesterId, ct);
-        if (hasActive)
-            throw new InvalidOperationException("User already has active/pending membership in this semester");
-
-        var pendingApp = await postReadQueries.FindPendingApplicationInGroupAsync(groupId, userId, ct);
-        if (pendingApp.HasValue)
-        {
-            var (appId, postId) = pendingApp.Value;
-            throw new InvalidOperationException($"already_applied:{appId}:{postId}");
-        }
-
-        await repo.AddMembershipAsync(groupId, userId, detail.SemesterId, "pending", ct);
-    }
-
     public async Task LeaveGroupAsync(Guid groupId, Guid userId, CancellationToken ct)
     {
+        var detail = await queries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
+        if (string.Equals(detail.Status, "active", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Cannot leave an active group");
+
         var isLeader = await queries.IsLeaderAsync(groupId, userId, ct);
         if (isLeader)
         {
@@ -73,45 +54,6 @@ public sealed class GroupService(
             throw new InvalidOperationException("Not a member of this group");
     }
 
-    public async Task<IReadOnlyList<JoinRequestDto>> ListJoinRequestsAsync(Guid groupId, Guid currentUserId, CancellationToken ct)
-    {
-        var isLeader = await queries.IsLeaderAsync(groupId, currentUserId, ct);
-        if (!isLeader) throw new UnauthorizedAccessException("Leader only");
-        return await queries.GetPendingJoinRequestsAsync(groupId, ct);
-    }
-
-    public async Task AcceptJoinRequestAsync(Guid groupId, Guid reqId, Guid currentUserId, CancellationToken ct)
-    {
-        var isLeader = await queries.IsLeaderAsync(groupId, currentUserId, ct);
-        if (!isLeader) throw new UnauthorizedAccessException("Leader only");
-
-        var (maxMembers, activeCount) = await queries.GetGroupCapacityAsync(groupId, ct);
-        if (activeCount >= maxMembers)
-            throw new InvalidOperationException("Group is full");
-
-        // Find requester userId from pending list
-        var pendings = await queries.GetPendingJoinRequestsAsync(groupId, ct);
-        var req = pendings.FirstOrDefault(x => x.RequestId == reqId) ?? throw new KeyNotFoundException("Join request not found");
-
-        await repo.UpdateMembershipStatusAsync(reqId, "member", ct);
-
-        // Cleanup duplicate applications for this user to the same group
-        await postRepo.RejectPendingApplicationsForUserInGroupAsync(groupId, req.UserId, ct);
-
-        // If group now full, set open posts to full
-        var (_, newActiveCount) = await queries.GetGroupCapacityAsync(groupId, ct);
-        if (newActiveCount >= maxMembers)
-        {
-            await postRepo.SetOpenPostsStatusForGroupAsync(groupId, "full", ct);
-        }
-    }
-
-    public async Task RejectJoinRequestAsync(Guid groupId, Guid reqId, Guid currentUserId, CancellationToken ct)
-    {
-        var isLeader = await queries.IsLeaderAsync(groupId, currentUserId, ct);
-        if (!isLeader) throw new UnauthorizedAccessException("Leader only");
-        await repo.DeleteMembershipAsync(reqId, ct);
-    }
 
     public async Task InviteUserAsync(Guid groupId, Guid inviteeUserId, Guid currentUserId, CancellationToken ct)
     {
@@ -188,13 +130,13 @@ public sealed class GroupService(
 
         if (setTopicAndActivate)
         {
-            // Set group to active and mark open posts as full
+            // Set group to active and close all open recruitment posts
             await repo.SetStatusAsync(groupId, "active", ct);
-            await postRepo.SetOpenPostsStatusForGroupAsync(groupId, "full", ct);
+            await postRepo.CloseAllOpenPostsForGroupAsync(groupId, ct);
         }
     }
 
-    // Leader kicks a member or cancels a pending join-request
+    // Leader remove a member 
     public async Task ForceRemoveMemberAsync(Guid groupId, Guid leaderUserId, Guid targetUserId, CancellationToken ct)
     {
         var isLeader = await queries.IsLeaderAsync(groupId, leaderUserId, ct);
@@ -205,6 +147,10 @@ public sealed class GroupService(
         var targetIsLeader = await queries.IsLeaderAsync(groupId, targetUserId, ct);
         if (targetIsLeader)
             throw new InvalidOperationException("Cannot remove leader. Transfer leadership first");
+
+        var detail = await queries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
+        if (string.Equals(detail.Status, "active", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Cannot remove members while group is active");
 
         var ok = await repo.LeaveGroupAsync(groupId, targetUserId, ct);
         if (!ok) throw new KeyNotFoundException("Member not found");

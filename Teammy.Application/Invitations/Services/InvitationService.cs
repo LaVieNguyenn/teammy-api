@@ -84,24 +84,13 @@ public sealed class InvitationService(
         var hasActive = await groupQueries.HasActiveMembershipInSemesterAsync(currentUserId, inv.SemesterId, ct);
         if (hasActive) throw new InvalidOperationException("User already has active/pending membership in this semester");
 
-        // If user has a pending join-request to this group, promote it; else add new membership
-        var pendings = await groupQueries.GetPendingJoinRequestsAsync(inv.GroupId, ct);
-        var existingJoin = pendings.FirstOrDefault(x => x.UserId == currentUserId);
-        if (existingJoin is not null)
-            await groupRepo.UpdateMembershipStatusAsync(existingJoin.RequestId, "member", ct);
-        else
-            await groupRepo.AddMembershipAsync(inv.GroupId, currentUserId, inv.SemesterId, "member", ct);
+        await groupRepo.AddMembershipAsync(inv.GroupId, currentUserId, inv.SemesterId, "member", ct);
         await repo.UpdateStatusAsync(invitationId, "accepted", DateTime.UtcNow, ct);
 
         // Cleanup: reject other pending applications by this user to the same group
         await postRepo.RejectPendingApplicationsForUserInGroupAsync(inv.GroupId, currentUserId, ct);
 
-        // If group became full, mark open posts as full
-        var (maxMembersAfter, activeCountAfter) = await groupQueries.GetGroupCapacityAsync(inv.GroupId, ct);
-        if (activeCountAfter >= maxMembersAfter)
-        {
-            await postRepo.SetOpenPostsStatusForGroupAsync(inv.GroupId, "full", ct);
-        }
+        // Posts stay open until leader selects topic (handled in group update)
     }
 
     public async Task DeclineAsync(Guid invitationId, Guid currentUserId, CancellationToken ct)

@@ -60,6 +60,14 @@ public sealed class RecruitmentPostRepository(AppDbContext db) : IRecruitmentPos
         await db.SaveChangesAsync(ct);
     }
 
+    public async Task DeletePostAsync(Guid postId, CancellationToken ct)
+    {
+        var post = await db.recruitment_posts.FirstOrDefaultAsync(x => x.post_id == postId, ct)
+            ?? throw new KeyNotFoundException("Post not found");
+        db.recruitment_posts.Remove(post);
+        await db.SaveChangesAsync(ct);
+    }
+
     public async Task UpdateApplicationStatusAsync(Guid applicationId, string newStatus, CancellationToken ct)
     {
         var c = await db.candidates.FirstOrDefaultAsync(x => x.candidate_id == applicationId, ct)
