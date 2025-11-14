@@ -1,5 +1,6 @@
-// Teammy.Infrastructure/Files/GoogleDriveStorage.cs
 using Google.Apis.Auth.OAuth2;
+using Google.Apis.Auth.OAuth2.Flows;
+using Google.Apis.Auth.OAuth2.Responses;
 using Google.Apis.Drive.v3;
 using Google.Apis.Drive.v3.Data;
 using Google.Apis.Services;
@@ -9,7 +10,6 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Text;
 using Teammy.Application.Files;
-
 using DriveFile = Google.Apis.Drive.v3.Data.File;
 
 namespace Teammy.Infrastructure.Files;
@@ -18,57 +18,98 @@ public sealed class GoogleDriveStorage : IFileStorage
 {
     private readonly DriveService _drive;
     private readonly string _rootFolderId;
+    private readonly bool _supportsAllDrives;
+    private readonly bool _makePublicLink;
     private readonly ILogger<GoogleDriveStorage> _logger;
 
-    public GoogleDriveStorage(IConfiguration cfg, IHostEnvironment env, ILogger<GoogleDriveStorage> logger)
+    public GoogleDriveStorage(IConfiguration cfg, IHostEnvironment _env, ILogger<GoogleDriveStorage> logger)
     {
         _logger = logger;
 
-        _rootFolderId = cfg["Storage:GoogleDrive:FolderId"]
+        var section = cfg.GetSection("Storage:GoogleDrive");
+        var authMode = (section["AuthMode"] ?? "UserOAuth").Trim(); // "UserOAuth" | "ServiceAccount"
+
+        _rootFolderId = section["FolderId"]
             ?? throw new InvalidOperationException("Missing Storage:GoogleDrive:FolderId");
 
-        var rawJson = Environment.GetEnvironmentVariable("GoogleDrivePath");
+        _makePublicLink = bool.TryParse(section["OAuth:PublicLink"], out var pl) ? pl : true;
 
-        GoogleCredential cred;
-        if (!string.IsNullOrWhiteSpace(rawJson))
+        GoogleCredential credential;
+
+        if (authMode.Equals("UserOAuth", StringComparison.OrdinalIgnoreCase))
         {
-            using var ms = new MemoryStream(Encoding.UTF8.GetBytes(rawJson));
-            cred = GoogleCredential.FromStream(ms);
+            // ===== User OAuth (Gmail cá nhân) =====
+            var clientId = section["OAuth:ClientId"]
+                ?? throw new InvalidOperationException("Missing Storage:GoogleDrive:OAuth:ClientId");
+
+            var clientSecret = section["OAuth:ClientSecret"]
+                ?? throw new InvalidOperationException("Missing Storage:GoogleDrive:OAuth:ClientSecret");
+
+            var refreshToken = section["OAuth:RefreshToken"]
+                ?? throw new InvalidOperationException("Missing Storage:GoogleDrive:OAuth:RefreshToken");
+
+            var flow = new GoogleAuthorizationCodeFlow(new GoogleAuthorizationCodeFlow.Initializer
+            {
+                ClientSecrets = new ClientSecrets
+                {
+                    ClientId = clientId,
+                    ClientSecret = clientSecret
+                },
+                Scopes = new[] { DriveService.Scope.Drive } 
+            });
+
+            var token = new TokenResponse { RefreshToken = refreshToken };
+
+            var userCred = new UserCredential(flow, "teammy-user", token);
+
+            _drive = new DriveService(new BaseClientService.Initializer
+            {
+                HttpClientInitializer = userCred,
+                ApplicationName = "Teammy"
+            });
+
+            _supportsAllDrives = false; 
         }
         else
         {
-            var relPath = cfg["Storage:GoogleDrive:ServiceAccountPath"]
-                ?? throw new InvalidOperationException("Provide env GoogleDrivePath or Storage:GoogleDrive:ServiceAccountPath");
-            var fullPath = Path.Combine(env.ContentRootPath, relPath);
-            if (!System.IO.File.Exists(fullPath))
-                throw new FileNotFoundException("Service account json not found", fullPath);
+            // ===== Service Account (Shared Drive / Workspace) =====
+            var json = section["ServiceAccountJson"]
+                ?? throw new InvalidOperationException("Missing Storage:GoogleDrive:ServiceAccountJson");
 
-            cred = GoogleCredential.FromFile(fullPath);
+            using var ms = new MemoryStream(Encoding.UTF8.GetBytes(json));
+            credential = GoogleCredential.FromStream(ms)
+                .CreateScoped(DriveService.Scope.Drive);
+
+            _drive = new DriveService(new BaseClientService.Initializer
+            {
+                HttpClientInitializer = credential,
+                ApplicationName = "Teammy"
+            });
+
+            _supportsAllDrives = true; 
         }
 
-        cred = cred.CreateScoped(DriveService.Scope.Drive);
-
-        _drive = new DriveService(new BaseClientService.Initializer
-        {
-            HttpClientInitializer = cred,
-            ApplicationName = "Teammy"
-        });
-
-        // Kiểm tra quyền truy cập FolderId (fail sớm, báo lỗi rõ)
+        // ===== Validate FolderId =====
         try
         {
             var get = _drive.Files.Get(_rootFolderId);
-            get.Fields = "id,name,mimeType";
+            get.Fields = "id,name,mimeType,driveId";
+            get.SupportsAllDrives = _supportsAllDrives;
             var folder = get.Execute();
+
             if (folder.MimeType != "application/vnd.google-apps.folder")
-                throw new InvalidOperationException($"Storage:GoogleDrive:FolderId '{_rootFolderId}' is not a folder.");
+                throw new InvalidOperationException($"FolderId '{_rootFolderId}' is not a folder.");
+
+            if (_supportsAllDrives && string.IsNullOrEmpty(folder.DriveId))
+            {
+                throw new InvalidOperationException(
+                    "ServiceAccount mode requires a folder INSIDE a Shared Drive (driveId is empty).");
+            }
         }
         catch (Google.GoogleApiException gex)
         {
             throw new InvalidOperationException(
-                $"Cannot access Google Drive FolderId '{_rootFolderId}'. " +
-                $"Make sure you ENABLED Drive API and SHARED this folder with the Service Account (Editor). " +
-                $"Google says: {gex.Error?.Message}", gex);
+                $"Cannot access FolderId '{_rootFolderId}'. Google says: {gex.Error?.Message}", gex);
         }
     }
 
@@ -83,21 +124,28 @@ public sealed class GoogleDriveStorage : IFileStorage
         var meta = new DriveFile { Name = safeName, Parents = new[] { parentId } };
         var create = _drive.Files.Create(meta, content, contentType);
         create.Fields = "id,mimeType,size,name,parents";
+        create.SupportsAllDrives = _supportsAllDrives;
 
         IUploadProgress prog = await create.UploadAsync(ct);
         if (prog.Status != UploadStatus.Completed)
-            throw new InvalidOperationException($"Google Drive upload failed: {prog.Status}. {prog.Exception?.Message}", prog.Exception);
+            throw new InvalidOperationException(
+                $"Google Drive upload failed: {prog.Status}. {prog.Exception?.Message}", prog.Exception);
 
         var f = create.ResponseBody ?? throw new InvalidOperationException("Upload ok but no response body.");
-        // Cho phép xem/tải bằng link (best-effort)
-        try
+
+        if (_makePublicLink)
         {
-            var perm = new Permission { Type = "anyone", Role = "reader" };
-            await _drive.Permissions.Create(perm, f.Id).ExecuteAsync(ct);
-        }
-        catch (Google.GoogleApiException gex)
-        {
-            _logger.LogWarning("Grant public read failed: {Message}", gex.Message);
+            try
+            {
+                var perm = new Permission { Type = "anyone", Role = "reader" };
+                var req = _drive.Permissions.Create(perm, f.Id);
+                req.SupportsAllDrives = _supportsAllDrives;
+                await req.ExecuteAsync(ct);
+            }
+            catch (Google.GoogleApiException gex)
+            {
+                _logger.LogWarning("Grant public read failed: {Message}", gex.Message);
+            }
         }
 
         var url = BuildDirectDownloadUrl(f.Id);
@@ -108,17 +156,26 @@ public sealed class GoogleDriveStorage : IFileStorage
     {
         var id = TryExtractFileId(fileUrl);
         if (string.IsNullOrEmpty(id)) return;
-        try { await _drive.Files.Delete(id).ExecuteAsync(ct); }
-        catch (Exception ex) { _logger.LogWarning(ex, "Delete failed for {Url}", fileUrl); }
+
+        try
+        {
+            var del = _drive.Files.Delete(id);
+            del.SupportsAllDrives = _supportsAllDrives;
+            await del.ExecuteAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Delete failed for {Url}", fileUrl);
+        }
     }
 
     // ===== Helpers =====
+
     private static (string? dirPath, string safeName, string contentType) SanitizePathAndName(string input)
     {
         var normalized = input.Replace("\\", "/");
         var parts = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries)
                               .Select(SanitizeSegment).ToArray();
-
         string? dir = parts.Length > 1 ? string.Join('/', parts[..^1]) : null;
         var ext = Path.GetExtension(parts.LastOrDefault() ?? string.Empty)?.ToLowerInvariant();
         var safeName = $"{Guid.NewGuid():N}{ext}";
@@ -156,8 +213,10 @@ public sealed class GoogleDriveStorage : IFileStorage
             var list = _drive.Files.List();
             list.Q = $"mimeType = 'application/vnd.google-apps.folder' and name = '{seg.Replace("'", "\\'")}' and '{parent}' in parents and trashed = false";
             list.Fields = "files(id,name)";
-            var resp = await list.ExecuteAsync(ct);
+            list.SupportsAllDrives = _supportsAllDrives;
+            list.IncludeItemsFromAllDrives = _supportsAllDrives;
 
+            var resp = await list.ExecuteAsync(ct);
             var found = resp.Files?.FirstOrDefault();
             if (found is not null) { parent = found.Id; continue; }
 
@@ -167,7 +226,10 @@ public sealed class GoogleDriveStorage : IFileStorage
                 MimeType = "application/vnd.google-apps.folder",
                 Parents = new[] { parent }
             };
-            var created = await _drive.Files.Create(folderMeta).ExecuteAsync(ct);
+            var create = _drive.Files.Create(folderMeta);
+            create.Fields = "id";
+            create.SupportsAllDrives = _supportsAllDrives;
+            var created = await create.ExecuteAsync(ct);
             parent = created.Id;
         }
         return parent;
