@@ -24,13 +24,4 @@ public sealed record GroupDetailDto(
     int    CurrentMembers
 );
 
-public sealed record JoinRequestDto(
-    Guid   RequestId,
-    Guid   UserId,
-    string Email,
-    string DisplayName,
-    DateTime JoinedAt
-);
-
 public sealed record InviteUserRequest(Guid UserId);
-

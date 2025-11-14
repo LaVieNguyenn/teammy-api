@@ -120,19 +120,6 @@ public sealed class GroupsController : ControllerBase
         });
     }
 
-    [HttpPost("{id:guid}/join-requests")]
-    [Authorize]
-    public async Task<ActionResult> Apply([FromRoute] Guid id, CancellationToken ct)
-    {
-        try
-        {
-            await _service.ApplyToGroupAsync(id, GetUserId(), ct);
-            return Accepted();
-        }
-        catch (KeyNotFoundException) { return NotFound(); }
-        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
-    }
-
     [HttpDelete("{id:guid}/members/me")]
     [Authorize]
     public async Task<ActionResult> Leave([FromRoute] Guid id, CancellationToken ct)
@@ -144,12 +131,6 @@ public sealed class GroupsController : ControllerBase
         }
         catch (InvalidOperationException ex) { return Conflict(ex.Message); }
     }
-
-    // Leader-only
-    [HttpGet("{id:guid}/join-requests")]
-    [Authorize]
-    public Task<IReadOnlyList<JoinRequestDto>> ListJoinRequests([FromRoute] Guid id, CancellationToken ct)
-        => _service.ListJoinRequestsAsync(id, GetUserId(), ct);
 
     [HttpGet("my")]
     [Authorize]
@@ -283,33 +264,6 @@ public sealed class GroupsController : ControllerBase
         CancellationToken ct = default)
         => _service.CheckUserGroupAsync(userId ?? GetUserId(), semesterId, includePending, ct);
 
-    [HttpPost("{id:guid}/join-requests/{reqId:guid}/accept")]
-    [Authorize]
-    public async Task<ActionResult> Accept([FromRoute] Guid id, [FromRoute] Guid reqId, CancellationToken ct)
-    {
-        try
-        {
-            await _service.AcceptJoinRequestAsync(id, reqId, GetUserId(), ct);
-            return NoContent();
-        }
-        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
-        catch (KeyNotFoundException) { return NotFound(); }
-        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
-    }
-
-    [HttpPost("{id:guid}/join-requests/{reqId:guid}/reject")]
-    [Authorize]
-    public async Task<ActionResult> Reject([FromRoute] Guid id, [FromRoute] Guid reqId, CancellationToken ct)
-    {
-        try
-        {
-            await _service.RejectJoinRequestAsync(id, reqId, GetUserId(), ct);
-            return NoContent();
-        }
-        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
-        catch (KeyNotFoundException) { return NotFound(); }
-    }
-
     [HttpPost("{id:guid}/invites")]
     [Authorize]
     public async Task<ActionResult> Invite([FromRoute] Guid id, [FromBody] InviteUserRequest req, CancellationToken ct)
@@ -384,15 +338,12 @@ public sealed class GroupsController : ControllerBase
             var type = (body?.Type ?? string.Empty).ToLowerInvariant();
             switch (type)
             {
-                case "join_request":
-                    await _service.AcceptJoinRequestAsync(id, pendingId, GetUserId(), ct);
-                    return NoContent();
                 case "application":
                     if (!body.PostId.HasValue) return BadRequest("postId is required for application");
                     await _postService.AcceptAsync(body.PostId.Value, pendingId, GetUserId(), ct);
                     return NoContent();
                 default:
-                    return BadRequest("Unsupported type for accept");
+                    return BadRequest("Supported types: application");
             }
         }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
@@ -409,9 +360,6 @@ public sealed class GroupsController : ControllerBase
             var type = (body?.Type ?? string.Empty).ToLowerInvariant();
             switch (type)
             {
-                case "join_request":
-                    await _service.RejectJoinRequestAsync(id, pendingId, GetUserId(), ct);
-                    return NoContent();
                 case "application":
                     if (!body.PostId.HasValue) return BadRequest("postId is required for application");
                     await _postService.RejectAsync(body.PostId.Value, pendingId, GetUserId(), ct);
@@ -420,7 +368,7 @@ public sealed class GroupsController : ControllerBase
                     await _invitations.CancelAsync(pendingId, GetUserId(), ct);
                     return NoContent();
                 default:
-                    return BadRequest("Unsupported type for reject");
+                    return BadRequest("Supported types: application, invitation");
             }
         }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
