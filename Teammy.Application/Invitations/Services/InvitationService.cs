@@ -90,12 +90,7 @@ public sealed class InvitationService(
         // Cleanup: reject other pending applications by this user to the same group
         await postRepo.RejectPendingApplicationsForUserInGroupAsync(inv.GroupId, currentUserId, ct);
 
-        // If group became full, mark open posts as full
-        var (maxMembersAfter, activeCountAfter) = await groupQueries.GetGroupCapacityAsync(inv.GroupId, ct);
-        if (activeCountAfter >= maxMembersAfter)
-        {
-            await postRepo.SetOpenPostsStatusForGroupAsync(inv.GroupId, "closed", ct);
-        }
+        // Posts stay open until leader selects topic (handled in group update)
     }
 
     public async Task DeclineAsync(Guid invitationId, Guid currentUserId, CancellationToken ct)
