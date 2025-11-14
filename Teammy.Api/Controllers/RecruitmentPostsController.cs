@@ -72,6 +72,8 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
                 membersDetail = members.Where(m => !string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase)).ToList();
             }
 
+            var topLevelMajor = d.Major ?? d.Group?.Major;
+            var topicObj = d.Group?.Topic;
             shaped.Add(new
             {
                 id = d.Id,
@@ -91,16 +93,21 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
                 group = d.Group is null ? null : new
                 {
                     d.Group.GroupId,
+                    d.Group.SemesterId,
+                    d.Group.MentorId,
                     d.Group.Name,
                     d.Group.Description,
                     d.Group.Status,
                     d.Group.MaxMembers,
                     d.Group.MajorId,
                     d.Group.TopicId,
+                    d.Group.CreatedAt,
+                    d.Group.UpdatedAt,
                     leader = leaderDetail,
                     members = membersDetail
                 },
-                major = d.Major
+                major = topLevelMajor,
+                topic = topicObj,
             });
         }
         return Ok(shaped);
@@ -136,6 +143,8 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
                 leaderUserId = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase))?.UserId;
             }
 
+            var topLevelMajor = d.Major ?? d.Group?.Major;
+            var topicObj = d.Group?.Topic;
             shaped.Add(new
             {
                 id = d.Id,
@@ -155,16 +164,21 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
                 group = d.Group is null ? null : new
                 {
                     d.Group.GroupId,
+                    d.Group.SemesterId,
+                    d.Group.MentorId,
                     d.Group.Name,
                     d.Group.Description,
                     d.Group.Status,
                     d.Group.MaxMembers,
                     d.Group.MajorId,
                     d.Group.TopicId,
+                    d.Group.CreatedAt,
+                    d.Group.UpdatedAt,
                     memberUserIds,
                     leader_user_id = leaderUserId
                 },
-                major = d.Major
+                major = topLevelMajor,
+                topic = topicObj,
             });
         }
         return Ok(shaped);
@@ -198,6 +212,8 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
             membersDetail2 = members.Where(m => !string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase)).ToList();
         }
 
+        var topLevelMajor = d.Major ?? d.Group?.Major;
+        var topicObj = d.Group?.Topic;
         return Ok(new
         {
             id = d.Id,
@@ -217,16 +233,21 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
             group = d.Group is null ? null : new
             {
                 d.Group.GroupId,
+                d.Group.SemesterId,
+                d.Group.MentorId,
                 d.Group.Name,
                 d.Group.Description,
                 d.Group.Status,
                 d.Group.MaxMembers,
                 d.Group.MajorId,
                 d.Group.TopicId,
+                d.Group.CreatedAt,
+                d.Group.UpdatedAt,
                 leader = leaderDetail2,
                 members = membersDetail2
             },
-            major = d.Major
+            major = topLevelMajor,
+            topic = topicObj,
         });
     }
 
@@ -298,6 +319,19 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
         try
         {
             await service.UpdateAsync(id, GetUserId(), req, ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    [HttpDelete("{id:guid}")]
+    [Authorize]
+    public async Task<ActionResult> Delete([FromRoute] Guid id, CancellationToken ct)
+    {
+        try
+        {
+            await service.DeleteAsync(id, GetUserId(), ct);
             return NoContent();
         }
         catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }

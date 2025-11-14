@@ -11,8 +11,6 @@ public interface IGroupReadOnlyQueries
 
     Task<GroupDetailDto?> GetGroupAsync(Guid id, CancellationToken ct);
 
-    Task<IReadOnlyList<JoinRequestDto>> GetPendingJoinRequestsAsync(Guid groupId, CancellationToken ct);
-
     Task<bool> IsLeaderAsync(Guid groupId, Guid userId, CancellationToken ct);
 
     Task<bool> HasActiveMembershipInSemesterAsync(Guid userId, Guid semesterId, CancellationToken ct);
@@ -33,6 +31,6 @@ public interface IGroupReadOnlyQueries
 
     Task<bool> GroupNameExistsAsync(Guid semesterId, string name, Guid? excludeGroupId, CancellationToken ct);
 
-    // Unified pending (join-requests, applications, invitations)
+    // Unified pending (applications + invitations)
     Task<IReadOnlyList<Teammy.Application.Groups.Dtos.GroupPendingItemDto>> GetUnifiedPendingAsync(Guid groupId, CancellationToken ct);
 }
