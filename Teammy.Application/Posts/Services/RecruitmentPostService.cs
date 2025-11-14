@@ -102,12 +102,7 @@ public sealed class RecruitmentPostService(
         // Cleanup duplicates: reject other pending applications by this user to the same group
         await repo.RejectPendingApplicationsForUserInGroupAsync(owner.GroupId.Value, app.ApplicantUserId.Value, ct);
 
-        // If group is now full, mark remaining open posts as full
-        var (_, newActiveCount) = await groupQueries.GetGroupCapacityAsync(owner.GroupId.Value, ct);
-        if (newActiveCount >= maxMembers)
-        {
-            await repo.SetOpenPostsStatusForGroupAsync(owner.GroupId.Value, "closed", ct);
-        }
+        // Closing posts now happens when leader selects topic (group update)
     }
 
     public async Task RejectAsync(Guid postId, Guid appId, Guid currentUserId, CancellationToken ct)
