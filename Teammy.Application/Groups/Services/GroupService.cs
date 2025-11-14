@@ -37,6 +37,10 @@ public sealed class GroupService(
 
     public async Task LeaveGroupAsync(Guid groupId, Guid userId, CancellationToken ct)
     {
+        var detail = await queries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
+        if (string.Equals(detail.Status, "active", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Cannot leave an active group");
+
         var isLeader = await queries.IsLeaderAsync(groupId, userId, ct);
         if (isLeader)
         {
@@ -143,6 +147,10 @@ public sealed class GroupService(
         var targetIsLeader = await queries.IsLeaderAsync(groupId, targetUserId, ct);
         if (targetIsLeader)
             throw new InvalidOperationException("Cannot remove leader. Transfer leadership first");
+
+        var detail = await queries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
+        if (string.Equals(detail.Status, "active", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Cannot remove members while group is active");
 
         var ok = await repo.LeaveGroupAsync(groupId, targetUserId, ct);
         if (!ok) throw new KeyNotFoundException("Member not found");
