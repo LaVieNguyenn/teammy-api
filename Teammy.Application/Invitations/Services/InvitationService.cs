@@ -94,7 +94,7 @@ public sealed class InvitationService(
         var (maxMembersAfter, activeCountAfter) = await groupQueries.GetGroupCapacityAsync(inv.GroupId, ct);
         if (activeCountAfter >= maxMembersAfter)
         {
-            await postRepo.SetOpenPostsStatusForGroupAsync(inv.GroupId, "full", ct);
+            await postRepo.SetOpenPostsStatusForGroupAsync(inv.GroupId, "closed", ct);
         }
     }
 
