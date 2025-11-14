@@ -106,7 +106,7 @@ public sealed class RecruitmentPostService(
         var (_, newActiveCount) = await groupQueries.GetGroupCapacityAsync(owner.GroupId.Value, ct);
         if (newActiveCount >= maxMembers)
         {
-            await repo.SetOpenPostsStatusForGroupAsync(owner.GroupId.Value, "full", ct);
+            await repo.SetOpenPostsStatusForGroupAsync(owner.GroupId.Value, "closed", ct);
         }
     }
 
