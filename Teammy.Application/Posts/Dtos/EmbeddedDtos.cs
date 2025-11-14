@@ -11,17 +11,34 @@ public sealed record PostSemesterDto(
 
 public sealed record PostGroupDto(
     Guid   GroupId,
+    Guid   SemesterId,
+    Guid?  MentorId,
     string Name,
     string? Description,
     string Status,
     int    MaxMembers,
     Guid?  MajorId,
-    Guid?  TopicId
+    Guid?  TopicId,
+    DateTime CreatedAt,
+    DateTime UpdatedAt,
+    PostMajorDto? Major,
+    PostTopicDto? Topic
 );
 
 public sealed record PostMajorDto(
     Guid   MajorId,
     string MajorName
+);
+
+public sealed record PostTopicDto(
+    Guid   TopicId,
+    Guid   SemesterId,
+    Guid?  MajorId,
+    string Title,
+    string? Description,
+    string Status,
+    Guid   CreatedBy,
+    DateTime CreatedAt
 );
 
 public sealed record PostUserDto(
@@ -31,4 +48,3 @@ public sealed record PostUserDto(
     string? AvatarUrl,
     bool   EmailVerified
 );
-
