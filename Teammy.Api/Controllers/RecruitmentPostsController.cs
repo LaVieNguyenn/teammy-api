@@ -312,6 +312,20 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
+    [HttpPost("{id:guid}/applications/{appId:guid}/withdraw")]
+    [Authorize]
+    public async Task<ActionResult> Withdraw([FromRoute] Guid id, [FromRoute] Guid appId, CancellationToken ct)
+    {
+        try
+        {
+            await service.WithdrawAsync(id, appId, GetUserId(), ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
     [HttpPatch("{id:guid}")]
     [Authorize]
     public async Task<ActionResult> Update([FromRoute] Guid id, [FromBody] UpdateRecruitmentPostRequest req, CancellationToken ct)

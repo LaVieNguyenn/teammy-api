@@ -22,18 +22,21 @@ public sealed class RecruitmentPostService(
         var semesterId = detail.SemesterId;
         // Enforce one-open-post-per-group: close any existing open posts before creating a new one
         await repo.CloseAllOpenPostsForGroupAsync(req.GroupId, ct);
-        var postId = await repo.CreateRecruitmentPostAsync(semesterId, postType: "group_hiring", groupId: req.GroupId, userId: null, req.MajorId, req.Title, req.Description, req.Skills, ct);
+        var expiresAt = DateTime.UtcNow.AddMinutes(5);
+        var postId = await repo.CreateRecruitmentPostAsync(semesterId, postType: "group_hiring", groupId: req.GroupId, userId: null, req.MajorId, req.Title, req.Description, req.Skills, expiresAt, ct);
         return postId;
     }
 
     public async Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListAsync(string? skills, Guid? majorId, string? status, ExpandOptions expand, Guid? currentUserId, CancellationToken ct)
     {
+        await repo.ExpireOpenPostsAsync(DateTime.UtcNow, ct);
         var items = await queries.ListAsync(skills, majorId, status, expand, currentUserId, ct);
         return items.Where(x => x.GroupId != null).ToList();
     }
 
     public async Task<RecruitmentPostDetailDto?> GetAsync(Guid id, ExpandOptions expand, Guid? currentUserId, CancellationToken ct)
     {
+        await repo.ExpireOpenPostsAsync(DateTime.UtcNow, ct);
         var d = await queries.GetAsync(id, expand, currentUserId, ct);
         if (d is null || d.GroupId is null) return null;
         return d;
@@ -41,6 +44,7 @@ public sealed class RecruitmentPostService(
 
     public async Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListAppliedByUserAsync(Guid currentUserId, ExpandOptions expand, CancellationToken ct)
     {
+        await repo.ExpireOpenPostsAsync(DateTime.UtcNow, ct);
         var items = await queries.ListAppliedByUserAsync(currentUserId, expand, ct);
         return items.Where(x => x.GroupId != null).ToList();
     }
@@ -48,9 +52,9 @@ public sealed class RecruitmentPostService(
     public async Task ApplyAsync(Guid postId, Guid userId, string? message, CancellationToken ct)
     {
         var owner = await queries.GetPostOwnerAsync(postId, ct);
-        if (owner.GroupId is null) throw new InvalidOperationException("Post does not accept applications");
-
-        var (maxMembers, activeCount) = await groupQueries.GetGroupCapacityAsync(owner.GroupId.Value, ct);
+        EnsureGroupPost(owner, throwUnauthorized: false);
+        await EnsurePostIsOpenAsync(owner, postId, ct);
+        var (maxMembers, activeCount) = await groupQueries.GetGroupCapacityAsync(owner.GroupId!.Value, ct);
         if (activeCount >= maxMembers) throw new InvalidOperationException("Group is full");
 
         var hasActive = await groupQueries.HasActiveMembershipInSemesterAsync(userId, owner.SemesterId, ct);
@@ -66,7 +70,7 @@ public sealed class RecruitmentPostService(
             if (string.Equals(status, "accepted", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"already_accepted:{appId}");
 
-            // status == rejected -> reactivate to pending and update message
+            // statuses like rejected/withdrawn can be reactivated
             await repo.ReactivateApplicationAsync(appId, message, ct);
             return;
         }
@@ -110,11 +114,27 @@ public sealed class RecruitmentPostService(
         await EnsureOwner(postId, currentUserId, ct, () => repo.UpdateApplicationStatusAsync(appId, "rejected", ct));
     }
 
+    public async Task WithdrawAsync(Guid postId, Guid appId, Guid currentUserId, CancellationToken ct)
+    {
+        var owner = await queries.GetPostOwnerAsync(postId, ct);
+        EnsureGroupPost(owner, throwUnauthorized: false);
+
+        var existingApp = await queries.FindApplicationByPostAndUserAsync(postId, currentUserId, ct);
+        if (!existingApp.HasValue || existingApp.Value.ApplicationId != appId)
+            throw new UnauthorizedAccessException("Not your application");
+
+        var status = existingApp.Value.Status;
+        if (!string.Equals(status, "pending", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Application already handled");
+
+        await repo.UpdateApplicationStatusAsync(appId, "withdrawn", ct);
+    }
+
     private async Task<T> EnsureOwner<T>(Guid postId, Guid currentUserId, CancellationToken ct, Func<Task<T>> action)
     {
         var owner = await queries.GetPostOwnerAsync(postId, ct);
-        if (owner.GroupId is null) throw new UnauthorizedAccessException("Not a group post");
-        var isLeader = await groupQueries.IsLeaderAsync(owner.GroupId.Value, currentUserId, ct);
+        EnsureGroupPost(owner);
+        var isLeader = await groupQueries.IsLeaderAsync(owner.GroupId!.Value, currentUserId, ct);
         if (!isLeader) throw new UnauthorizedAccessException("Leader only");
         return await action();
     }
@@ -122,18 +142,40 @@ public sealed class RecruitmentPostService(
     private async Task EnsureOwner(Guid postId, Guid currentUserId, CancellationToken ct, Func<Task> action)
     {
         var owner = await queries.GetPostOwnerAsync(postId, ct);
-        if (owner.GroupId is null) throw new UnauthorizedAccessException("Not a group post");
-        var isLeader = await groupQueries.IsLeaderAsync(owner.GroupId.Value, currentUserId, ct);
+        EnsureGroupPost(owner);
+        var isLeader = await groupQueries.IsLeaderAsync(owner.GroupId!.Value, currentUserId, ct);
         if (!isLeader) throw new UnauthorizedAccessException("Leader only");
         await action();
     }
 
-    private async Task<(Guid? GroupId, Guid SemesterId, Guid? OwnerUserId)> EnsureOwnerAndGet(Guid postId, Guid currentUserId, CancellationToken ct)
+    private async Task<(Guid? GroupId, Guid SemesterId, Guid? OwnerUserId, DateTime? ApplicationDeadline, string Status)> EnsureOwnerAndGet(Guid postId, Guid currentUserId, CancellationToken ct)
     {
         var owner = await queries.GetPostOwnerAsync(postId, ct);
-        if (owner.GroupId is null) throw new UnauthorizedAccessException("Not a group post");
-        var isLeader = await groupQueries.IsLeaderAsync(owner.GroupId.Value, currentUserId, ct);
+        EnsureGroupPost(owner);
+        var isLeader = await groupQueries.IsLeaderAsync(owner.GroupId!.Value, currentUserId, ct);
         if (!isLeader) throw new UnauthorizedAccessException("Leader only");
         return owner;
+    }
+
+    private async Task EnsurePostIsOpenAsync((Guid? GroupId, Guid SemesterId, Guid? OwnerUserId, DateTime? ApplicationDeadline, string Status) owner, Guid postId, CancellationToken ct)
+    {
+        if (!string.Equals(owner.Status, "open", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Recruitment post is not open");
+
+        if (owner.ApplicationDeadline.HasValue && owner.ApplicationDeadline.Value <= DateTime.UtcNow)
+        {
+            await repo.UpdatePostAsync(postId, null, null, null, "expired", ct);
+            throw new InvalidOperationException("Recruitment post expired");
+        }
+    }
+
+    private static void EnsureGroupPost((Guid? GroupId, Guid SemesterId, Guid? OwnerUserId, DateTime? ApplicationDeadline, string Status) owner, bool throwUnauthorized = true)
+    {
+        if (owner.GroupId is null)
+        {
+            if (throwUnauthorized)
+                throw new UnauthorizedAccessException("Not a group post");
+            throw new InvalidOperationException("Post does not accept applications");
+        }
     }
 }

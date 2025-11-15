@@ -191,10 +191,10 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
         return await q.ToListAsync(ct);
     }
 
-    public Task<(Guid? GroupId, Guid SemesterId, Guid? OwnerUserId)> GetPostOwnerAsync(Guid postId, CancellationToken ct)
+    public Task<(Guid? GroupId, Guid SemesterId, Guid? OwnerUserId, DateTime? ApplicationDeadline, string Status)> GetPostOwnerAsync(Guid postId, CancellationToken ct)
         => db.recruitment_posts.AsNoTracking()
             .Where(p => p.post_id == postId)
-            .Select(p => new ValueTuple<Guid?, Guid, Guid?>(p.group_id, p.semester_id, p.user_id))
+            .Select(p => new ValueTuple<Guid?, Guid, Guid?, DateTime?, string>(p.group_id, p.semester_id, p.user_id, p.application_deadline, p.status))
             .FirstOrDefaultAsync(ct);
 
     public Task<(Guid ApplicationId, Guid PostId)?> FindPendingApplicationInGroupAsync(Guid groupId, Guid userId, CancellationToken ct)
