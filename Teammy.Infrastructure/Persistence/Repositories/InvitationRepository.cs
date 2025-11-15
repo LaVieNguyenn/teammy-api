@@ -32,4 +32,28 @@ public sealed class InvitationRepository(AppDbContext db) : IInvitationRepositor
         inv.responded_at = respondedAt;
         await db.SaveChangesAsync(ct);
     }
+
+    public async Task UpdateExpirationAsync(Guid invitationId, DateTime expiresAt, CancellationToken ct)
+    {
+        var inv = await db.invitations.FirstOrDefaultAsync(x => x.invitation_id == invitationId, ct)
+            ?? throw new KeyNotFoundException("Invitation not found");
+        inv.expires_at = expiresAt;
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task ExpirePendingAsync(DateTime utcNow, CancellationToken ct)
+    {
+        var expired = await db.invitations
+            .Where(i => i.status == "pending" && i.expires_at.HasValue && i.expires_at <= utcNow)
+            .ToListAsync(ct);
+        if (expired.Count == 0) return;
+
+        foreach (var inv in expired)
+        {
+            inv.status = "expired";
+            inv.responded_at = utcNow;
+        }
+
+        await db.SaveChangesAsync(ct);
+    }
 }
