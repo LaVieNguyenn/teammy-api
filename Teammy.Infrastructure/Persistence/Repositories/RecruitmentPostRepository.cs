@@ -7,7 +7,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories;
 
 public sealed class RecruitmentPostRepository(AppDbContext db) : IRecruitmentPostRepository
 {
-    public async Task<Guid> CreateRecruitmentPostAsync(Guid semesterId, string postType, Guid? groupId, Guid? userId, Guid? majorId, string title, string? description, string? skills, CancellationToken ct)
+    public async Task<Guid> CreateRecruitmentPostAsync(Guid semesterId, string postType, Guid? groupId, Guid? userId, Guid? majorId, string title, string? description, string? skills, DateTime? applicationDeadline, CancellationToken ct)
     {
         var post = new recruitment_post
         {
@@ -21,6 +21,7 @@ public sealed class RecruitmentPostRepository(AppDbContext db) : IRecruitmentPos
             description = description,
             position_needed = skills,
             status = "open",
+            application_deadline = applicationDeadline,
             created_at = DateTime.UtcNow,
             updated_at = DateTime.UtcNow
         };
@@ -65,6 +66,22 @@ public sealed class RecruitmentPostRepository(AppDbContext db) : IRecruitmentPos
         var post = await db.recruitment_posts.FirstOrDefaultAsync(x => x.post_id == postId, ct)
             ?? throw new KeyNotFoundException("Post not found");
         db.recruitment_posts.Remove(post);
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task ExpireOpenPostsAsync(DateTime utcNow, CancellationToken ct)
+    {
+        var toExpire = await db.recruitment_posts
+            .Where(p => p.status == "open" && p.application_deadline.HasValue && p.application_deadline <= utcNow)
+            .ToListAsync(ct);
+        if (toExpire.Count == 0) return;
+
+        foreach (var post in toExpire)
+        {
+            post.status = "expired";
+            post.updated_at = utcNow;
+        }
+
         await db.SaveChangesAsync(ct);
     }
 
