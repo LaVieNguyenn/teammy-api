@@ -15,7 +15,7 @@ public sealed class ProfilePostService(
         var semesterId = await queries.GetActiveSemesterIdAsync(ct) ?? throw new InvalidOperationException("No active semester");
         // Reuse recruitment_post with post_type = 'profile' and user_id set
         // GroupId here is null
-        return await repo.CreateRecruitmentPostAsync(semesterId, postType: "individual", groupId: null, userId: currentUserId, req.MajorId, req.Title, req.Description, req.Skills, ct);
+        return await repo.CreateRecruitmentPostAsync(semesterId, postType: "individual", groupId: null, userId: currentUserId, req.MajorId, req.Title, req.Description, req.Skills, null, ct);
     }
 
     public Task<ProfilePostDetailDto?> GetAsync(Guid id, ExpandOptions expand, CancellationToken ct)

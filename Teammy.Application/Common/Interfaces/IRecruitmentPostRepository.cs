@@ -13,6 +13,7 @@ public interface IRecruitmentPostRepository
         string title,
         string? description,
         string? skills,
+        DateTime? applicationDeadline,
         CancellationToken ct);
 
     Task<Guid> CreateApplicationAsync(Guid postId, Guid? applicantUserId, Guid? applicantGroupId, Guid appliedByUserId, string? message, CancellationToken ct);
@@ -21,6 +22,7 @@ public interface IRecruitmentPostRepository
     Task DeletePostAsync(Guid postId, CancellationToken ct);
 
     Task UpdateApplicationStatusAsync(Guid applicationId, string newStatus, CancellationToken ct);
+    Task ExpireOpenPostsAsync(DateTime utcNow, CancellationToken ct);
 
     // Enforce one-open-post-per-group and cleanup helpers
     Task<int> CloseAllOpenPostsForGroupAsync(Guid groupId, CancellationToken ct);
