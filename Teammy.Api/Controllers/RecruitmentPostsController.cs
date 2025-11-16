@@ -90,6 +90,7 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
                 myApplicationId = d.MyApplicationId,
                 myApplicationStatus = d.MyApplicationStatus,
                 semester = d.Semester,
+                mentor = d.Group?.Mentor,
                 group = d.Group is null ? null : new
                 {
                     d.Group.GroupId,
@@ -104,10 +105,12 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
                     d.Group.CreatedAt,
                     d.Group.UpdatedAt,
                     leader = leaderDetail,
-                    members = membersDetail
+                    members = membersDetail,
+                    mentor = d.Group.Mentor
                 },
                 major = topLevelMajor,
                 topic = topicObj,
+                topicName = topicObj?.Title
             });
         }
         return Ok(shaped);
@@ -161,6 +164,7 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
                 myApplicationId = d.MyApplicationId,
                 myApplicationStatus = d.MyApplicationStatus,
                 semester = d.Semester,
+                mentor = d.Group?.Mentor,
                 group = d.Group is null ? null : new
                 {
                     d.Group.GroupId,
@@ -175,10 +179,12 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
                     d.Group.CreatedAt,
                     d.Group.UpdatedAt,
                     memberUserIds,
-                    leader_user_id = leaderUserId
+                    leader_user_id = leaderUserId,
+                    mentor = d.Group.Mentor
                 },
                 major = topLevelMajor,
                 topic = topicObj,
+                topicName = topicObj?.Title
             });
         }
         return Ok(shaped);
@@ -230,6 +236,7 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
             myApplicationId = d.MyApplicationId,
             myApplicationStatus = d.MyApplicationStatus,
             semester = d.Semester,
+            mentor = d.Group?.Mentor,
             group = d.Group is null ? null : new
             {
                 d.Group.GroupId,
@@ -244,10 +251,12 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
                 d.Group.CreatedAt,
                 d.Group.UpdatedAt,
                 leader = leaderDetail2,
-                members = membersDetail2
+                members = membersDetail2,
+                mentor = d.Group.Mentor
             },
             major = topLevelMajor,
             topic = topicObj,
+            topicName = topicObj?.Title
         });
     }
 

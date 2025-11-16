@@ -48,4 +48,11 @@ public sealed class TopicReadOnlyQueries(AppDbContext db) : ITopicReadOnlyQuerie
             .Where(m => m.major_name.ToLower() == majorName.ToLower())
             .Select(m => (Guid?)m.major_id)
             .FirstOrDefaultAsync(ct);
+
+    public async Task<Guid?> GetDefaultMentorIdAsync(Guid topicId, CancellationToken ct)
+        => await db.topics.AsNoTracking()
+            .Where(t => t.topic_id == topicId)
+            .SelectMany(t => t.mentors)
+            .Select(u => (Guid?)u.user_id)
+            .FirstOrDefaultAsync(ct);
 }

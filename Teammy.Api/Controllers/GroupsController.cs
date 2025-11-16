@@ -103,6 +103,8 @@ public sealed class GroupsController : ControllerBase
             topicName = t?.Title;
         }
 
+        var mentor = await _groupQueries.GetMentorAsync(id, ct);
+
         return Ok(new
         {
             id = g.Id,
@@ -115,6 +117,7 @@ public sealed class GroupsController : ControllerBase
             major = majorObj,
             topicId,
             topicName,
+            mentor = mentor is null ? null : new { mentor.UserId, mentor.Email, mentor.DisplayName, mentor.AvatarUrl },
             leader = leaderMember,
             members = nonLeaderMembers // exclude leader
         });
@@ -166,6 +169,18 @@ public sealed class GroupsController : ControllerBase
                 }
             }
 
+            PostTopicDto? topicObj = null;
+            if (detail?.TopicId is Guid tid)
+            {
+                var topic = await _topics.GetByIdAsync(tid, ct);
+                if (topic is not null)
+                {
+                    topicObj = new PostTopicDto(topic.TopicId, topic.SemesterId, topic.MajorId, topic.Title, topic.Description, topic.Status, topic.CreatedBy, topic.CreatedAt);
+                }
+            }
+
+            var mentorDto = await _groupQueries.GetMentorAsync(g.GroupId, ct);
+
             // Members (leader separated)
             var members = await _service.ListActiveMembersAsync(g.GroupId, ct);
             var leaderMember = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase));
@@ -182,6 +197,8 @@ public sealed class GroupsController : ControllerBase
                 role = g.Role,
                 semester = semesterObj,
                 major = majorObj,
+                topic = topicObj,
+                mentor = mentorDto is null ? null : new { mentorDto.UserId, mentorDto.Email, mentorDto.DisplayName, mentorDto.AvatarUrl },
                 leader = leaderMember,
                 members = nonLeaderMembers
             });
@@ -203,7 +220,7 @@ public sealed class GroupsController : ControllerBase
     }
 
     public sealed record TransferLeaderRequest(Guid NewLeaderUserId);
-    public sealed record UpdateGroupRequestBody(string? Name, string? Description, int? MaxMembers, Guid? MajorId, Guid? TopicId);
+    public sealed record UpdateGroupRequestBody(string? Name, string? Description, int? MaxMembers, Guid? MajorId, Guid? TopicId, Guid? MentorId);
 
     [HttpPost("{id:guid}/leader/transfer")]
     [Authorize]
@@ -239,14 +256,15 @@ public sealed class GroupsController : ControllerBase
     {
         try
         {
-            var req = new Teammy.Application.Groups.Dtos.UpdateGroupRequest
-            {
-                Name = body.Name,
-                Description = body.Description,
-                MaxMembers = body.MaxMembers,
-                MajorId = body.MajorId,
-                TopicId = body.TopicId
-            };
+        var req = new Teammy.Application.Groups.Dtos.UpdateGroupRequest
+        {
+            Name = body.Name,
+            Description = body.Description,
+            MaxMembers = body.MaxMembers,
+            MajorId = body.MajorId,
+            TopicId = body.TopicId,
+            MentorId = body.MentorId
+        };
             await _service.UpdateGroupAsync(id, GetUserId(), req, ct);
             return NoContent();
         }
