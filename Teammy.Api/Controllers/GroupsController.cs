@@ -55,18 +55,13 @@ public sealed class GroupsController : ControllerBase
         => _service.ListGroupsAsync(status, majorId, topicId, ct);
 
     [HttpGet("{id:guid}")]
-    [Authorize]
+    [AllowAnonymous]
     public async Task<ActionResult> GetById([FromRoute] Guid id, CancellationToken ct)
     {
         var g = await _service.GetGroupAsync(id, ct);
         if (g is null) return NotFound();
 
-        // Only leader/member can view details (exclude pending/non-members)
         var members = await _service.ListActiveMembersAsync(id, ct);
-        var currentUserId = GetUserId();
-        var isActiveMember = members.Any(m => m.UserId == currentUserId);
-        if (!isActiveMember)
-            return StatusCode(403, "Members only");
 
         // Build enriched object similar to recruitment object-only
         var leaderMember = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase));

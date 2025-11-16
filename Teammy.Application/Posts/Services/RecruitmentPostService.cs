@@ -18,6 +18,8 @@ public sealed class RecruitmentPostService(
         var detail = await groupQueries.GetGroupAsync(req.GroupId, ct) ?? throw new KeyNotFoundException("Group not found");
         var isLeader = await groupQueries.IsLeaderAsync(req.GroupId, currentUserId, ct);
         if (!isLeader) throw new UnauthorizedAccessException("Leader only");
+        if (string.Equals(detail.Status, "active", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Active group cannot create recruitment posts");
 
         var semesterId = detail.SemesterId;
         // Enforce one-open-post-per-group: close any existing open posts before creating a new one
