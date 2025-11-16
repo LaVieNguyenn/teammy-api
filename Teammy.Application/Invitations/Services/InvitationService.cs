@@ -32,19 +32,16 @@ public sealed class InvitationService(
         var hasActive = await groupQueries.HasActiveMembershipInSemesterAsync(inviteeUserId, g.SemesterId, ct);
         if (hasActive) throw new InvalidOperationException("User already has active/pending membership in this semester");
 
-        var expiresAt = DateTime.UtcNow.AddMinutes(5);
+        var now = DateTime.UtcNow;
+        var expiresAt = now.AddMinutes(5);
 
         // Handle duplicate by reusing/reactivating existing invitation (group-based)
         var existingAny = await queries.FindAnyAsync(groupId, inviteeUserId, ct);
         Guid invitationId;
         if (existingAny.HasValue)
         {
-            var (dupId, dupStatus) = existingAny.Value;
-            if (!string.Equals(dupStatus, "pending", StringComparison.OrdinalIgnoreCase))
-            {
-                await repo.UpdateStatusAsync(dupId, "pending", null, ct);
-            }
-            await repo.UpdateExpirationAsync(dupId, expiresAt, ct);
+            var (dupId, _) = existingAny.Value;
+            await repo.ResetPendingAsync(dupId, now, expiresAt, ct);
             invitationId = dupId;
         }
         else

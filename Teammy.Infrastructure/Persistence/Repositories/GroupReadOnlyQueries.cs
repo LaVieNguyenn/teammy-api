@@ -105,6 +105,19 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
         return await q.ToListAsync(ct);
     }
 
+    public async Task<GroupMentorDto?> GetMentorAsync(Guid groupId, CancellationToken ct)
+    {
+        return await (from g in db.groups.AsNoTracking()
+                      join u in db.users.AsNoTracking() on g.mentor_id equals u.user_id
+                      where g.group_id == groupId && g.mentor_id != null
+                      select new GroupMentorDto(
+                          u.user_id,
+                          u.email!,
+                          u.display_name!,
+                          u.avatar_url))
+            .FirstOrDefaultAsync(ct);
+    }
+
     public async Task<IReadOnlyList<Teammy.Application.Groups.Dtos.GroupMemberDto>> ListActiveMembersAsync(Guid groupId, CancellationToken ct)
     {
         var q = from m in db.group_members.AsNoTracking()

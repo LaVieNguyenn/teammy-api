@@ -6,8 +6,11 @@ namespace Teammy.Application.Groups.Services;
 public sealed class GroupService(
     IGroupRepository repo,
     IGroupReadOnlyQueries queries,
-    IRecruitmentPostRepository postRepo)
+    IRecruitmentPostRepository postRepo,
+    ITopicReadOnlyQueries topicQueries)
 {
+    private readonly ITopicReadOnlyQueries _topicQueries = topicQueries;
+
     public async Task<Guid> CreateGroupAsync(Guid creatorUserId, CreateGroupRequest req, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(req.Name))
@@ -116,17 +119,23 @@ public sealed class GroupService(
                 throw new InvalidOperationException($"MaxMembers cannot be less than current active members ({activeCount})");
         }
 
-        // Only allow selecting a topic when the group is full
         var setTopicAndActivate = false;
+        Guid? mentorId = req.MentorId;
         if (req.TopicId.HasValue)
         {
             var (maxMembers, activeCount) = await queries.GetGroupCapacityAsync(groupId, ct);
             if (activeCount < maxMembers)
                 throw new InvalidOperationException("Group must be full to select a topic");
             setTopicAndActivate = true;
+
+            if (!mentorId.HasValue)
+            {
+                mentorId = await _topicQueries.GetDefaultMentorIdAsync(req.TopicId.Value, ct)
+                    ?? throw new InvalidOperationException("Selected topic does not have an assigned mentor");
+            }
         }
 
-        await repo.UpdateGroupAsync(groupId, req.Name, req.Description, req.MaxMembers, req.MajorId, req.TopicId, ct);
+        await repo.UpdateGroupAsync(groupId, req.Name, req.Description, req.MaxMembers, req.MajorId, req.TopicId, mentorId, ct);
 
         if (setTopicAndActivate)
         {

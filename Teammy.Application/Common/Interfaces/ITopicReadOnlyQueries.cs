@@ -8,4 +8,5 @@ public interface ITopicReadOnlyQueries
     Task<TopicDetailDto?> GetByIdAsync(Guid topicId, CancellationToken ct);
     Task<Guid?> FindSemesterIdByCodeAsync(string semesterCode, CancellationToken ct);
     Task<Guid?> FindMajorIdByNameAsync(string majorName, CancellationToken ct);
+    Task<Guid?> GetDefaultMentorIdAsync(Guid topicId, CancellationToken ct);
 }
