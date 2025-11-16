@@ -22,7 +22,8 @@ public sealed record PostGroupDto(
     DateTime CreatedAt,
     DateTime UpdatedAt,
     PostMajorDto? Major,
-    PostTopicDto? Topic
+    PostTopicDto? Topic,
+    PostUserDto? Mentor
 );
 
 public sealed record PostMajorDto(

@@ -8,4 +8,5 @@ public interface IInvitationRepository
     Task UpdateStatusAsync(Guid invitationId, string newStatus, DateTime? respondedAt, CancellationToken ct);
     Task UpdateExpirationAsync(Guid invitationId, DateTime expiresAt, CancellationToken ct);
     Task ExpirePendingAsync(DateTime utcNow, CancellationToken ct);
+    Task ResetPendingAsync(Guid invitationId, DateTime newCreatedAt, DateTime expiresAt, CancellationToken ct);
 }
