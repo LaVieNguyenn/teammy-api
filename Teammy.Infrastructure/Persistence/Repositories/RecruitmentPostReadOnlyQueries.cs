@@ -22,6 +22,8 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
             .SelectMany(x => x.gms.DefaultIfEmpty(), (x, gm) => new { x.p, x.s, x.g, x.m, gm })
             .GroupJoin(db.topics.AsNoTracking(), t => t.g != null ? (Guid?)t.g.topic_id : null, tp => (Guid?)tp.topic_id, (t, tps) => new { t.p, t.s, t.g, t.m, t.gm, tps })
             .SelectMany(x => x.tps.DefaultIfEmpty(), (x, topic) => new { x.p, x.s, x.g, x.m, x.gm, topic })
+            .GroupJoin(db.users.AsNoTracking(), t => t.g != null ? (Guid?)t.g.mentor_id : null, u => (Guid?)u.user_id, (t, mentors) => new { t.p, t.s, t.g, t.m, t.gm, t.topic, mentors })
+            .SelectMany(x => x.mentors.DefaultIfEmpty(), (x, mentor) => new { x.p, x.s, x.g, x.m, x.gm, x.topic, mentor })
             .Select(x => new RecruitmentPostDetailDto(
                 x.p.post_id,
                 x.p.semester_id,
@@ -56,7 +58,13 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                             x.topic.description,
                             x.topic.status,
                             x.topic.created_by,
-                            x.topic.created_at) : null)
+                            x.topic.created_at) : null,
+                        x.mentor != null ? new PostUserDto(
+                            x.mentor.user_id,
+                            x.mentor.email!,
+                            x.mentor.display_name!,
+                            x.mentor.avatar_url,
+                            x.mentor.email_verified) : null)
                     : null,
                 x.p.major_id,
                 x.m != null ? x.m.major_name : null,
@@ -107,6 +115,8 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
             .SelectMany(x => x.gms.DefaultIfEmpty(), (x, gm) => new { x.p, x.s, x.g, x.m, gm })
             .GroupJoin(db.topics.AsNoTracking(), t => t.g != null ? (Guid?)t.g.topic_id : null, tp => (Guid?)tp.topic_id, (t, tps) => new { t.p, t.s, t.g, t.m, t.gm, tps })
             .SelectMany(x => x.tps.DefaultIfEmpty(), (x, topic) => new { x.p, x.s, x.g, x.m, x.gm, topic })
+            .GroupJoin(db.users.AsNoTracking(), t => t.g != null ? (Guid?)t.g.mentor_id : null, u => (Guid?)u.user_id, (t, mentors) => new { t.p, t.s, t.g, t.m, t.gm, t.topic, mentors })
+            .SelectMany(x => x.mentors.DefaultIfEmpty(), (x, mentor) => new { x.p, x.s, x.g, x.m, x.gm, x.topic, mentor })
             .Select(x => new RecruitmentPostSummaryDto(
                 x.p.post_id,
                 x.p.semester_id,
@@ -141,7 +151,13 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                             x.topic.description,
                             x.topic.status,
                             x.topic.created_by,
-                            x.topic.created_at) : null)
+                            x.topic.created_at) : null,
+                        x.mentor != null ? new PostUserDto(
+                            x.mentor.user_id,
+                            x.mentor.email!,
+                            x.mentor.display_name!,
+                            x.mentor.avatar_url,
+                            x.mentor.email_verified) : null)
                     : null,
                 x.p.major_id,
                 x.m != null ? x.m.major_name : null,
@@ -230,6 +246,8 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
             .SelectMany(x => x.gms.DefaultIfEmpty(), (x, gm) => new { x.p, x.s, x.g, x.m, gm })
             .GroupJoin(db.topics.AsNoTracking(), t => t.g != null ? (Guid?)t.g.topic_id : null, tp => (Guid?)tp.topic_id, (t, tps) => new { t.p, t.s, t.g, t.m, t.gm, tps })
             .SelectMany(x => x.tps.DefaultIfEmpty(), (x, topic) => new { x.p, x.s, x.g, x.m, x.gm, topic })
+            .GroupJoin(db.users.AsNoTracking(), t => t.g != null ? (Guid?)t.g.mentor_id : null, u => (Guid?)u.user_id, (t, mentors) => new { t.p, t.s, t.g, t.m, t.gm, t.topic, mentors })
+            .SelectMany(x => x.mentors.DefaultIfEmpty(), (x, mentor) => new { x.p, x.s, x.g, x.m, x.gm, x.topic, mentor })
             .Select(x => new RecruitmentPostSummaryDto(
                 x.p.post_id,
                 x.p.semester_id,
@@ -264,7 +282,13 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                             x.topic.description,
                             x.topic.status,
                             x.topic.created_by,
-                            x.topic.created_at) : null)
+                            x.topic.created_at) : null,
+                        x.mentor != null ? new PostUserDto(
+                            x.mentor.user_id,
+                            x.mentor.email!,
+                            x.mentor.display_name!,
+                            x.mentor.avatar_url,
+                            x.mentor.email_verified) : null)
                     : null,
                 x.p.major_id,
                 x.m != null ? x.m.major_name : null,
