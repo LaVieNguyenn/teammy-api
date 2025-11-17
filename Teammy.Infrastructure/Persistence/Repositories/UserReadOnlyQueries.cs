@@ -43,36 +43,29 @@ namespace Teammy.Infrastructure.Persistence.Repositories
             );
         }
 
-        public async Task<IReadOnlyList<UserSearchDto>> SearchInvitableAsync(
-            string? query,
-            Guid semesterId,
-            int limit,
-            CancellationToken ct)
+    public Task<IReadOnlyList<UserSearchDto>> SearchInvitableAsync(string? query, Guid semesterId, int limit, CancellationToken ct)
         {
-            query = query?.Trim();
+            if (limit <= 0 || limit > 100) limit = 20;
+            var term = (query ?? string.Empty).Trim();
+            var statuses = new[] { "pending", "member", "leader" };
 
-            var q =
-                from u in _db.users
-                where u.is_active &&
-                      (query == null
-                       || EF.Functions.ILike(u.email!, $"%{query}%")
-                       || EF.Functions.ILike(u.display_name!, $"%{query}%"))
-                select new UserSearchDto(
+            var q = _db.users.AsNoTracking()
+                .Where(u => u.is_active)
+                // Search by email only (case-insensitive, PostgreSQL ILIKE)
+                .Where(u => string.IsNullOrEmpty(term) || EF.Functions.ILike(u.email, "%" + term + "%"))
+                .OrderBy(u => u.display_name)
+                .Select(u => new UserSearchDto(
                     u.user_id,
                     u.email!,
                     u.display_name!,
                     u.avatar_url,
                     u.email_verified,
                     u.major_id,
-                    _db.group_members.Any(m =>
-                        m.user_id == u.user_id &&
-                        m.semester_id == semesterId)
-                );
+                    _db.group_members.Any(m => m.user_id == u.user_id && m.semester_id == semesterId && statuses.Contains(m.status))
+                ))
+                .Take(limit);
 
-            return await q
-                .OrderBy(x => x.Email)
-                .Take(limit)
-                .ToListAsync(ct);
+            return q.ToListAsync(ct).ContinueWith(t => (IReadOnlyList<UserSearchDto>)t.Result, ct);
         }
 
         public async Task<IReadOnlyList<AdminUserListItemDto>> GetAllForAdminAsync(CancellationToken ct)
