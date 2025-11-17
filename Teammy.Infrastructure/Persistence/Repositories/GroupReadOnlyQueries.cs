@@ -64,6 +64,17 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
     public Task<bool> HasActiveMembershipInSemesterAsync(Guid userId, Guid semesterId, CancellationToken ct)
         => db.group_members.AsNoTracking().AnyAsync(x => x.user_id == userId && x.semester_id == semesterId && (x.status == "pending" || x.status == "member" || x.status == "leader"), ct);
 
+    public Task<bool> HasActiveGroupAsync(Guid userId, Guid semesterId, CancellationToken ct)
+        => db.group_members.AsNoTracking()
+            .Join(db.groups.AsNoTracking(),
+                m => m.group_id,
+                g => g.group_id,
+                (m, g) => new { m, g })
+            .AnyAsync(x => x.m.user_id == userId
+                           && x.m.semester_id == semesterId
+                           && (x.m.status == "member" || x.m.status == "leader")
+                           && x.g.status == "active", ct);
+
     public async Task<(int MaxMembers, int ActiveCount)> GetGroupCapacityAsync(Guid groupId, CancellationToken ct)
     {
         var g = await db.groups.AsNoTracking().FirstOrDefaultAsync(x => x.group_id == groupId, ct)
