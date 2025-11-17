@@ -1,49 +1,121 @@
 using Microsoft.EntityFrameworkCore;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Infrastructure.Persistence;
 using Teammy.Infrastructure.Persistence.Models;
 
 namespace Teammy.Infrastructure.Persistence.Repositories;
 
-public sealed class UserWriteRepository(AppDbContext db) : IUserWriteRepository
+public sealed class UserWriteRepository : IUserWriteRepository
 {
-    public Task<bool> EmailExistsAnyAsync(string email, CancellationToken ct)
-        => db.users.AsNoTracking().AnyAsync(u => u.email.ToLower() == email.ToLower(), ct);
+    private readonly AppDbContext _db;
 
-    public async Task<Guid> CreateUserAsync(string email, string displayName,
-                                            string? studentCode, string? gender,
-                                            Guid? majorId,
-                                            CancellationToken ct)
+    public UserWriteRepository(AppDbContext db)
     {
-        var now = DateTime.UtcNow;
+        _db = db;
+    }
+
+    public Task<bool> EmailExistsAnyAsync(string email, CancellationToken ct)
+        => _db.users.AsNoTracking().AnyAsync(u => u.email.ToLower() == email.ToLower(), ct);
+
+    public async Task<Guid> CreateUserAsync(
+        string email,
+        string displayName,
+        string? studentCode,
+        string? gender,
+        Guid? majorId,
+        CancellationToken ct)
+    {
         var entity = new user
         {
-            user_id       = Guid.NewGuid(),
-            email         = email,
-            display_name  = displayName,
-            student_code  = studentCode,
-            gender        = string.IsNullOrWhiteSpace(gender) ? null : gender,
-            major_id      = majorId,
-            is_active     = true,       
-            email_verified= true,      
-            created_at    = now,
-            updated_at    = now
+            user_id          = Guid.NewGuid(),
+            email            = email,
+            email_verified   = false,
+            display_name     = displayName,
+            avatar_url       = null,
+            phone            = null,
+            student_code     = studentCode,
+            gender           = gender,
+            major_id         = majorId,
+            skills           = null,
+            skills_completed = false,
+            is_active        = true,
+            created_at       = DateTime.UtcNow,
+            updated_at       = DateTime.UtcNow
         };
 
-        db.users.Add(entity);
-        await db.SaveChangesAsync(ct);
+        _db.users.Add(entity);
+        await _db.SaveChangesAsync(ct);
         return entity.user_id;
     }
 
     public async Task AssignRoleAsync(Guid userId, Guid roleId, CancellationToken ct)
     {
+        var exists = await _db.user_roles
+            .AnyAsync(x => x.user_id == userId && x.role_id == roleId, ct);
+        if (exists) return;
+
         var linking = new user_role
         {
             user_role_id = Guid.NewGuid(),
-            user_id = userId,
-            role_id = roleId,
+            user_id      = userId,
+            role_id      = roleId,
         };
-        db.user_roles.Add(linking);
-        await db.SaveChangesAsync(ct);
+        _db.user_roles.Add(linking);
+        await _db.SaveChangesAsync(ct);
+    }
+
+    public async Task UpdateUserAsync(
+        Guid userId,
+        string displayName,
+        string? studentCode,
+        string? gender,
+        Guid? majorId,
+        bool isActive,
+        CancellationToken ct)
+    {
+        var entity = await _db.users.FirstOrDefaultAsync(u => u.user_id == userId, ct);
+        if (entity is null)
+            throw new KeyNotFoundException("User not found");
+
+        entity.display_name = displayName;
+        entity.student_code = studentCode;
+        entity.gender       = gender;
+        entity.major_id     = majorId;
+        entity.is_active    = isActive;
+        entity.updated_at   = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync(ct);
+    }
+
+    public async Task DeleteUserAsync(Guid userId, CancellationToken ct)
+    {
+        var entity = await _db.users.FirstOrDefaultAsync(u => u.user_id == userId, ct);
+        if (entity is null) return;
+
+        entity.is_active  = false;
+        entity.updated_at = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync(ct);
+    }
+
+    public async Task SetSingleRoleAsync(Guid userId, Guid roleId, CancellationToken ct)
+    {
+        var existing = _db.user_roles.Where(x => x.user_id == userId);
+        _db.user_roles.RemoveRange(existing);
+
+        var linking = new user_role
+        {
+            user_role_id = Guid.NewGuid(),
+            user_id      = userId,
+            role_id      = roleId
+        };
+
+        _db.user_roles.Add(linking);
+        await _db.SaveChangesAsync(ct);
     }
 }

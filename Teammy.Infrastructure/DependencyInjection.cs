@@ -12,6 +12,7 @@ using Teammy.Infrastructure.Excel;
 using Teammy.Infrastructure.Files;
 using Teammy.Infrastructure.Persistence;
 using Teammy.Infrastructure.Persistence.Repositories;
+using Teammy.Infrastructure.Topics;
 
 namespace Teammy.Infrastructure;
 
@@ -54,7 +55,9 @@ public static class DependencyInjection
         services.AddScoped<ITopicReadOnlyQueries, TopicReadOnlyQueries>();
         services.AddScoped<ITopicWriteRepository, TopicWriteRepository>();
         services.AddScoped<ITopicImportService, ExcelTopicImportService>();
-        services.AddScoped<TopicService>();
+        services.AddScoped<TopicsService>();
+        services.AddScoped<IMentorLookupService, MentorLookupService>();
+        services.AddScoped<ITopicMentorService, TopicMentorService>();
 
         // Roles
         services.AddScoped<IRoleReadOnlyQueries, RoleReadOnlyQueries>();
@@ -70,7 +73,7 @@ public static class DependencyInjection
         services.AddScoped<IKanbanReadOnlyQueries, KanbanReadOnlyQueries>();
         services.AddScoped<IKanbanRepository, KanbanRepository>();
         services.AddScoped<IGroupAccessQueries, GroupAccessQueries>();
-        services.AddScoped<IFileStorage, GoogleDriveStorage>(); 
+        services.AddScoped<IFileStorage, GoogleDriveStorage>();
         services.AddScoped<KanbanService>();
 
         return services;

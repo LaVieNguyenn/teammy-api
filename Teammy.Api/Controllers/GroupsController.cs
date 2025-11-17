@@ -7,7 +7,6 @@ using Teammy.Application.Invitations.Services;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Posts.Dtos;
 using Teammy.Application.Posts.Services;
-using Teammy.Application.Common.Interfaces;
 
 namespace Teammy.Api.Controllers;
 
@@ -175,7 +174,7 @@ public sealed class GroupsController : ControllerBase
                 var topic = await _topics.GetByIdAsync(tid, ct);
                 if (topic is not null)
                 {
-                    topicObj = new PostTopicDto(topic.TopicId, topic.SemesterId, topic.MajorId, topic.Title, topic.Description, topic.Status, topic.CreatedBy, topic.CreatedAt);
+                    topicObj = new PostTopicDto(topic.TopicId, topic.SemesterId, topic.MajorId, topic.Title, topic.Description, topic.Status, topic.CreatedById, topic.CreatedAt);
                 }
             }
 

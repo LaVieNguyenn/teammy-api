@@ -7,45 +7,92 @@ namespace Teammy.Infrastructure.Persistence.Repositories;
 
 public sealed class KanbanReadOnlyQueries(AppDbContext db) : IKanbanReadOnlyQueries
 {
-    public async Task<BoardVm?> GetBoardAsync(Guid groupId, CancellationToken ct)
-    {
-        var board = await db.boards.AsNoTracking().FirstOrDefaultAsync(b => b.group_id == groupId, ct);
-        if (board is null) return null;
 
-        var cols = await db.columns.AsNoTracking()
-            .Where(c => c.board_id == board.board_id)
-            .OrderBy(c => c.position)
-            .Select(c => new { c.column_id, c.column_name, c.position, c.is_done, c.due_date })
-            .ToListAsync(ct);
+public async Task<BoardVm?> GetBoardAsync(Guid groupId, CancellationToken ct)
+{
+    var board = await db.boards.AsNoTracking()
+        .FirstOrDefaultAsync(b => b.group_id == groupId, ct);
 
-        var colIds = cols.Select(c => c.column_id).ToArray();
+    if (board is null) return null;
 
-        var tasks = await db.tasks.AsNoTracking()
-            .Where(t => t.group_id == groupId && colIds.Contains(t.column_id))
-            .OrderBy(t => t.column_id)
-            .ThenBy(t => t.sort_order)
-            .ThenBy(t => t.created_at)
-            .Select(t => new { t.task_id, t.column_id, t.title, t.description, t.priority, t.status, t.due_date, t.sort_order })
-            .ToListAsync(ct);
+    var cols = await db.columns.AsNoTracking()
+        .Where(c => c.board_id == board.board_id)
+        .OrderBy(c => c.position)
+        .Select(c => new { c.column_id, c.column_name, c.position, c.is_done, c.due_date })
+        .ToListAsync(ct);
 
-        var assigns = await db.task_assignments.AsNoTracking()
-            .Where(a => tasks.Select(t => t.task_id).Contains(a.task_id))
-            .GroupBy(a => a.task_id)
-            .Select(g => new { task_id = g.Key, users = g.Select(x => x.user_id).ToArray() })
-            .ToListAsync(ct);
-        var mapAss = assigns.ToDictionary(x => x.task_id, x => (IReadOnlyList<Guid>)x.users);
+    var colIds = cols.Select(c => c.column_id).ToArray();
 
-        var colVms = cols.Select(c => new ColumnVm(
-            c.column_id, c.column_name, c.position, c.is_done, c.due_date,
-            tasks.Where(t => t.column_id == c.column_id)
-                 .Select(t => new TaskVm(
-                     t.task_id, t.column_id, t.title, t.description, t.priority, t.status, t.due_date, t.sort_order,
-                     mapAss.TryGetValue(t.task_id, out var u) ? u : Array.Empty<Guid>()
-                 )).ToList()
-        )).ToList();
+    var tasks = await db.tasks.AsNoTracking()
+        .Where(t => t.group_id == groupId && colIds.Contains(t.column_id))
+        .OrderBy(t => t.column_id)
+        .ThenBy(t => t.sort_order)
+        .ThenBy(t => t.created_at)
+        .Select(t => new
+        {
+            t.task_id,
+            t.column_id,
+            t.title,
+            t.description,
+            t.priority,
+            t.status,
+            t.due_date,
+            t.sort_order
+        })
+        .ToListAsync(ct);
 
-        return new BoardVm(board.board_id, groupId, board.board_name, colVms);
-    }
+    var taskIds = tasks.Select(t => t.task_id).ToArray();
+
+    var assigneeRows = await db.task_assignments.AsNoTracking()
+        .Where(a => taskIds.Contains(a.task_id))
+        .Select(a => new
+        {
+            a.task_id,
+            a.user_id,
+            a.user.display_name,
+            a.user.avatar_url
+        })
+        .ToListAsync(ct);
+
+    var mapAss = assigneeRows
+        .GroupBy(x => x.task_id)
+        .ToDictionary(
+            g => g.Key,
+            g => (IReadOnlyList<AssigneeVm>)g
+                .Select(x => new AssigneeVm(
+                    x.user_id,
+                    x.display_name,
+                    x.avatar_url
+                ))
+                .ToList()
+        );
+
+    var colVms = cols.Select(c => new ColumnVm(
+        c.column_id,
+        c.column_name,
+        c.position,
+        c.is_done,
+        c.due_date,
+        tasks.Where(t => t.column_id == c.column_id)
+             .Select(t => new TaskVm(
+                 t.task_id,
+                 t.column_id,
+                 t.title,
+                 t.description,
+                 t.priority,
+                 t.status,
+                 t.due_date,
+                 t.sort_order,
+                 mapAss.TryGetValue(t.task_id, out var u)
+                     ? u
+                     : Array.Empty<AssigneeVm>()
+             ))
+             .ToList()
+    )).ToList();
+
+    return new BoardVm(board.board_id, groupId, board.board_name, colVms);
+}
+
 
 public async Task<IReadOnlyList<CommentVm>> GetCommentsAsync(Guid taskId, CancellationToken ct)
 {

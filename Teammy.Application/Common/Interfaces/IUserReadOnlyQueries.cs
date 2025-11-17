@@ -15,5 +15,10 @@ namespace Teammy.Application.Common.Interfaces
             Guid semesterId,
             int limit,
             CancellationToken ct);
+
+        Task<IReadOnlyList<AdminUserListItemDto>> GetAllForAdminAsync(CancellationToken ct);
+
+        Task<AdminUserDetailDto?> GetAdminDetailAsync(Guid userId, CancellationToken ct);
+
     }
 }
