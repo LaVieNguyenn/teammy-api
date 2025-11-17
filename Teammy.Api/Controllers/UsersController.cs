@@ -31,40 +31,40 @@ public sealed class UsersController : ControllerBase
         _roles = roles;
     }
 
-    // [HttpGet]
-    // [Authorize]
-    // public async Task<ActionResult<IReadOnlyList<UserSearchDto>>> Search(
-    //     [FromQuery] string? email,
-    //     [FromQuery] Guid? groupId,
-    //     [FromQuery] Guid? semesterId,
-    //     [FromQuery] int? limit,
-    //     [FromQuery] bool onlyFree,
-    //     CancellationToken ct)
-    // {
-    //     if (string.IsNullOrWhiteSpace(email))
-    //         return BadRequest("Email query is required.");
+     [HttpGet]
+     [Authorize]
+     public async Task<ActionResult<IReadOnlyList<UserSearchDto>>> Search(
+         [FromQuery] string? email,
+         [FromQuery] Guid? groupId,
+         [FromQuery] Guid? semesterId,
+         [FromQuery] int? limit,
+         [FromQuery] bool onlyFree,
+         CancellationToken ct)
+     {
+         if (string.IsNullOrWhiteSpace(email))
+             return BadRequest("Email query is required.");
 
-    //     Guid? semId = semesterId;
+         Guid? semId = semesterId;
 
-    //     if (!semId.HasValue && groupId.HasValue)
-    //     {
-    //         var g = await _groups.GetGroupAsync(groupId.Value, ct);
-    //         if (g is null) return NotFound("Group not found");
-    //         semId = g.SemesterId;
-    //     }
+         if (!semId.HasValue && groupId.HasValue)
+         {
+             var g = await _groups.GetGroupAsync(groupId.Value, ct);
+             if (g is null) return NotFound("Group not found");
+             semId = g.SemesterId;
+         }
 
-    //     if (!semId.HasValue)
-    //     {
-    //         semId = await _groups.GetActiveSemesterIdAsync(ct);
-    //         if (!semId.HasValue) return Conflict("No active semester");
-    //     }
+         if (!semId.HasValue)
+         {
+             semId = await _groups.GetActiveSemesterIdAsync(ct);
+             if (!semId.HasValue) return Conflict("No active semester");
+         }
 
-    //     var list = await _users.SearchInvitableAsync(email, semId.Value, limit ?? 20, ct);
-    //     if (onlyFree)
-    //         list = list.Where(x => !x.HasGroupInSemester).ToList();
+         var list = await _users.SearchInvitableAsync(email, semId.Value, limit ?? 20, ct);
+         if (onlyFree)
+             list = list.Where(x => !x.HasGroupInSemester).ToList();
 
-    //     return Ok(list);
-    // }
+         return Ok(list);
+     }
 
     [HttpGet("admin")]
     [Authorize(Roles = "admin,moderator")]
