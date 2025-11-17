@@ -13,6 +13,9 @@ public sealed class ProfilePostService(
     {
         if (string.IsNullOrWhiteSpace(req.Title)) throw new ArgumentException("Title is required");
         var semesterId = await queries.GetActiveSemesterIdAsync(ct) ?? throw new InvalidOperationException("No active semester");
+        var userInActiveGroup = await groupQueries.HasActiveGroupAsync(currentUserId, semesterId, ct);
+        if (userInActiveGroup)
+            throw new InvalidOperationException("Members of active groups cannot create profile posts");
         // Reuse recruitment_post with post_type = 'profile' and user_id set
         // GroupId here is null
         return await repo.CreateRecruitmentPostAsync(semesterId, postType: "individual", groupId: null, userId: currentUserId, req.MajorId, req.Title, req.Description, req.Skills, null, ct);
