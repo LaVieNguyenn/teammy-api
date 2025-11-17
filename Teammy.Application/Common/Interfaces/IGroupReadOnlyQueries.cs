@@ -14,6 +14,7 @@ public interface IGroupReadOnlyQueries
     Task<bool> IsLeaderAsync(Guid groupId, Guid userId, CancellationToken ct);
 
     Task<bool> HasActiveMembershipInSemesterAsync(Guid userId, Guid semesterId, CancellationToken ct);
+    Task<bool> HasActiveGroupAsync(Guid userId, Guid semesterId, CancellationToken ct);
 
     Task<(int MaxMembers, int ActiveCount)> GetGroupCapacityAsync(Guid groupId, CancellationToken ct);
 
