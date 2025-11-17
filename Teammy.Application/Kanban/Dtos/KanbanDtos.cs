@@ -11,7 +11,13 @@ public sealed record ColumnVm(
 
 public sealed record TaskVm(
     Guid TaskId, Guid ColumnId, string Title, string? Description, string? Priority, string? Status,
-    DateTime? DueDate, decimal SortOrder, IReadOnlyList<Guid> Assignees
+    DateTime? DueDate, decimal SortOrder, IReadOnlyList<AssigneeVm> Assignees
+);
+
+public sealed record AssigneeVm(
+    Guid UserId,
+    string DisplayName,
+    string? AvatarUrl
 );
 
 public sealed record CreateColumnRequest(string ColumnName, int? Position);

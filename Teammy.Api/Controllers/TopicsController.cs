@@ -1,81 +1,120 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using System.Security.Claims;
+using System;
 using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Threading;
+using System.Threading.Tasks;
 using Teammy.Application.Topics.Dtos;
 using Teammy.Application.Topics.Services;
 
-namespace Teammy.Api.Controllers;
-
-[ApiController]
-[Route("api/topics")]
-public sealed class TopicsController(TopicService service) : ControllerBase
+namespace Teammy.Api.Controllers
 {
-    private Guid GetUserId()
+    [ApiController]
+    [Route("api/topics")]
+    public sealed class TopicsController : ControllerBase
     {
-        var sub = User.FindFirstValue(ClaimTypes.NameIdentifier)
-               ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub)
-               ?? User.FindFirstValue("sub");
-        if (!Guid.TryParse(sub, out var userId)) throw new UnauthorizedAccessException("Invalid token");
-        return userId;
-    }
+        private readonly TopicsService _service;
 
-    [HttpGet]
-    public Task<IReadOnlyList<TopicListItemDto>> GetAll(
-        [FromQuery] string? q,
-        [FromQuery] Guid? semesterId,
-        [FromQuery] string? status,
-        [FromQuery] Guid? majorId,
-        CancellationToken ct)
-        => service.GetAllAsync(q, semesterId, status?.Trim().ToLowerInvariant(), majorId, ct);
+        public TopicsController(TopicsService service)
+        {
+            _service = service;
+        }
 
-    [HttpGet("{id:guid}")]
-    public async Task<ActionResult<TopicDetailDto>> GetById([FromRoute] Guid id, CancellationToken ct)
-    {
-        var dto = await service.GetByIdAsync(id, ct);
-        return dto is null ? NotFound() : Ok(dto);
-    }
+        private Guid GetUserId()
+        {
+            var sub = User.FindFirstValue(ClaimTypes.NameIdentifier)
+                   ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub)
+                   ?? User.FindFirstValue("sub");
 
-    [HttpPost]
-    [Authorize]
-    public async Task<ActionResult<Guid>> Create([FromBody] CreateTopicRequest req, CancellationToken ct)
-    {
-        var id = await service.CreateAsync(GetUserId(), req, ct);
-        return CreatedAtAction(nameof(GetById), new { id }, id);
-    }
+            if (!Guid.TryParse(sub, out var id))
+                throw new UnauthorizedAccessException("Invalid token");
 
-    [HttpPut("{id:guid}")]
-    [Authorize]
-    public async Task<IActionResult> Update([FromRoute] Guid id, [FromBody] UpdateTopicRequest req, CancellationToken ct)
-    {
-        await service.UpdateAsync(id, req, ct);
-        return NoContent();
-    }
+            return id;
+        }
 
-    [HttpDelete("{id:guid}")]
-    [Authorize]
-    public async Task<IActionResult> Delete([FromRoute] Guid id, CancellationToken ct)
-    {
-        await service.DeleteAsync(id, ct);
-        return NoContent();
-    }
+        // GET /api/topics
+        [HttpGet]
+        [AllowAnonymous]
+        public Task<IReadOnlyList<TopicListItemDto>> GetAll(
+            [FromQuery] string? q,
+            [FromQuery] Guid? semesterId,
+            [FromQuery] string? status,
+            [FromQuery] Guid? majorId,
+            CancellationToken ct)
+            => _service.GetAllAsync(q, semesterId, status, majorId, ct);
 
-    [HttpGet("import/template")]
-    [Authorize]
-    public async Task<IActionResult> Template(CancellationToken ct)
-    {
-        var bytes = await service.BuildTemplateAsync(ct);
-        return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "TeammyTopicsTemplate.xlsx");
-    }
+        // GET /api/topics/{id}
+        [HttpGet("{id:guid}")]
+        [AllowAnonymous]
+        public async Task<ActionResult<TopicDetailDto>> GetById(Guid id, CancellationToken ct)
+        {
+            var dto = await _service.GetByIdAsync(id, ct);
+            if (dto is null) return NotFound();
+            return Ok(dto);
+        }
 
-    [HttpPost("import")]
-    [Authorize]
-    [Consumes("multipart/form-data")] 
-    public async Task<IActionResult> Import(IFormFile file, CancellationToken ct)
-    {
-        if (file is null || file.Length == 0) return BadRequest("File is required.");
-        await using var s = file.OpenReadStream();
-        var result = await service.ImportAsync(GetUserId(), s, ct);
-        return Ok(result);
+        // POST /api/topics
+        [HttpPost]
+        [Authorize(Roles = "admin,mentor")]
+        public async Task<IActionResult> Create([FromBody] CreateTopicRequest req, CancellationToken ct)
+        {
+            try
+            {
+                var id = await _service.CreateAsync(GetUserId(), req, ct);
+                return CreatedAtAction(nameof(GetById), new { id }, new { id });
+            }
+            catch (ArgumentException ex)         { return BadRequest(ex.Message); }
+            catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+        }
+
+        // PUT /api/topics/{id}
+        [HttpPut("{id:guid}")]
+        [Authorize(Roles = "admin,mentor")]
+        public async Task<IActionResult> Update(Guid id, [FromBody] UpdateTopicRequest req, CancellationToken ct)
+        {
+            try
+            {
+                await _service.UpdateAsync(id, req, ct);
+                return NoContent();
+            }
+            catch (KeyNotFoundException)         { return NotFound(); }
+            catch (ArgumentException ex)         { return BadRequest(ex.Message); }
+            catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+        }
+
+        // DELETE /api/topics/{id}
+        [HttpDelete("{id:guid}")]
+        [Authorize(Roles = "admin")]
+        public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+        {
+            await _service.DeleteAsync(id, ct);
+            return NoContent();
+        }
+
+        // GET /api/topics/template
+        [HttpGet("template")]
+        [Authorize(Roles = "admin,mentor")]
+        public async Task<IActionResult> GetTemplate(CancellationToken ct)
+        {
+            var bytes = await _service.BuildTemplateAsync(ct);
+            return File(bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "TeammyTopicsTemplate.xlsx");
+        }
+
+        // POST /api/topics/import
+        [HttpPost("import")]
+        [Authorize(Roles = "admin,mentor")]
+        [Consumes("multipart/form-data")]
+        public async Task<IActionResult> Import(IFormFile file, CancellationToken ct)
+        {
+            if (file is null || file.Length == 0)
+                return BadRequest("File is required.");
+
+            await using var s = file.OpenReadStream();
+            var result = await _service.ImportAsync(GetUserId(), s, ct);
+            return Ok(result);
+        }
     }
 }

@@ -1,92 +1,151 @@
 using Microsoft.EntityFrameworkCore;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Topics.Dtos;
 using Teammy.Infrastructure.Persistence;
 using Teammy.Infrastructure.Persistence.Models;
 
-namespace Teammy.Infrastructure.Persistence.Repositories;
-
-public sealed class TopicWriteRepository(AppDbContext db) : ITopicWriteRepository
+namespace Teammy.Infrastructure.Persistence.Repositories
 {
-    private static bool Valid(string s) => s is "open" or "closed" or "archived";
-
-    public async Task<Guid> CreateAsync(CreateTopicRequest req, Guid createdBy, CancellationToken ct)
+    public sealed class TopicWriteRepository : ITopicWriteRepository
     {
-        var status = string.IsNullOrWhiteSpace(req.Status) ? "open" : req.Status!.Trim().ToLowerInvariant();
-        if (!Valid(status)) throw new ArgumentException("status must be open|closed|archived");
+        private readonly AppDbContext _db;
 
-        var dup = await db.topics.AnyAsync(t => t.semester_id == req.SemesterId && t.title.ToLower() == req.Title.ToLower(), ct);
-        if (dup) throw new InvalidOperationException("Topic title already exists in this semester");
-
-        var now = DateTime.UtcNow;
-        var e = new topic
+        public TopicWriteRepository(AppDbContext db)
         {
-            topic_id    = Guid.NewGuid(),
-            semester_id = req.SemesterId,
-            major_id    = req.MajorId,
-            title       = req.Title.Trim(),
-            description = string.IsNullOrWhiteSpace(req.Description) ? null : req.Description,
-            status      = status,
-            created_by  = createdBy,
-            created_at  = now,
-        };
-
-        db.topics.Add(e);
-        await db.SaveChangesAsync(ct);
-        return e.topic_id;
-    }
-
-    public async Task UpdateAsync(Guid topicId, UpdateTopicRequest req, CancellationToken ct)
-    {
-        if (!Valid(req.Status)) throw new ArgumentException("status must be open|closed|archived");
-
-        var e = await db.topics.FirstOrDefaultAsync(x => x.topic_id == topicId, ct)
-              ?? throw new KeyNotFoundException("Topic not found");
-
-        if (!string.Equals(e.title, req.Title, StringComparison.Ordinal))
-        {
-            var dup = await db.topics.AnyAsync(t => t.semester_id == e.semester_id && t.topic_id != e.topic_id &&
-                                                    t.title.ToLower() == req.Title.ToLower(), ct);
-            if (dup) throw new InvalidOperationException("Topic title already exists in this semester");
+            _db = db;
         }
 
-        e.title       = req.Title.Trim();
-        e.description = string.IsNullOrWhiteSpace(req.Description) ? null : req.Description;
-        e.status      = req.Status.Trim().ToLowerInvariant();
-        e.major_id    = req.MajorId;
+        private static bool ValidStatus(string s) => s is "open" or "closed" or "archived";
 
-        await db.SaveChangesAsync(ct);
-    }
-
-    public async Task DeleteAsync(Guid topicId, CancellationToken ct)
-    {
-        var e = await db.topics.FirstOrDefaultAsync(x => x.topic_id == topicId, ct)
-              ?? throw new KeyNotFoundException("Topic not found");
-        db.topics.Remove(e);
-        await db.SaveChangesAsync(ct);
-    }
-
-    public async Task<(Guid topicId, bool created)> UpsertAsync(
-        Guid semesterId, string title, string? description, string status,
-        Guid? majorId, Guid createdBy, CancellationToken ct)
-    {
-        status = string.IsNullOrWhiteSpace(status) ? "open" : status.Trim().ToLowerInvariant();
-        if (!Valid(status)) throw new ArgumentException("status must be open|closed|archived");
-
-        var exist = await db.topics.FirstOrDefaultAsync(t =>
-            t.semester_id == semesterId && t.title.ToLower() == title.ToLower(), ct);
-
-        if (exist is null)
+        public async Task<Guid> CreateAsync(CreateTopicRequest req, Guid createdBy, CancellationToken ct)
         {
-            var id = await CreateAsync(new CreateTopicRequest(semesterId, majorId, title, description, status), createdBy, ct);
-            return (id, true);
+            var status = NormalizeStatus(req.Status);
+
+            var titleTrim = req.Title.Trim();
+            var dup = await _db.topics.AsNoTracking()
+                .AnyAsync(t =>
+                    t.semester_id == req.SemesterId &&
+                    t.title.ToLower() == titleTrim.ToLower(), ct);
+
+            if (dup)
+                throw new InvalidOperationException("Topic title already exists in this semester.");
+
+            var entity = new topic
+            {
+                topic_id    = Guid.NewGuid(),
+                semester_id = req.SemesterId,
+                major_id    = req.MajorId,
+                title       = titleTrim,
+                description = string.IsNullOrWhiteSpace(req.Description) ? null : req.Description,
+                status      = status,
+                created_by  = createdBy,
+                created_at  = DateTime.UtcNow
+            };
+
+            _db.topics.Add(entity);
+            await _db.SaveChangesAsync(ct);
+            return entity.topic_id;
         }
 
-        exist.description = string.IsNullOrWhiteSpace(description) ? exist.description : description;
-        exist.status      = status;
-        exist.major_id    = majorId ?? exist.major_id;
+        public async Task UpdateAsync(Guid topicId, UpdateTopicRequest req, CancellationToken ct)
+        {
+            var status = NormalizeStatus(req.Status);
 
-        await db.SaveChangesAsync(ct);
-        return (exist.topic_id, false);
+            var entity = await _db.topics
+                .FirstOrDefaultAsync(x => x.topic_id == topicId, ct)
+                ?? throw new KeyNotFoundException("Topic not found");
+
+            var titleTrim = req.Title.Trim();
+            if (!string.Equals(entity.title, titleTrim, StringComparison.Ordinal))
+            {
+                var dup = await _db.topics.AsNoTracking()
+                    .AnyAsync(t =>
+                        t.semester_id == entity.semester_id &&
+                        t.topic_id != entity.topic_id &&
+                        t.title.ToLower() == titleTrim.ToLower(), ct);
+
+                if (dup)
+                    throw new InvalidOperationException("Topic title already exists in this semester.");
+            }
+
+            entity.title       = titleTrim;
+            entity.description = string.IsNullOrWhiteSpace(req.Description) ? null : req.Description;
+            entity.status      = status;
+            entity.major_id    = req.MajorId;
+
+            await _db.SaveChangesAsync(ct);
+        }
+
+        public async Task DeleteAsync(Guid topicId, CancellationToken ct)
+        {
+            var entity = await _db.topics
+                .FirstOrDefaultAsync(x => x.topic_id == topicId, ct);
+
+            if (entity is null) return;
+
+            _db.topics.Remove(entity);
+            await _db.SaveChangesAsync(ct);
+        }
+
+        public async Task<(Guid topicId, bool created)> UpsertAsync(
+            Guid semesterId,
+            string title,
+            string? description,
+            string status,
+            Guid? majorId,
+            Guid createdBy,
+            CancellationToken ct)
+        {
+            status = NormalizeStatus(status);
+            var titleTrim = title.Trim();
+
+            var exist = await _db.topics
+                .FirstOrDefaultAsync(t =>
+                    t.semester_id == semesterId &&
+                    t.title.ToLower() == titleTrim.ToLower(), ct);
+
+            if (exist is null)
+            {
+                var entity = new topic
+                {
+                    topic_id    = Guid.NewGuid(),
+                    semester_id = semesterId,
+                    major_id    = majorId,
+                    title       = titleTrim,
+                    description = string.IsNullOrWhiteSpace(description) ? null : description,
+                    status      = status,
+                    created_by  = createdBy,
+                    created_at  = DateTime.UtcNow
+                };
+
+                _db.topics.Add(entity);
+                await _db.SaveChangesAsync(ct);
+                return (entity.topic_id, true);
+            }
+
+            if (!string.IsNullOrWhiteSpace(description))
+                exist.description = description;
+
+            exist.status = status;
+            if (majorId.HasValue)
+                exist.major_id = majorId;
+
+            await _db.SaveChangesAsync(ct);
+            return (exist.topic_id, false);
+        }
+
+        private static string NormalizeStatus(string status)
+        {
+            if (string.IsNullOrWhiteSpace(status)) return "open";
+            var s = status.Trim().ToLowerInvariant();
+            if (!ValidStatus(s))
+                throw new ArgumentException("Status must be open|closed|archived.");
+            return s;
+        }
     }
 }

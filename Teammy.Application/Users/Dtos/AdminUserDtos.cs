@@ -1,0 +1,35 @@
+using System;
+
+namespace Teammy.Application.Users.Dtos;
+
+public sealed record AdminUserListItemDto(
+    Guid   UserId,
+    string Email,
+    string DisplayName,
+    string? AvatarUrl,
+    string Role,
+    bool   EmailVerified,
+    bool   IsActive,
+    Guid?  MajorId,
+    string? MajorName,
+    string? StudentCode,
+    string? Gender,
+    DateTime CreatedAt
+);
+
+public sealed record AdminUserDetailDto(
+    Guid   UserId,
+    string Email,
+    string DisplayName,
+    string? AvatarUrl,
+    string Role,
+    bool   EmailVerified,
+    bool   IsActive,
+    Guid?  MajorId,
+    string? MajorName,
+    string? StudentCode,
+    string? Gender,
+    bool   SkillsCompleted,
+    DateTime CreatedAt,
+    DateTime UpdatedAt
+);
