@@ -56,7 +56,7 @@ namespace Teammy.Api.Controllers
 
         // POST /api/topics
         [HttpPost]
-        [Authorize(Roles = "admin,mentor")]
+        [Authorize(Roles = "moderator")]
         public async Task<IActionResult> Create([FromBody] CreateTopicRequest req, CancellationToken ct)
         {
             try
@@ -70,7 +70,7 @@ namespace Teammy.Api.Controllers
 
         // PUT /api/topics/{id}
         [HttpPut("{id:guid}")]
-        [Authorize(Roles = "admin,mentor")]
+        [Authorize(Roles = "moderator")]
         public async Task<IActionResult> Update(Guid id, [FromBody] UpdateTopicRequest req, CancellationToken ct)
         {
             try
@@ -85,7 +85,7 @@ namespace Teammy.Api.Controllers
 
         // DELETE /api/topics/{id}
         [HttpDelete("{id:guid}")]
-        [Authorize(Roles = "admin")]
+        [Authorize(Roles = "moderator")]
         public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         {
             await _service.DeleteAsync(id, ct);
@@ -94,7 +94,7 @@ namespace Teammy.Api.Controllers
 
         // GET /api/topics/template
         [HttpGet("template")]
-        [Authorize(Roles = "admin,mentor")]
+        [Authorize(Roles = "moderator")]
         public async Task<IActionResult> GetTemplate(CancellationToken ct)
         {
             var bytes = await _service.BuildTemplateAsync(ct);
@@ -105,7 +105,7 @@ namespace Teammy.Api.Controllers
 
         // POST /api/topics/import
         [HttpPost("import")]
-        [Authorize(Roles = "admin,mentor")]
+        [Authorize(Roles = "moderator")]
         [Consumes("multipart/form-data")]
         public async Task<IActionResult> Import(IFormFile file, CancellationToken ct)
         {
