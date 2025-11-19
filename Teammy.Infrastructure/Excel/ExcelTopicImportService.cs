@@ -2,10 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Mail;
 using System.Threading;
 using System.Threading.Tasks;
 using ClosedXML.Excel;
 using Teammy.Application.Common.Interfaces;
+using Teammy.Application.Common.Utils;
 using Teammy.Application.Topics.Dtos;
 
 namespace Teammy.Infrastructure.Excel;
@@ -177,6 +179,201 @@ public sealed class ExcelTopicImportService(
         }
 
         return new TopicImportResult(total, created, updated, skipped, errors);
+    }
+
+    public async Task<TopicImportValidationResult> ValidateRowsAsync(
+        IReadOnlyList<TopicImportPayloadRow> rows,
+        CancellationToken ct)
+    {
+        var safeRows = rows ?? Array.Empty<TopicImportPayloadRow>();
+        var results = new List<TopicImportRowValidation>(safeRows.Count);
+
+        var semesterCache = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        var majorCache = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        var mentorCache = new Dictionary<string, (bool IsValid, string? Error)>(StringComparer.OrdinalIgnoreCase);
+
+        int validCount = 0, invalidCount = 0;
+
+        foreach (var row in safeRows)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var columns = new List<TopicColumnValidation>(Headers.Length);
+            var messages = new List<string>();
+
+            var rowNumber = row is not null && row.RowNumber > 0
+                ? row.RowNumber
+                : results.Count + 1;
+            string semesterCode = row?.SemesterCode?.Trim() ?? string.Empty;
+            string title = row?.Title?.Trim() ?? string.Empty;
+            string description = row?.Description?.Trim() ?? string.Empty;
+            string status = row?.Status?.Trim() ?? string.Empty;
+            string major = row?.MajorName?.Trim() ?? string.Empty;
+            var mentorEmails = row?.MentorEmails ?? Array.Empty<string>();
+
+            bool rowIsEmpty = string.IsNullOrWhiteSpace(semesterCode)
+                              && string.IsNullOrWhiteSpace(title)
+                              && string.IsNullOrWhiteSpace(description)
+                              && string.IsNullOrWhiteSpace(status)
+                              && string.IsNullOrWhiteSpace(major)
+                              && (mentorEmails.Count == 0 || mentorEmails.All(string.IsNullOrWhiteSpace));
+
+            if (rowIsEmpty)
+            {
+                const string emptyMessage = "Row is empty";
+                columns.Add(new TopicColumnValidation("SemesterCode", false, emptyMessage));
+                columns.Add(new TopicColumnValidation("Title", false, emptyMessage));
+                columns.Add(new TopicColumnValidation("Description", false, emptyMessage));
+                columns.Add(new TopicColumnValidation("Status", false, emptyMessage));
+                columns.Add(new TopicColumnValidation("MajorName", false, emptyMessage));
+                columns.Add(new TopicColumnValidation("MentorEmails", false, emptyMessage));
+                messages.Add("Row has no data");
+                invalidCount++;
+                results.Add(new TopicImportRowValidation(rowNumber, false, columns, messages));
+                continue;
+            }
+
+            // SemesterCode
+            bool semesterValid = true;
+            string? semesterError = null;
+            if (string.IsNullOrWhiteSpace(semesterCode))
+            {
+                semesterValid = false;
+                semesterError = "SemesterCode is required";
+            }
+            else if (!semesterCache.TryGetValue(semesterCode, out var cachedSemesterValid))
+            {
+                try
+                {
+                    _ = SemesterCode.Parse(semesterCode);
+                    semesterCache[semesterCode] = true;
+                }
+                catch (Exception ex)
+                {
+                    semesterCache[semesterCode] = false;
+                    semesterValid = false;
+                    semesterError = ex.Message;
+                }
+            }
+            else
+            {
+                semesterValid = cachedSemesterValid;
+                if (!cachedSemesterValid)
+                    semesterError = "SemesterCode format is invalid";
+            }
+            columns.Add(new TopicColumnValidation("SemesterCode", semesterValid, semesterError));
+
+            // Title
+            bool titleValid = !string.IsNullOrWhiteSpace(title);
+            columns.Add(new TopicColumnValidation("Title", titleValid, titleValid ? null : "Title is required"));
+
+            columns.Add(new TopicColumnValidation("Description", true, null));
+
+            // Status
+            bool statusValid = true;
+            string? statusError = null;
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                status = status.ToLowerInvariant();
+                if (!Allowed.Contains(status))
+                {
+                    statusValid = false;
+                    statusError = "Status must be open, closed, or archived";
+                }
+            }
+            columns.Add(new TopicColumnValidation("Status", statusValid, statusError));
+
+            // Major
+            bool majorValid = true;
+            string? majorError = null;
+            if (!string.IsNullOrWhiteSpace(major))
+            {
+                if (!majorCache.TryGetValue(major, out var exists))
+                {
+                    var majorId = await read.FindMajorIdByNameAsync(major, ct);
+                    exists = majorId is not null;
+                    majorCache[major] = exists;
+                }
+
+                if (!exists)
+                {
+                    majorValid = false;
+                    majorError = $"Major '{major}' not found";
+                }
+            }
+            columns.Add(new TopicColumnValidation("MajorName", majorValid, majorError));
+
+            // Mentors
+            bool mentorsValid = true;
+            var mentorErrors = new List<string>();
+            var uniqueMentors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var raw in mentorEmails ?? Array.Empty<string>())
+            {
+                var email = raw?.Trim();
+                if (string.IsNullOrWhiteSpace(email)) continue;
+
+                if (!uniqueMentors.Add(email))
+                {
+                    mentorsValid = false;
+                    mentorErrors.Add($"Duplicate mentor email '{email}' in row");
+                    continue;
+                }
+
+                if (!IsValidEmail(email))
+                {
+                    mentorsValid = false;
+                    mentorErrors.Add($"Mentor email '{email}' format is invalid");
+                    continue;
+                }
+
+                var mentorCheck = await EnsureMentorAsync(email, mentorCache, ct);
+                if (!mentorCheck.IsValid)
+                {
+                    mentorsValid = false;
+                    mentorErrors.Add(mentorCheck.Error ?? $"Mentor '{email}' not found");
+                }
+            }
+
+            columns.Add(new TopicColumnValidation(
+                "MentorEmails",
+                mentorsValid,
+                mentorsValid ? null : string.Join("; ", mentorErrors)));
+
+            bool rowValid = columns.All(c => c.IsValid);
+            if (rowValid) validCount++; else invalidCount++;
+
+            results.Add(new TopicImportRowValidation(rowNumber, rowValid, columns, messages));
+        }
+
+        var summary = new TopicValidationSummary(safeRows.Count, validCount, invalidCount);
+        return new TopicImportValidationResult(summary, results);
+
+        async Task<(bool IsValid, string? Error)> EnsureMentorAsync(
+            string email,
+            IDictionary<string, (bool IsValid, string? Error)> cache,
+            CancellationToken token)
+        {
+            if (cache.TryGetValue(email, out var cached))
+                return cached;
+
+            try
+            {
+                await mentorLookup.GetMentorIdByEmailAsync(email, token);
+                cache[email] = (true, null);
+                return (true, null);
+            }
+            catch (Exception ex)
+            {
+                cache[email] = (false, ex.Message);
+                return (false, ex.Message);
+            }
+        }
+
+        static bool IsValidEmail(string email)
+        {
+            try { _ = new MailAddress(email); return true; }
+            catch { return false; }
+        }
     }
 
     // ===== Helper parse danh sách email mentor =====
