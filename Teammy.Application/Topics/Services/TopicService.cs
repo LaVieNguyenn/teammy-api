@@ -86,5 +86,14 @@ namespace Teammy.Application.Topics.Services
 
         public Task<TopicImportResult> ImportAsync(Guid currentUserId, Stream s, CancellationToken ct)
             => _excel.ImportAsync(s, currentUserId, ct);
+
+        public Task<TopicImportValidationResult> ValidateImportAsync(
+            TopicImportValidationRequest request,
+            CancellationToken ct)
+        {
+            if (request is null) throw new ArgumentNullException(nameof(request));
+            var rows = request.Rows ?? Array.Empty<TopicImportPayloadRow>();
+            return _excel.ValidateRowsAsync(rows, ct);
+        }
     }
 }

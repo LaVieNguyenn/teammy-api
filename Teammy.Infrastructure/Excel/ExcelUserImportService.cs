@@ -13,6 +13,12 @@ public sealed class ExcelUserImportService(
 ) : IUserImportService
 {
     private static readonly string[] Headers = { "Email","DisplayName","Role","MajorName","Gender","StudentCode" };
+    private static readonly HashSet<string> AllowedGenders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "male",
+        "female",
+        "other"
+    };
 
     public async Task<byte[]> BuildTemplateAsync(CancellationToken ct)
     {
@@ -192,6 +198,164 @@ public sealed class ExcelUserImportService(
             CreatedCount: created,
             SkippedCount: skipped,
             Errors: errors);
+    }
+
+    public async Task<UserImportValidationResult> ValidateRowsAsync(
+        IReadOnlyList<UserImportPayloadRow> rows,
+        CancellationToken ct)
+    {
+        var safeRows = rows ?? Array.Empty<UserImportPayloadRow>();
+        var results = new List<UserImportRowValidation>(safeRows.Count);
+
+        var emailFirstOccurrence = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var emailExistsCache = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        var roleCache = new Dictionary<string, Guid?>(StringComparer.OrdinalIgnoreCase);
+        var majorCache = new Dictionary<string, Guid?>(StringComparer.OrdinalIgnoreCase);
+
+        int validCount = 0, invalidCount = 0;
+
+        foreach (var row in safeRows)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var columns = new List<UserColumnValidation>(Headers.Length);
+            var messages = new List<string>();
+
+            var rowNumber = row is not null && row.RowNumber > 0
+                ? row.RowNumber
+                : results.Count + 1;
+
+            string email = row?.Email?.Trim() ?? string.Empty;
+            string displayName = row?.DisplayName?.Trim() ?? string.Empty;
+            string role = row?.Role?.Trim() ?? string.Empty;
+            string major = row?.MajorName?.Trim() ?? string.Empty;
+            string gender = row?.Gender?.Trim() ?? string.Empty;
+            string studentCode = row?.StudentCode?.Trim() ?? string.Empty;
+
+            bool rowIsEmpty = string.IsNullOrWhiteSpace(email)
+                              && string.IsNullOrWhiteSpace(displayName)
+                              && string.IsNullOrWhiteSpace(role)
+                              && string.IsNullOrWhiteSpace(major)
+                              && string.IsNullOrWhiteSpace(gender)
+                              && string.IsNullOrWhiteSpace(studentCode);
+
+            if (rowIsEmpty)
+            {
+                const string emptyMessage = "Row is empty";
+                columns.Add(new UserColumnValidation("Email", false, emptyMessage));
+                columns.Add(new UserColumnValidation("DisplayName", false, emptyMessage));
+                columns.Add(new UserColumnValidation("Role", false, emptyMessage));
+                columns.Add(new UserColumnValidation("MajorName", false, emptyMessage));
+                columns.Add(new UserColumnValidation("Gender", false, emptyMessage));
+                columns.Add(new UserColumnValidation("StudentCode", false, emptyMessage));
+                messages.Add("Row has no data");
+                invalidCount++;
+                results.Add(new UserImportRowValidation(rowNumber, false, columns, messages));
+                continue;
+            }
+
+            bool emailValid = true;
+            var emailErrors = new List<string>();
+
+            if (string.IsNullOrWhiteSpace(email))
+            {
+                emailValid = false;
+                emailErrors.Add("Email is required");
+            }
+            else if (!IsValidEmail(email))
+            {
+                emailValid = false;
+                emailErrors.Add("Email format is invalid");
+            }
+            else if (!emailFirstOccurrence.TryAdd(email, rowNumber))
+            {
+                emailValid = false;
+                emailErrors.Add("Duplicate email within payload");
+            }
+            else if (await EmailExistsAsync(email, emailExistsCache, ct))
+            {
+                emailValid = false;
+                emailErrors.Add("Email already exists in system");
+            }
+
+            columns.Add(new UserColumnValidation("Email", emailValid, emailValid ? null : string.Join("; ", emailErrors)));
+
+            bool nameValid = !string.IsNullOrWhiteSpace(displayName);
+            columns.Add(new UserColumnValidation("DisplayName", nameValid, nameValid ? null : "DisplayName is required"));
+
+            bool roleValid = true;
+            string? roleError = null;
+            if (string.IsNullOrWhiteSpace(role))
+            {
+                roleValid = false;
+                roleError = "Role is required";
+            }
+            else
+            {
+                if (!roleCache.TryGetValue(role, out var roleId))
+                {
+                    roleId = await roleQueries.GetRoleIdByNameAsync(role, ct);
+                    roleCache[role] = roleId;
+                }
+
+                if (roleId is null)
+                {
+                    roleValid = false;
+                    roleError = $"Role '{role}' not found";
+                }
+            }
+            columns.Add(new UserColumnValidation("Role", roleValid, roleError));
+
+            bool majorValid = true;
+            string? majorError = null;
+            if (!string.IsNullOrWhiteSpace(major))
+            {
+                if (!majorCache.TryGetValue(major, out var majorId))
+                {
+                    majorId = await majorQueries.FindMajorIdByNameAsync(major, ct);
+                    majorCache[major] = majorId;
+                }
+
+                if (majorId is null)
+                {
+                    majorValid = false;
+                    majorError = $"Major '{major}' not found";
+                }
+            }
+            columns.Add(new UserColumnValidation("MajorName", majorValid, majorError));
+
+            bool genderValid = true;
+            string? genderError = null;
+            if (!string.IsNullOrWhiteSpace(gender))
+            {
+                var normalizedGender = gender.ToLowerInvariant();
+                if (!AllowedGenders.Contains(normalizedGender))
+                {
+                    genderValid = false;
+                    genderError = "Gender must be male, female, or other";
+                }
+            }
+            columns.Add(new UserColumnValidation("Gender", genderValid, genderError));
+            bool studentCodeValid = string.IsNullOrWhiteSpace(studentCode) || studentCode.Length <= 30;
+            string? studentCodeError = studentCodeValid ? null : "StudentCode must be <= 30 characters";
+            columns.Add(new UserColumnValidation("StudentCode", studentCodeValid, studentCodeError));
+
+            bool rowValid = columns.All(c => c.IsValid);
+            if (rowValid) validCount++; else invalidCount++;
+
+            results.Add(new UserImportRowValidation(rowNumber, rowValid, columns, messages));
+        }
+
+        var summary = new UsersValidationSummary(safeRows.Count, validCount, invalidCount);
+        return new UserImportValidationResult(summary, results);
+
+        async Task<bool> EmailExistsAsync(string normalizedEmail, Dictionary<string, bool> cache, CancellationToken token)
+        {
+            if (cache.TryGetValue(normalizedEmail, out var exists)) return exists;
+            exists = await userWriteRepo.EmailExistsAnyAsync(normalizedEmail, token);
+            cache[normalizedEmail] = exists;
+            return exists;
+        }
     }
 
     private static bool IsValidEmail(string email)

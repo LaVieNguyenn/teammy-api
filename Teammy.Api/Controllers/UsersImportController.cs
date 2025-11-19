@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Teammy.Application.Common.Interfaces;
+using Teammy.Application.Users.Import.Dtos;
 
 namespace Teammy.Api.Controllers;
 
@@ -46,6 +47,16 @@ public sealed class UsersImportController : ControllerBase
             : Guid.Empty;
 
         var result = await _service.ImportAsync(stream, performedBy, ct);
+        return Ok(result);
+    }
+
+    [HttpPost("validate")]
+    public async Task<IActionResult> Validate([FromBody] UserImportValidationRequest request, CancellationToken ct)
+    {
+        if (request is null || request.Rows is null)
+            return BadRequest("Rows payload is required");
+
+        var result = await _service.ValidateRowsAsync(request.Rows, ct);
         return Ok(result);
     }
 }
