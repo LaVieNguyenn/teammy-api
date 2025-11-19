@@ -116,5 +116,18 @@ namespace Teammy.Api.Controllers
             var result = await _service.ImportAsync(GetUserId(), s, ct);
             return Ok(result);
         }
+
+        [HttpPost("import/validate")]
+        [Authorize(Roles = "moderator")]
+        public async Task<IActionResult> ValidateImport(
+            [FromBody] TopicImportValidationRequest request,
+            CancellationToken ct)
+        {
+            if (request is null || request.Rows is null)
+                return BadRequest("Rows payload is required.");
+
+            var result = await _service.ValidateImportAsync(request, ct);
+            return Ok(result);
+        }
     }
 }
