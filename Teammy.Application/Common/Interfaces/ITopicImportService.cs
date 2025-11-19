@@ -10,5 +10,8 @@ namespace Teammy.Application.Common.Interfaces
     {
         Task<byte[]> BuildTemplateAsync(CancellationToken ct);
         Task<TopicImportResult> ImportAsync(Stream excelStream, Guid currentUserId, CancellationToken ct);
+        Task<TopicImportValidationResult> ValidateRowsAsync(
+            IReadOnlyList<TopicImportPayloadRow> rows,
+            CancellationToken ct);
     }
 }
