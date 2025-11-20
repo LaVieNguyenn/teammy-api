@@ -9,8 +9,7 @@ public sealed class CreateRecruitmentPostRequest
     public string? Description { get; set; }
     public string? Skills { get; set; }
     public Guid? MajorId { get; set; }
-
-    // Aliases to accept alternative names from clients
+    public DateTime? ExpiresAt { get; set; }
     [JsonPropertyName("position_needed")]
     public string? PositionNeeded
     {
@@ -27,21 +26,21 @@ public sealed class CreateRecruitmentPostRequest
 }
 
 public sealed record RecruitmentPostSummaryDto(
-    Guid   Id,
-    Guid   SemesterId,
+    Guid Id,
+    Guid SemesterId,
     string? SemesterName,
     PostSemesterDto? Semester,
     string Title,
     string Status,
     string Type,
-    Guid?  GroupId,
+    Guid? GroupId,
     string? GroupName,
     PostGroupDto? Group,
-    Guid?  MajorId,
+    Guid? MajorId,
     string? MajorName,
     PostMajorDto? Major,
     string? PositionNeeded,
-    int    CurrentMembers,
+    int CurrentMembers,
     string? Description,
     DateTime CreatedAt,
     DateTime? ApplicationDeadline,
@@ -52,23 +51,23 @@ public sealed record RecruitmentPostSummaryDto(
 );
 
 public sealed record RecruitmentPostDetailDto(
-    Guid   Id,
-    Guid   SemesterId,
+    Guid Id,
+    Guid SemesterId,
     string? SemesterName,
     PostSemesterDto? Semester,
     string Title,
     string Status,
     string Type,
-    Guid?  GroupId,
+    Guid? GroupId,
     string? GroupName,
     PostGroupDto? Group,
-    Guid?  MajorId,
+    Guid? MajorId,
     string? MajorName,
     PostMajorDto? Major,
     string? Description,
     string? PositionNeeded,
     DateTime CreatedAt,
-    int     CurrentMembers,
+    int CurrentMembers,
     DateTime? ApplicationDeadline,
     bool HasApplied,
     Guid? MyApplicationId,
@@ -79,9 +78,9 @@ public sealed record RecruitmentPostDetailDto(
 public sealed record CreateApplicationRequest(string? Message);
 
 public sealed record ApplicationDto(
-    Guid   ApplicationId,
-    Guid?  ApplicantUserId,
-    Guid?  ApplicantGroupId,
+    Guid ApplicationId,
+    Guid? ApplicantUserId,
+    Guid? ApplicantGroupId,
     string Status,
     string? Message,
     DateTime CreatedAt,
@@ -96,7 +95,6 @@ public sealed class UpdateRecruitmentPostRequest
     public string? Description { get; set; }
     public string? Skills { get; set; }
 
-    // Aliases to accept alternative names from clients
     [JsonPropertyName("position_needed")]
     public string? PositionNeeded
     {
@@ -110,4 +108,5 @@ public sealed class UpdateRecruitmentPostRequest
         get => Skills;
         set => Skills = value;
     }
+    
 }
