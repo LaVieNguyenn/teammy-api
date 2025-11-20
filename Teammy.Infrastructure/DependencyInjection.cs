@@ -6,6 +6,7 @@ using Teammy.Application.Files;
 using Teammy.Application.Kanban.Interfaces;
 using Teammy.Application.Kanban.Services;
 using Teammy.Application.Topics.Services;
+using Teammy.Application.Semesters.Services;
 using Teammy.Infrastructure.Auth;
 using Teammy.Infrastructure.Email;
 using Teammy.Infrastructure.Excel;
@@ -13,7 +14,6 @@ using Teammy.Infrastructure.Files;
 using Teammy.Infrastructure.Persistence;
 using Teammy.Infrastructure.Persistence.Repositories;
 using Teammy.Infrastructure.Topics;
-
 namespace Teammy.Infrastructure;
 
 public static class DependencyInjection
@@ -76,6 +76,13 @@ public static class DependencyInjection
         services.AddScoped<IFileStorage, GoogleDriveStorage>();
         services.AddScoped<KanbanService>();
 
+        // Semester & Semester policies
+        services.AddScoped<ISemesterRepository, SemesterRepository>();
+        services.AddScoped<ISemesterReadOnlyQueries, SemesterReadOnlyQueries>();
+        services.AddScoped<SemesterService>(); 
+        
+        // Semester phase guard
+        services.AddScoped<SemesterPhaseGuard>();
         return services;
     }
 }

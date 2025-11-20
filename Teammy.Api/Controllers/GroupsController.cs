@@ -59,13 +59,9 @@ public sealed class GroupsController : ControllerBase
     {
         var g = await _service.GetGroupAsync(id, ct);
         if (g is null) return NotFound();
-
         var members = await _service.ListActiveMembersAsync(id, ct);
-
-        // Build enriched object similar to recruitment object-only
         var leaderMember = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase));
         var nonLeaderMembers = members.Where(m => !string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase)).ToList();
-
         PostSemesterDto? semesterObj = null;
         if (g.SemesterId != Guid.Empty)
         {
@@ -76,7 +72,6 @@ public sealed class GroupsController : ControllerBase
                 semesterObj = new PostSemesterDto(semId, season, year, start, end, active);
             }
         }
-
         PostMajorDto? majorObj = null;
         if (g.MajorId.HasValue)
         {
@@ -87,8 +82,6 @@ public sealed class GroupsController : ControllerBase
                 majorObj = new PostMajorDto(mid, mname);
             }
         }
-
-        // Topic info (topicId + topicName)
         Guid? topicId = g.TopicId;
         string? topicName = null;
         if (topicId.HasValue)
@@ -113,7 +106,7 @@ public sealed class GroupsController : ControllerBase
             topicName,
             mentor = mentor is null ? null : new { mentor.UserId, mentor.Email, mentor.DisplayName, mentor.AvatarUrl },
             leader = leaderMember,
-            members = nonLeaderMembers // exclude leader
+            members = nonLeaderMembers 
         });
     }
 
@@ -136,11 +129,9 @@ public sealed class GroupsController : ControllerBase
         var userId = GetUserId();
         var list = await _service.ListMyGroupsAsync(userId, semesterId, ct);
 
-        // Shape to object-only similar to recruitment post details
         var shaped = new List<object>(list.Count);
         foreach (var g in list)
         {
-            // Semester object
             PostSemesterDto? semesterObj = null;
             var s = await _groupQueries.GetSemesterAsync(g.SemesterId, ct);
             if (s.HasValue)
@@ -148,10 +139,7 @@ public sealed class GroupsController : ControllerBase
                 var (semId, season, year, start, end, active) = s.Value;
                 semesterObj = new PostSemesterDto(semId, season, year, start, end, active);
             }
-
-            // Detail for optional fields (description/major)
             var detail = await _service.GetGroupAsync(g.GroupId, ct);
-
             PostMajorDto? majorObj = null;
             if (detail?.MajorId is Guid mid)
             {
@@ -172,14 +160,10 @@ public sealed class GroupsController : ControllerBase
                     topicObj = new PostTopicDto(topic.TopicId, topic.SemesterId, topic.MajorId, topic.Title, topic.Description, topic.Status, topic.CreatedById, topic.CreatedAt);
                 }
             }
-
             var mentorDto = await _groupQueries.GetMentorAsync(g.GroupId, ct);
-
-            // Members (leader separated)
             var members = await _service.ListActiveMembersAsync(g.GroupId, ct);
             var leaderMember = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase));
             var nonLeaderMembers = members.Where(m => !string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase)).ToList();
-
             shaped.Add(new
             {
                 id = g.GroupId,
@@ -202,14 +186,10 @@ public sealed class GroupsController : ControllerBase
     }
 
     [HttpGet("{id:guid}/members")]
-    [Authorize]
+    [AllowAnonymous]
     public async Task<ActionResult<IReadOnlyList<Teammy.Application.Groups.Dtos.GroupMemberDto>>> Members([FromRoute] Guid id, CancellationToken ct)
     {
         var members = await _service.ListActiveMembersAsync(id, ct);
-        var currentUserId = GetUserId();
-        var isActiveMember = members.Any(m => m.UserId == currentUserId);
-        if (!isActiveMember)
-            return StatusCode(403, "Members only");
         return Ok(members);
     }
 
@@ -242,8 +222,6 @@ public sealed class GroupsController : ControllerBase
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (KeyNotFoundException) { return NotFound(); }
     }
-
-    // Update group info (leader only)
     [HttpPatch("{id:guid}")]
     [Authorize]
     public async Task<ActionResult> Update([FromRoute] Guid id, [FromBody] UpdateGroupRequestBody body, CancellationToken ct)
@@ -266,7 +244,6 @@ public sealed class GroupsController : ControllerBase
         catch (InvalidOperationException ex) { return Conflict(ex.Message); }
         catch (KeyNotFoundException) { return NotFound(); }
     }
-
     [HttpGet("membership")]
     [Authorize]
     public Task<Teammy.Application.Groups.Dtos.UserGroupCheckDto> CheckMembership(
