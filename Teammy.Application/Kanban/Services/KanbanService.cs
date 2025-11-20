@@ -14,9 +14,9 @@ public sealed class KanbanService(
     // Board
     public async Task<BoardVm> GetBoardAsync(Guid groupId, Guid currentUserId, CancellationToken ct)
     {
-        if (!await access.IsMemberAsync(groupId, currentUserId, ct))
-            throw new UnauthorizedAccessException("Not a group member");
-        if( !await access.IsGroupActiveAsync(groupId, ct))
+        if (!await HasMemberOrMentorAccess(groupId, currentUserId, ct))
+            throw new UnauthorizedAccessException("Not a group member or mentor");
+        if (!await access.IsGroupActiveAsync(groupId, ct))
             throw new InvalidOperationException("Group is not active");
         await repo.EnsureBoardForGroupAsync(groupId, ct); 
         var vm = await read.GetBoardAsync(groupId, ct);
@@ -87,24 +87,28 @@ public sealed class KanbanService(
     // Comments
     public async Task<Guid> AddCommentAsync(Guid groupId, Guid taskId, Guid currentUserId, CreateCommentRequest req, CancellationToken ct)
     {
-        if (!await access.IsMemberAsync(groupId, currentUserId, ct))
-            throw new UnauthorizedAccessException("Not a group member");
+        if (!await HasMemberOrMentorAccess(groupId, currentUserId, ct))
+            throw new UnauthorizedAccessException("Not a group member or mentor");
         return await repo.AddCommentAsync(taskId, currentUserId, req.Content.Trim(), ct);
     }
 
     public async Task<IReadOnlyList<CommentVm>> GetCommentsAsync(Guid groupId, Guid taskId, Guid currentUserId, CancellationToken ct)
     {
-        if (!await access.IsMemberAsync(groupId, currentUserId, ct))
-            throw new UnauthorizedAccessException("Not a group member");
+        if (!await HasMemberOrMentorAccess(groupId, currentUserId, ct))
+            throw new UnauthorizedAccessException("Not a group member or mentor");
         return await read.GetCommentsAsync(taskId, ct);
     }
 
     public async Task DeleteCommentAsync(Guid groupId, Guid commentId, Guid currentUserId, CancellationToken ct)
     {
-        if (!await access.IsMemberAsync(groupId, currentUserId, ct))
-            throw new UnauthorizedAccessException("Not a group member");
+        if (!await HasMemberOrMentorAccess(groupId, currentUserId, ct))
+            throw new UnauthorizedAccessException("Not a group member or mentor");
         await repo.DeleteCommentAsync(commentId, currentUserId, ct);
     }
+
+    private async Task<bool> HasMemberOrMentorAccess(Guid groupId, Guid userId, CancellationToken ct)
+        => await access.IsMemberAsync(groupId, userId, ct)
+           || await access.IsMentorAsync(groupId, userId, ct);
 
     // Shared files
     public async Task<UploadFileResult> UploadFileAsync(Guid groupId, Guid currentUserId, Guid? taskId, Stream stream, string fileName, string? description, CancellationToken ct)
