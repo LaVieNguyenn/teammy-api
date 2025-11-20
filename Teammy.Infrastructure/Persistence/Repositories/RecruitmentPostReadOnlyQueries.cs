@@ -220,7 +220,7 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
             orderby c.created_at descending
             select new ValueTuple<Guid, Guid>(c.candidate_id, c.post_id))
             .FirstOrDefaultAsync(ct)
-            .ContinueWith(t => t.Result == default ? (ValueTuple<Guid,Guid>?)null : t.Result, ct);
+            .ContinueWith(t => t.Result == default ? (ValueTuple<Guid, Guid>?)null : t.Result, ct);
 
     public Task<(Guid ApplicationId, string Status)?> FindApplicationByPostAndUserAsync(Guid postId, Guid userId, CancellationToken ct)
         => db.candidates.AsNoTracking()
@@ -228,7 +228,19 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
             .OrderByDescending(c => c.created_at)
             .Select(c => new ValueTuple<Guid, string>(c.candidate_id, c.status))
             .FirstOrDefaultAsync(ct)
-            .ContinueWith(t => t.Result == default ? (ValueTuple<Guid,string>?)null : t.Result, ct);
+            .ContinueWith(t => t.Result == default ? (ValueTuple<Guid, string>?)null : t.Result, ct);
+    public Task<(Guid ApplicationId, string Status)?> FindApplicationByPostAndGroupAsync(
+        Guid postId,
+        Guid groupId,
+        CancellationToken ct)
+        => db.candidates.AsNoTracking()
+            .Where(c => c.post_id == postId && c.applicant_group_id == groupId)
+            .OrderByDescending(c => c.created_at)
+            .Select(c => new ValueTuple<Guid, string>(c.candidate_id, c.status))
+            .FirstOrDefaultAsync(ct)
+            .ContinueWith(
+                t => t.Result == default ? (ValueTuple<Guid, string>?)null : t.Result,
+                ct);
 
     public async Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListAppliedByUserAsync(Guid userId, Teammy.Application.Posts.Dtos.ExpandOptions expand, CancellationToken ct)
     {
@@ -351,7 +363,7 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                     ? new PostMajorDto(x.m.major_id, x.m.major_name)
                     : null,
                 x.p.description,
-                x.p.position_needed, // Skills (for individual posts)
+                x.p.position_needed,
                 x.p.created_at
             ))
             .ToListAsync(ct);
@@ -387,7 +399,7 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                     : null,
                 x.p.description,
                 x.p.created_at,
-                x.p.position_needed // Skills (for individual posts)
+                x.p.position_needed
             ))
             .FirstOrDefaultAsync(ct);
 }

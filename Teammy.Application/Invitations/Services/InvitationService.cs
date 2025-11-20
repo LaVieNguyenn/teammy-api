@@ -18,24 +18,15 @@ public sealed class InvitationService(
 {
     public async Task<(Guid InvitationId, bool EmailSent)> InviteUserAsync(Guid groupId, Guid inviteeUserId, Guid invitedByUserId, string? message, CancellationToken ct)
     {
-        // Ensure leader and capacity
         var isLeader = await groupQueries.IsLeaderAsync(groupId, invitedByUserId, ct);
         if (!isLeader) throw new UnauthorizedAccessException("Leader only");
-
         var (maxMembers, activeCount) = await groupQueries.GetGroupCapacityAsync(groupId, ct);
         if (activeCount >= maxMembers) throw new InvalidOperationException("Group is full");
-
-        // Get group details
         var g = await groupQueries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
-
-        // Enforce one membership per semester
         var hasActive = await groupQueries.HasActiveMembershipInSemesterAsync(inviteeUserId, g.SemesterId, ct);
         if (hasActive) throw new InvalidOperationException("User already has active/pending membership in this semester");
-
         var now = DateTime.UtcNow;
-        var expiresAt = now.AddMinutes(5);
-
-        // Handle duplicate by reusing/reactivating existing invitation (group-based)
+        var expiresAt = now.AddDays(7);
         var existingAny = await queries.FindAnyAsync(groupId, inviteeUserId, ct);
         Guid invitationId;
         if (existingAny.HasValue)
@@ -46,7 +37,6 @@ public sealed class InvitationService(
         }
         else
         {
-            // Create new invitation
             invitationId = await repo.CreateAsync(groupId, inviteeUserId, invitedByUserId, message, expiresAt, ct);
         }
 

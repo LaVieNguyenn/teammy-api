@@ -27,22 +27,56 @@ public sealed class ProfilePostService(
     public Task<IReadOnlyList<ProfilePostSummaryDto>> ListAsync(string? skills, Guid? majorId, string? status, ExpandOptions expand, CancellationToken ct)
         => queries.ListProfilePostsAsync(skills, majorId, status, expand, ct);
 
-    public async Task InviteAsync(Guid profilePostId, Guid currentUserId, CancellationToken ct)
+   public async Task InviteAsync(Guid profilePostId, Guid currentUserId, CancellationToken ct)
     {
-        // Find profile post owner userId
         var owner = await queries.GetPostOwnerAsync(profilePostId, ct);
-        if (owner.OwnerUserId is null) throw new InvalidOperationException("Not a profile post");
+        if (owner.OwnerUserId is null)
+            throw new InvalidOperationException("Not a profile post");
 
-        // Find current user's leader group in this semester
+        if (!string.Equals(owner.Status, "open", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Profile post is not open");
+
+        if (owner.ApplicationDeadline.HasValue && owner.ApplicationDeadline.Value <= DateTime.UtcNow)
+        {
+            await repo.UpdatePostAsync(profilePostId, null, null, null, "expired", ct);
+            throw new InvalidOperationException("Profile post expired");
+        }
+
         var groupId = await groupQueries.GetLeaderGroupIdAsync(currentUserId, owner.SemesterId, ct)
             ?? throw new UnauthorizedAccessException("Leader group not found in this semester");
 
         var (maxMembers, activeCount) = await groupQueries.GetGroupCapacityAsync(groupId, ct);
-        if (activeCount >= maxMembers) throw new InvalidOperationException("Group is full");
+        if (activeCount >= maxMembers)
+            throw new InvalidOperationException("Group is full");
 
-        var hasActive = await groupQueries.HasActiveMembershipInSemesterAsync(owner.OwnerUserId.Value, owner.SemesterId, ct);
-        if (hasActive) throw new InvalidOperationException("User already has active/pending membership in this semester");
+        var hasActive = await groupQueries.HasActiveMembershipInSemesterAsync(
+            owner.OwnerUserId.Value,
+            owner.SemesterId,
+            ct);
 
-        await groupRepo.AddMembershipAsync(groupId, owner.OwnerUserId.Value, owner.SemesterId, "pending", ct);
+        if (hasActive)
+            throw new InvalidOperationException("User already has active/pending membership in this semester");
+
+        var existing = await queries.FindApplicationByPostAndGroupAsync(profilePostId, groupId, ct);
+        if (existing.HasValue)
+        {
+            var (applicationId, status) = existing.Value;
+
+            if (string.Equals(status, "pending", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"already_invited:{applicationId}");
+
+            if (string.Equals(status, "accepted", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"already_accepted:{applicationId}");
+
+            await repo.ReactivateApplicationAsync(applicationId, null, ct);
+            return;
+        }
+        await repo.CreateApplicationAsync(
+            profilePostId,
+            applicantUserId: null,
+            applicantGroupId: groupId,
+            appliedByUserId: currentUserId,
+            message: null,
+            ct);
     }
 }
