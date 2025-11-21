@@ -21,4 +21,17 @@ public interface IUserWriteRepository
     Task DeleteUserAsync(Guid userId, CancellationToken ct);
     Task SetSingleRoleAsync(Guid userId, Guid roleId, CancellationToken ct);
 
+    Task UpdateProfileAsync(
+        Guid userId,
+        string displayName,
+        string? phone,
+        string? studentCode,
+        string? gender,
+        Guid? majorId,
+        string? skillsJson,
+        bool skillsCompleted,
+        CancellationToken ct);
+
+    Task UpdateAvatarAsync(Guid userId, string avatarUrl, CancellationToken ct);
+
 }

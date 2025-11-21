@@ -1,12 +1,15 @@
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Users.Dtos;
+using Teammy.Application.Users.Services;
 
 namespace Teammy.Api.Controllers;
 
@@ -18,17 +21,65 @@ public sealed class UsersController : ControllerBase
     private readonly IGroupReadOnlyQueries _groups;
     private readonly IUserWriteRepository _userWrite;
     private readonly IRoleReadOnlyQueries _roles;
+    private readonly UserProfileService _profileService;
 
     public UsersController(
         IUserReadOnlyQueries users,
         IGroupReadOnlyQueries groups,
         IUserWriteRepository userWrite,
-        IRoleReadOnlyQueries roles)
+        IRoleReadOnlyQueries roles,
+        UserProfileService profileService)
     {
         _users = users;
         _groups = groups;
         _userWrite = userWrite;
         _roles = roles;
+        _profileService = profileService;
+    }
+
+    private Guid GetCurrentUserId()
+    {
+        var sub = User.FindFirstValue(ClaimTypes.NameIdentifier)
+                  ?? User.FindFirstValue("sub")
+                  ?? User.FindFirstValue("user_id");
+        if (!Guid.TryParse(sub, out var id))
+            throw new UnauthorizedAccessException("Invalid token");
+        return id;
+    }
+
+    [HttpGet("me/profile")]
+    [Authorize]
+    public async Task<ActionResult<UserProfileDto>> GetProfile(CancellationToken ct)
+    {
+        var dto = await _profileService.GetProfileAsync(GetCurrentUserId(), ct);
+        return Ok(dto);
+    }
+
+    [HttpPut("me/profile")]
+    [Authorize]
+    public async Task<ActionResult<UserProfileDto>> UpdateProfile(
+        [FromBody] UpdateUserProfileRequest request,
+        CancellationToken ct)
+    {
+        var dto = await _profileService.UpdateProfileAsync(GetCurrentUserId(), request, ct);
+        return Ok(dto);
+    }
+
+    [HttpPost("me/avatar")]
+    [Authorize]
+    [RequestSizeLimit(5_000_000)]
+    [Consumes("multipart/form-data")]
+    public async Task<ActionResult<UserProfileDto>> UpdateAvatar(IFormFile avatar, CancellationToken ct)
+    {
+        if (avatar is null || avatar.Length == 0)
+            return BadRequest("Avatar file is required.");
+
+        if (avatar.Length > 5_000_000)
+            return BadRequest("Avatar file must be <= 5MB.");
+
+        await using var stream = avatar.OpenReadStream();
+        var dto = await _profileService.UpdateAvatarAsync(GetCurrentUserId(), stream, avatar.FileName, ct);
+        return Ok(dto);
     }
 
     [HttpGet]
