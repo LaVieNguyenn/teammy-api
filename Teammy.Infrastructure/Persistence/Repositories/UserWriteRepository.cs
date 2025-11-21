@@ -118,4 +118,43 @@ public sealed class UserWriteRepository : IUserWriteRepository
         _db.user_roles.Add(linking);
         await _db.SaveChangesAsync(ct);
     }
+
+    public async Task UpdateProfileAsync(
+        Guid userId,
+        string displayName,
+        string? phone,
+        string? studentCode,
+        string? gender,
+        Guid? majorId,
+        string? skillsJson,
+        bool skillsCompleted,
+        CancellationToken ct)
+    {
+        var entity = await _db.users.FirstOrDefaultAsync(u => u.user_id == userId, ct);
+        if (entity is null)
+            throw new KeyNotFoundException("User not found");
+
+        entity.display_name     = displayName;
+        entity.phone            = phone;
+        entity.student_code     = studentCode;
+        entity.gender           = gender;
+        entity.major_id         = majorId;
+        entity.skills           = skillsJson;
+        entity.skills_completed = skillsCompleted;
+        entity.updated_at       = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync(ct);
+    }
+
+    public async Task UpdateAvatarAsync(Guid userId, string avatarUrl, CancellationToken ct)
+    {
+        var entity = await _db.users.FirstOrDefaultAsync(u => u.user_id == userId, ct);
+        if (entity is null)
+            throw new KeyNotFoundException("User not found");
+
+        entity.avatar_url = avatarUrl;
+        entity.updated_at = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync(ct);
+    }
 }

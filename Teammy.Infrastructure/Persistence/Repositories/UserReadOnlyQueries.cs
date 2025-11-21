@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text.Json;
 using Teammy.Application.Auth.Dtos;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Users.Dtos;
@@ -40,6 +41,47 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 row.User.avatar_url,
                 row.User.email_verified,
                 row.User.skills_completed
+            );
+        }
+
+        public async Task<UserProfileDto?> GetProfileAsync(Guid userId, CancellationToken ct)
+        {
+            var query =
+                from u in _db.users
+                join m in _db.majors on u.major_id equals m.major_id into mj
+                from m in mj.DefaultIfEmpty()
+                where u.user_id == userId
+                select new { User = u, MajorName = m.major_name };
+
+            var row = await query.AsNoTracking().FirstOrDefaultAsync(ct);
+            if (row is null) return null;
+
+            JsonElement? skills = null;
+            if (!string.IsNullOrWhiteSpace(row.User.skills))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(row.User.skills);
+                    skills = doc.RootElement.Clone();
+                }
+                catch
+                {
+                    // ignore malformed json, treat as null
+                }
+            }
+
+            return new UserProfileDto(
+                row.User.user_id,
+                row.User.email!,
+                row.User.display_name!,
+                row.User.phone,
+                row.User.gender,
+                row.User.student_code,
+                row.User.major_id,
+                row.MajorName,
+                skills,
+                row.User.skills_completed,
+                row.User.avatar_url
             );
         }
 

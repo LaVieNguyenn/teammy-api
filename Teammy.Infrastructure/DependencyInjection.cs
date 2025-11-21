@@ -7,6 +7,7 @@ using Teammy.Application.Kanban.Interfaces;
 using Teammy.Application.Kanban.Services;
 using Teammy.Application.Topics.Services;
 using Teammy.Application.Semesters.Services;
+using Teammy.Application.Users.Services;
 using Teammy.Infrastructure.Auth;
 using Teammy.Infrastructure.Email;
 using Teammy.Infrastructure.Excel;
@@ -35,6 +36,7 @@ public static class DependencyInjection
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IUserReadOnlyQueries, UserReadOnlyQueries>();
         services.AddScoped<IUserWriteRepository, UserWriteRepository>();
+        services.AddScoped<UserProfileService>();
 
         // Groups
         services.AddScoped<IGroupRepository, GroupRepository>();
