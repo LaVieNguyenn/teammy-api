@@ -41,7 +41,14 @@ public sealed record PostTopicDto(
     Guid   CreatedBy,
     DateTime CreatedAt
 );
-
+public sealed record PostTopicDtoDetail(
+    Guid   TopicId,
+    string Title,
+    string? Description,
+    string Status,
+    Guid CreatedBy,
+    DateTime? CreatedAt
+);
 public sealed record PostUserDto(
     Guid   UserId,
     string Email,

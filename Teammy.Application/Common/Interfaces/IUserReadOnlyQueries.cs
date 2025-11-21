@@ -14,6 +14,8 @@ namespace Teammy.Application.Common.Interfaces
         Task<IReadOnlyList<UserSearchDto>> SearchInvitableAsync(
             string? query,
             Guid semesterId,
+            Guid? majorId,
+            bool requireStudentRole,
             int limit,
             CancellationToken ct);
 

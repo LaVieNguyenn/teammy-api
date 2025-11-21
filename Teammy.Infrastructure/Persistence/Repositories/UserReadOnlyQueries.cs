@@ -91,12 +91,18 @@ namespace Teammy.Infrastructure.Persistence.Repositories
             var term = (query ?? string.Empty).Trim();
             var statuses = new[] { "pending", "member", "leader" };
 
-            var q = _db.users.AsNoTracking()
-                .Where(u => u.is_active)
-                // Search by email only (case-insensitive, PostgreSQL ILIKE)
-                .Where(u => string.IsNullOrEmpty(term) || EF.Functions.ILike(u.email, "%" + term + "%"))
-                .OrderBy(u => u.display_name)
-                .Select(u => new UserSearchDto(
+            var q =
+                from u in _db.users.AsNoTracking()
+                join ur in _db.user_roles.AsNoTracking() on u.user_id equals ur.user_id into urj
+                from ur in urj.DefaultIfEmpty()
+                join r in _db.roles.AsNoTracking() on ur.role_id equals r.role_id into rj
+                from r in rj.DefaultIfEmpty()
+                where u.is_active
+                where !majorId.HasValue || u.major_id == majorId
+                where !requireStudentRole || r.name == "student"
+                where string.IsNullOrEmpty(term) || EF.Functions.ILike(u.email, "%" + term + "%")
+                orderby u.display_name
+                select new UserSearchDto(
                     u.user_id,
                     u.email!,
                     u.display_name!,
@@ -104,10 +110,9 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                     u.email_verified,
                     u.major_id,
                     _db.group_members.Any(m => m.user_id == u.user_id && m.semester_id == semesterId && statuses.Contains(m.status))
-                ))
-                .Take(limit);
+                );
 
-            return q.ToListAsync(ct).ContinueWith(t => (IReadOnlyList<UserSearchDto>)t.Result, ct);
+            return q.Distinct().Take(limit).ToListAsync(ct).ContinueWith(t => (IReadOnlyList<UserSearchDto>)t.Result, ct);
         }
 
         public async Task<IReadOnlyList<AdminUserListItemDto>> GetAllForAdminAsync(CancellationToken ct)

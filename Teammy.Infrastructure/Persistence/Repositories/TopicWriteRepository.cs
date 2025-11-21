@@ -92,6 +92,15 @@ namespace Teammy.Infrastructure.Persistence.Repositories
             await _db.SaveChangesAsync(ct);
         }
 
+        public async Task SetStatusAsync(Guid topicId, string status, CancellationToken ct)
+        {
+            var normalized = NormalizeStatus(status);
+            var entity = await _db.topics.FirstOrDefaultAsync(x => x.topic_id == topicId, ct)
+                ?? throw new KeyNotFoundException("Topic not found");
+            entity.status = normalized;
+            await _db.SaveChangesAsync(ct);
+        }
+
         public async Task<(Guid topicId, bool created)> UpsertAsync(
             Guid semesterId,
             string title,
