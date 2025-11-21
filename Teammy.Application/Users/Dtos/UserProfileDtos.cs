@@ -1,0 +1,25 @@
+using System.Text.Json;
+
+namespace Teammy.Application.Users.Dtos;
+
+public sealed record UserProfileDto(
+    Guid UserId,
+    string Email,
+    string DisplayName,
+    string? Phone,
+    string? Gender,
+    string? StudentCode,
+    Guid? MajorId,
+    string? MajorName,
+    JsonElement? Skills,
+    bool SkillsCompleted,
+    string? AvatarUrl
+);
+
+public sealed record UpdateUserProfileRequest(
+    string DisplayName,
+    string? Phone,
+    string? Gender,
+    JsonElement? Skills,
+    bool SkillsCompleted
+);

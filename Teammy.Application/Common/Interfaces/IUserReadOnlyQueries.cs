@@ -9,6 +9,7 @@ namespace Teammy.Application.Common.Interfaces
     public interface IUserReadOnlyQueries
     {
         Task<CurrentUserDto?> GetCurrentUserAsync(Guid userId, CancellationToken ct);
+        Task<UserProfileDto?> GetProfileAsync(Guid userId, CancellationToken ct);
 
         Task<IReadOnlyList<UserSearchDto>> SearchInvitableAsync(
             string? query,
