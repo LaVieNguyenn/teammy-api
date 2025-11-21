@@ -82,16 +82,17 @@ public sealed class GroupsController : ControllerBase
                 majorObj = new PostMajorDto(mid, mname);
             }
         }
-        Guid? topicId = g.TopicId;
-        string? topicName = null;
-        if (topicId.HasValue)
+        PostTopicDtoDetail? topicObj = null;
+        if (g.TopicId.HasValue)
         {
-            var t = await _topics.GetByIdAsync(topicId.Value, ct);
-            topicName = t?.Title;
+            var m = await _groupQueries.GetTopicAsync(g.TopicId.Value, ct);
+            if (m.HasValue)
+            {
+                var (topic_id, title, description, status, created_by, created_at) = m.Value;
+                topicObj = new PostTopicDtoDetail(topic_id, title, description, status, created_by, created_at);
+            }
         }
-
         var mentor = await _groupQueries.GetMentorAsync(id, ct);
-
         return Ok(new
         {
             id = g.Id,
@@ -102,8 +103,7 @@ public sealed class GroupsController : ControllerBase
             currentMembers = g.CurrentMembers,
             semester = semesterObj,
             major = majorObj,
-            topicId,
-            topicName,
+            topic = topicObj,
             mentor = mentor is null ? null : new { mentor.UserId, mentor.Email, mentor.DisplayName, mentor.AvatarUrl },
             leader = leaderMember,
             members = nonLeaderMembers 

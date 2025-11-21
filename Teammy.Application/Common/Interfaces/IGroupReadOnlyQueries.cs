@@ -28,12 +28,11 @@ public interface IGroupReadOnlyQueries
 
     Task<Teammy.Application.Groups.Dtos.UserGroupCheckDto> CheckUserGroupAsync(Guid userId, Guid? semesterId, bool includePending, CancellationToken ct);
 
-    // Extra lookups for shaping group response
     Task<(Guid SemesterId, string? Season, int? Year, DateOnly? StartDate, DateOnly? EndDate, bool IsActive)?> GetSemesterAsync(Guid semesterId, CancellationToken ct);
     Task<(Guid MajorId, string MajorName)?> GetMajorAsync(Guid majorId, CancellationToken ct);
+    Task<(Guid TopicId, string Title, string? Description, string Status, Guid CreatedBy, DateTime? CreatedAt)?> GetTopicAsync(Guid topicId, CancellationToken ct);
 
     Task<bool> GroupNameExistsAsync(Guid semesterId, string name, Guid? excludeGroupId, CancellationToken ct);
 
-    // Unified pending (applications + invitations)
     Task<IReadOnlyList<Teammy.Application.Groups.Dtos.GroupPendingItemDto>> GetUnifiedPendingAsync(Guid groupId, CancellationToken ct);
 }

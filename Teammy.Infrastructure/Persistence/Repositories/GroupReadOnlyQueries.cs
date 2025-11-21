@@ -11,33 +11,74 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
     public async Task<Guid?> GetActiveSemesterIdAsync(CancellationToken ct)
         => await db.semesters.Where(s => s.is_active).Select(s => (Guid?)s.semester_id).FirstOrDefaultAsync(ct);
 
-    public async Task<IReadOnlyList<GroupSummaryDto>> ListGroupsAsync(string? status, Guid? majorId, Guid? topicId, CancellationToken ct)
+    public async Task<IReadOnlyList<GroupSummaryDto>> ListGroupsAsync(
+       string? status, Guid? majorId, Guid? topicId, CancellationToken ct)
     {
         var activeStatuses = new[] { "member", "leader" };
 
-        var q = from g in db.groups.AsNoTracking()
-                select new { g };
+        var q =
+            from g in db.groups.AsNoTracking()
+            join s in db.semesters.AsNoTracking()
+                on g.semester_id equals s.semester_id
+            join t in db.topics.AsNoTracking()
+                on g.topic_id equals t.topic_id into topicJoin
+            from t in topicJoin.DefaultIfEmpty()
+            join m in db.majors.AsNoTracking()
+                on g.major_id equals m.major_id into majorJoin
+            from m in majorJoin.DefaultIfEmpty()
+            join u in db.users.AsNoTracking()
+                on g.mentor_id equals u.user_id into mentorJoin
+            from u in mentorJoin.DefaultIfEmpty()
+            select new { g, s, t, m, u};
 
-        if (!string.IsNullOrWhiteSpace(status)) q = q.Where(x => x.g.status == status);
-        if (majorId.HasValue) q = q.Where(x => x.g.major_id == majorId);
-        if (topicId.HasValue) q = q.Where(x => x.g.topic_id == topicId);
+        if (!string.IsNullOrWhiteSpace(status))
+            q = q.Where(x => x.g.status == status);
+
+        if (majorId.HasValue)
+            q = q.Where(x => x.g.major_id == majorId.Value);
+
+        if (topicId.HasValue)
+            q = q.Where(x => x.g.topic_id == topicId.Value);
 
         var list = await q
             .Select(x => new GroupSummaryDto(
                 x.g.group_id,
-                x.g.semester_id,
+                new SemesterDto(
+                    x.s.semester_id,
+                    x.s.season,
+                    x.s.year,
+                    x.s.start_date,
+                    x.s.end_date,
+                    x.s.is_active
+                ),
                 x.g.name,
                 x.g.description,
                 x.g.status,
                 x.g.max_members,
-                x.g.topic_id,
-                x.g.major_id,
-                db.group_members.Count(m => m.group_id == x.g.group_id && activeStatuses.Contains(m.status))
+                x.t == null ? null : new TopicDto(
+                    x.t.topic_id,
+                    x.t.title,
+                    x.t.description
+                ),
+                x.m == null ? null : new MajorDto(
+                    x.m.major_id,
+                    x.m.major_name
+                ),
+                    x.u == null ? null : new MentorDto(
+                      x.u.user_id,
+                     x.u.display_name,
+                      x.u.avatar_url,
+                      x.u.email
+    ),
+                db.group_members.Count(m =>
+                    m.group_id == x.g.group_id &&
+                    activeStatuses.Contains(m.status))
             ))
             .ToListAsync(ct);
 
         return list;
     }
+
 
     public async Task<GroupDetailDto?> GetGroupAsync(Guid id, CancellationToken ct)
     {
@@ -200,7 +241,12 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
             .Select(s => new ValueTuple<Guid, string?, int?, DateOnly?, DateOnly?, bool>(s.semester_id, s.season, s.year, s.start_date, s.end_date, s.is_active))
             .FirstOrDefaultAsync(ct)
             .ContinueWith(t => t.Result == default ? (ValueTuple<Guid, string?, int?, DateOnly?, DateOnly?, bool>?)null : t.Result, ct);
-
+    public Task<(Guid TopicId, string Title,string? Description, string Status, Guid CreatedBy, DateTime? CreatedAt)?> GetTopicAsync(Guid topicId, CancellationToken ct)
+        => db.topics.AsNoTracking()
+            .Where(t => t.topic_id == topicId)
+            .Select(t => new ValueTuple<Guid, string, string?, string, Guid, DateTime?>(t.topic_id, t.title, t.description, t.status, t.created_by, t.created_at))
+            .FirstOrDefaultAsync(ct)
+            .ContinueWith(t => t.Result == default ? (ValueTuple<Guid, string, string?, string, Guid, DateTime?>?)null : t.Result, ct);
     public Task<(Guid MajorId, string MajorName)?> GetMajorAsync(Guid majorId, CancellationToken ct)
         => db.majors.AsNoTracking()
             .Where(m => m.major_id == majorId)

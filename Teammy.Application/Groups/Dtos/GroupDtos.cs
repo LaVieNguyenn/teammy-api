@@ -1,16 +1,28 @@
 namespace Teammy.Application.Groups.Dtos;
 
 public sealed record GroupSummaryDto(
-    Guid   Id,
-    Guid   SemesterId,
+    Guid Id,
+    SemesterDto Semester,
     string Name,
     string? Description,
     string Status,
-    int    MaxMembers,
-    Guid?  TopicId,
-    Guid?  MajorId,
-    int    CurrentMembers
+    int MaxMembers,
+    TopicDto? Topic,
+    MajorDto? Major,
+    MentorDto? Mentor,
+    int CurrentMembers
 );
+public record MentorDto(
+    Guid Id,
+    string DisplayName,
+    string? AvatarUrl,
+    string Email
+);
+public sealed record SemesterDto(Guid SemesterId, string Season, int? Year, DateOnly? StartDate, DateOnly?EndDate, bool IsActive);
+
+public sealed record TopicDto(Guid TopicId, string Title, string? Description);
+
+public sealed record MajorDto(Guid MajorId, string MajorName);
 
 public sealed record GroupDetailDto(
     Guid   Id,
