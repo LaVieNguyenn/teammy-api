@@ -7,9 +7,13 @@ public sealed class GroupService(
     IGroupRepository repo,
     IGroupReadOnlyQueries queries,
     IRecruitmentPostRepository postRepo,
-    ITopicReadOnlyQueries topicQueries)
+    ITopicReadOnlyQueries topicQueries,
+    ITopicWriteRepository topicWrite,
+    IUserReadOnlyQueries userQueries)
 {
     private readonly ITopicReadOnlyQueries _topicQueries = topicQueries;
+    private readonly ITopicWriteRepository _topicWrite = topicWrite;
+    private readonly IUserReadOnlyQueries _userQueries = userQueries;
 
     public async Task<Guid> CreateGroupAsync(Guid creatorUserId, CreateGroupRequest req, CancellationToken ct)
     {
@@ -27,7 +31,13 @@ public sealed class GroupService(
         if (hasActive)
             throw new InvalidOperationException("User already has active/pending membership in this semester");
 
-        var groupId = await repo.CreateGroupAsync(semesterId, req.TopicId, req.MajorId, req.Name, req.Description, req.MaxMembers, ct);
+        var creator = await _userQueries.GetAdminDetailAsync(creatorUserId, ct)
+            ?? throw new InvalidOperationException("User not found");
+        var majorId = creator.MajorId ?? req.MajorId;
+        if (!majorId.HasValue)
+            throw new InvalidOperationException("User hasn't major");
+
+        var groupId = await repo.CreateGroupAsync(semesterId, req.TopicId, majorId, req.Name, req.Description, req.MaxMembers, ct);
         await repo.AddMembershipAsync(groupId, creatorUserId, semesterId, "leader", ct);
         return groupId;
     }
@@ -121,12 +131,14 @@ public sealed class GroupService(
 
         var setTopicAndActivate = false;
         Guid? mentorId = req.MentorId;
+        Guid? topicToClose = null;
         if (req.TopicId.HasValue)
         {
             var (maxMembers, activeCount) = await queries.GetGroupCapacityAsync(groupId, ct);
             if (activeCount < maxMembers)
                 throw new InvalidOperationException("Group must be full to select a topic");
             setTopicAndActivate = true;
+            topicToClose = req.TopicId;
 
             if (!mentorId.HasValue)
             {
@@ -139,6 +151,10 @@ public sealed class GroupService(
 
         if (setTopicAndActivate)
         {
+            if (topicToClose.HasValue)
+            {
+                await _topicWrite.SetStatusAsync(topicToClose.Value, "closed", ct);
+            }
             // Set group to active and close all open recruitment posts
             await repo.SetStatusAsync(groupId, "active", ct);
             await postRepo.CloseAllOpenPostsForGroupAsync(groupId, ct);
