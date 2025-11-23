@@ -68,4 +68,6 @@ public partial class user
     public virtual ICollection<user_role> user_roles { get; set; } = new List<user_role>();
 
     public virtual ICollection<topic> topicsNavigation { get; set; } = new List<topic>();
+
+    public virtual ICollection<chat_session_participant> chat_session_participants { get; set; } = new List<chat_session_participant>();
 }

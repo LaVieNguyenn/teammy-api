@@ -229,18 +229,71 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
             .Select(c => new ValueTuple<Guid, string>(c.candidate_id, c.status))
             .FirstOrDefaultAsync(ct)
             .ContinueWith(t => t.Result == default ? (ValueTuple<Guid, string>?)null : t.Result, ct);
-    public Task<(Guid ApplicationId, string Status)?> FindApplicationByPostAndGroupAsync(
-        Guid postId,
-        Guid groupId,
-        CancellationToken ct)
+    public Task<(Guid ApplicationId, string Status)?> FindApplicationByPostAndGroupAsync(Guid postId, Guid groupId, CancellationToken ct)
         => db.candidates.AsNoTracking()
             .Where(c => c.post_id == postId && c.applicant_group_id == groupId)
             .OrderByDescending(c => c.created_at)
             .Select(c => new ValueTuple<Guid, string>(c.candidate_id, c.status))
             .FirstOrDefaultAsync(ct)
-            .ContinueWith(
-                t => t.Result == default ? (ValueTuple<Guid, string>?)null : t.Result,
-                ct);
+            .ContinueWith(t => t.Result == default ? (ValueTuple<Guid, string>?)null : t.Result, ct);
+
+    public async Task<IReadOnlyList<ProfilePostInvitationDto>> ListProfileInvitationsAsync(Guid ownerUserId, string? status, CancellationToken ct)
+    {
+        var q =
+            from c in db.candidates.AsNoTracking()
+            join p in db.recruitment_posts.AsNoTracking() on c.post_id equals p.post_id
+            join g in db.groups.AsNoTracking() on c.applicant_group_id equals g.group_id
+            where p.user_id == ownerUserId && p.post_type == "individual" && c.applicant_group_id != null
+            select new { c, p, g };
+
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            q = q.Where(x => x.c.status == status);
+        }
+
+        var query =
+            from item in q
+            join m in db.majors.AsNoTracking() on item.g.major_id equals m.major_id into mj
+            from m in mj.DefaultIfEmpty()
+            join gm in db.group_members.AsNoTracking().Where(mm => mm.status == "leader") on item.g.group_id equals gm.group_id into gmj
+            from gm in gmj.DefaultIfEmpty()
+            join leader in db.users.AsNoTracking() on gm.user_id equals leader.user_id into lj
+            from leader in lj.DefaultIfEmpty()
+            orderby item.c.created_at descending
+            select new ProfilePostInvitationDto(
+                item.c.candidate_id,
+                item.p.post_id,
+                item.g.group_id,
+                item.g.name,
+                item.c.status,
+                item.c.created_at,
+                item.p.semester_id,
+                item.g.major_id,
+                m != null ? m.major_name : null,
+                leader != null ? (Guid?)leader.user_id : null,
+                leader != null ? leader.display_name : null,
+                leader != null ? leader.email : null
+            );
+
+    return await query.ToListAsync(ct);
+    }
+
+    public Task<ProfilePostInvitationDetail?> GetProfileInvitationAsync(Guid candidateId, Guid ownerUserId, CancellationToken ct)
+        => (from c in db.candidates.AsNoTracking()
+            join p in db.recruitment_posts.AsNoTracking() on c.post_id equals p.post_id
+            join g in db.groups.AsNoTracking() on c.applicant_group_id equals g.group_id
+            where c.candidate_id == candidateId
+                  && p.post_type == "individual"
+                  && p.user_id == ownerUserId
+                  && c.applicant_group_id != null
+            select new ProfilePostInvitationDetail(
+                c.candidate_id,
+                p.post_id,
+                g.group_id,
+                p.semester_id,
+                g.major_id,
+                c.status))
+            .FirstOrDefaultAsync(ct);
 
     public async Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListAppliedByUserAsync(Guid userId, Teammy.Application.Posts.Dtos.ExpandOptions expand, CancellationToken ct)
     {

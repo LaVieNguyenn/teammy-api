@@ -144,6 +144,42 @@ public sealed class ProfilePostsController(ProfilePostService service, IConfigur
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
+    [HttpGet("my/invitations")]
+    [Authorize]
+    public async Task<ActionResult<IReadOnlyList<ProfilePostInvitationDto>>> MyInvitations([FromQuery] string? status, CancellationToken ct)
+    {
+        var items = await service.ListInvitationsAsync(GetUserId(), status, ct);
+        return Ok(items);
+    }
+
+    [HttpPost("{postId:guid}/invitations/{candidateId:guid}/accept")]
+    [Authorize]
+    public async Task<ActionResult> AcceptInvitation([FromRoute] Guid postId, [FromRoute] Guid candidateId, CancellationToken ct)
+    {
+        try
+        {
+            await service.AcceptInvitationAsync(postId, candidateId, GetUserId(), ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    [HttpPost("{postId:guid}/invitations/{candidateId:guid}/reject")]
+    [Authorize]
+    public async Task<ActionResult> RejectInvitation([FromRoute] Guid postId, [FromRoute] Guid candidateId, CancellationToken ct)
+    {
+        try
+        {
+            await service.RejectInvitationAsync(postId, candidateId, GetUserId(), ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
     private static Teammy.Application.Posts.Dtos.ExpandOptions ParseExpand(string? e)
     {
         var opt = Teammy.Application.Posts.Dtos.ExpandOptions.None;
