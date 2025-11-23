@@ -45,3 +45,27 @@ public sealed record ProfilePostDetailDto(
     DateTime CreatedAt,
     string? Skills
 );
+
+public sealed record ProfilePostInvitationDto(
+    Guid   CandidateId,
+    Guid   PostId,
+    Guid   GroupId,
+    string GroupName,
+    string Status,
+    DateTime CreatedAt,
+    Guid   SemesterId,
+    Guid?  GroupMajorId,
+    string? GroupMajorName,
+    Guid?  LeaderUserId,
+    string? LeaderDisplayName,
+    string? LeaderEmail
+);
+
+public sealed record ProfilePostInvitationDetail(
+    Guid CandidateId,
+    Guid PostId,
+    Guid GroupId,
+    Guid SemesterId,
+    Guid? GroupMajorId,
+    string Status
+);

@@ -34,5 +34,5 @@ public interface IRecruitmentPostRepository
 
     Task ReactivateApplicationAsync(Guid applicationId, string? message, CancellationToken ct);
 
-    
+    Task<int> RejectPendingProfileInvitationsAsync(Guid ownerUserId, Guid semesterId, Guid keepCandidateId, CancellationToken ct);
 }
