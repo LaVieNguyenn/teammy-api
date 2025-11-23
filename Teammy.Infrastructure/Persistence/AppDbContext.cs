@@ -20,6 +20,8 @@ public partial class AppDbContext : DbContext
 
     public virtual DbSet<chat_session> chat_sessions { get; set; }
 
+    public virtual DbSet<chat_session_participant> chat_session_participants { get; set; }
+
     public virtual DbSet<column> columns { get; set; }
 
     public virtual DbSet<comment> comments { get; set; }
@@ -180,6 +182,27 @@ public partial class AppDbContext : DbContext
                 .HasForeignKey<chat_session>(d => d.group_id)
                 .OnDelete(DeleteBehavior.Cascade)
                 .HasConstraintName("chat_sessions_group_id_fkey");
+        });
+
+        modelBuilder.Entity<chat_session_participant>(entity =>
+        {
+            entity.HasKey(e => new { e.chat_session_id, e.user_id }).HasName("chat_session_participants_pkey");
+
+            entity.ToTable("chat_session_participants", "teammy");
+
+            entity.HasIndex(e => e.user_id, "ix_chat_session_participants_user");
+
+            entity.Property(e => e.joined_at).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.chat_session).WithMany(p => p.chat_session_participants)
+                .HasForeignKey(d => d.chat_session_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("chat_session_participants_session_id_fkey");
+
+            entity.HasOne(d => d.user).WithMany(p => p.chat_session_participants)
+                .HasForeignKey(d => d.user_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("chat_session_participants_user_id_fkey");
         });
 
         modelBuilder.Entity<column>(entity =>

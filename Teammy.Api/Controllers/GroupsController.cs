@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
+using Teammy.Application.Chat.Services;
 using Teammy.Application.Groups.Dtos;
 using Teammy.Application.Groups.Services;
 using Teammy.Application.Invitations.Services;
@@ -19,13 +20,15 @@ public sealed class GroupsController : ControllerBase
     private readonly IGroupReadOnlyQueries _groupQueries;
     private readonly RecruitmentPostService _postService;
     private readonly ITopicReadOnlyQueries _topics;
-    public GroupsController(GroupService service, InvitationService invitations, IGroupReadOnlyQueries groupQueries, RecruitmentPostService postService, ITopicReadOnlyQueries topics)
+    private readonly GroupChatService _chatService;
+    public GroupsController(GroupService service, InvitationService invitations, IGroupReadOnlyQueries groupQueries, RecruitmentPostService postService, ITopicReadOnlyQueries topics, GroupChatService chatService)
     {
         _service = service;
         _invitations = invitations;
         _groupQueries = groupQueries;
         _postService = postService;
         _topics = topics;
+        _chatService = chatService;
     }
 
     private Guid GetUserId()
@@ -363,5 +366,30 @@ public sealed class GroupsController : ControllerBase
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+    }
+
+    [HttpGet("{id:guid}/chat/messages")]
+    [Authorize]
+    public async Task<ActionResult<IReadOnlyList<Teammy.Application.Chat.Dtos.ChatMessageDto>>> GetChatMessages([FromRoute] Guid id, [FromQuery] int limit = 50, [FromQuery] int offset = 0, CancellationToken ct = default)
+    {
+        try
+        {
+            var list = await _chatService.ListMessagesAsync(id, GetUserId(), limit, offset, ct);
+            return Ok(list);
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+    }
+
+    [HttpPost("{id:guid}/chat/messages")]
+    [Authorize]
+    public async Task<ActionResult<Teammy.Application.Chat.Dtos.ChatMessageDto>> SendChatMessage([FromRoute] Guid id, [FromBody] Teammy.Application.Chat.Dtos.SendChatMessageRequest request, CancellationToken ct)
+    {
+        try
+        {
+            var msg = await _chatService.SendMessageAsync(id, GetUserId(), request, ct);
+            return Ok(msg);
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ex.Message); }
     }
 }

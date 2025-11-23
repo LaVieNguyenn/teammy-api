@@ -22,4 +22,6 @@ public partial class chat_session
     public virtual group? group { get; set; }
 
     public virtual ICollection<message> messages { get; set; } = new List<message>();
+
+    public virtual ICollection<chat_session_participant> chat_session_participants { get; set; } = new List<chat_session_participant>();
 }

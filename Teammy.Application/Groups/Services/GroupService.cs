@@ -132,6 +132,7 @@ public sealed class GroupService(
         var setTopicAndActivate = false;
         Guid? mentorId = req.MentorId;
         Guid? topicToClose = null;
+        Guid? previousTopicId = detail.TopicId;
         if (req.TopicId.HasValue)
         {
             var (maxMembers, activeCount) = await queries.GetGroupCapacityAsync(groupId, ct);
@@ -155,7 +156,10 @@ public sealed class GroupService(
             {
                 await _topicWrite.SetStatusAsync(topicToClose.Value, "closed", ct);
             }
-            // Set group to active and close all open recruitment posts
+            if (previousTopicId.HasValue && (!req.TopicId.HasValue || previousTopicId.Value != req.TopicId.Value))
+            {
+                await _topicWrite.SetStatusAsync(previousTopicId.Value, "open", ct);
+            }
             await repo.SetStatusAsync(groupId, "active", ct);
             await postRepo.CloseAllOpenPostsForGroupAsync(groupId, ct);
         }
