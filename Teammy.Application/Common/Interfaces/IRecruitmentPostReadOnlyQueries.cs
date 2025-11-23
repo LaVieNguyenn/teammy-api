@@ -24,8 +24,7 @@ public interface IRecruitmentPostReadOnlyQueries
     Task<(Guid ApplicationId, Guid PostId)?> FindPendingApplicationInGroupAsync(Guid groupId, Guid userId, CancellationToken ct);
 
     Task<(Guid ApplicationId, string Status)?> FindApplicationByPostAndUserAsync(Guid postId, Guid userId, CancellationToken ct);
-    Task<(Guid ApplicationId, string Status)?> FindApplicationByPostAndGroupAsync(
-      Guid postId,
-      Guid groupId,
-      CancellationToken ct);
+    Task<(Guid ApplicationId, string Status)?> FindApplicationByPostAndGroupAsync(Guid postId, Guid groupId, CancellationToken ct);
+    Task<IReadOnlyList<ProfilePostInvitationDto>> ListProfileInvitationsAsync(Guid ownerUserId, string? status, CancellationToken ct);
+    Task<ProfilePostInvitationDetail?> GetProfileInvitationAsync(Guid candidateId, Guid ownerUserId, CancellationToken ct);
 }

@@ -4,6 +4,8 @@ using Microsoft.OpenApi.Models;
 using System.Text;
 using Teammy.Application.Auth.Queries;
 using Teammy.Application.Auth.Services;
+using Teammy.Api.Hubs;
+using Teammy.Application.Chat.Services;
 using Teammy.Application.Groups.Services;
 using Teammy.Application.Posts.Services;
 using Teammy.Application.Invitations.Services;
@@ -14,6 +16,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSignalR();
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new OpenApiInfo { Title = "TEAMMY API", Version = "v1" });
@@ -41,13 +44,19 @@ builder.Services.AddSwaggerGen(c =>
 });
 builder.Services.AddCors(options =>
 {
-    options.AddDefaultPolicy(policy =>
+    options.AddPolicy("TeammyPolicy", policy =>
     {
-        policy.AllowAnyOrigin()
-              .AllowAnyHeader()
-              .AllowAnyMethod();
+        policy
+            .WithOrigins(
+                "https://fe-teammy.vercel.app"
+                //"http://localhost:5173"   
+            )
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
     });
 });
+
 // Application services
 builder.Services.AddScoped<AuthenticationService>();
 builder.Services.AddScoped<CurrentUserQueryService>();
@@ -55,6 +64,10 @@ builder.Services.AddScoped<GroupService>();
 builder.Services.AddScoped<RecruitmentPostService>();
 builder.Services.AddScoped<ProfilePostService>();
 builder.Services.AddScoped<InvitationService>();
+builder.Services.AddScoped<GroupChatService>();
+builder.Services.AddScoped<ChatConversationService>();
+builder.Services.AddScoped<ChatSessionMessageService>();
+builder.Services.AddScoped<IGroupChatNotifier, GroupChatNotifier>();
 builder.Services.AddSingleton<IAppUrlProvider, Teammy.Api.App.AppUrlProvider>();
 
 // Infrastructure (DbContext, Auth services, Repositories)
@@ -83,8 +96,9 @@ builder.Services.AddAuthorization();
 var app = builder.Build();
 app.UseSwagger(); app.UseSwaggerUI();
 app.UseHttpsRedirection();
-app.UseCors();
+app.UseCors("TeammyPolicy");
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+app.MapHub<GroupChatHub>("/groupChatHub");
 app.Run();

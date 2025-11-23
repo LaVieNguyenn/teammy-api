@@ -139,4 +139,25 @@ public sealed class RecruitmentPostRepository(AppDbContext db) : IRecruitmentPos
         foreach (var c in items) { c.status = "rejected"; c.updated_at = DateTime.UtcNow; }
         return await db.SaveChangesAsync(ct);
     }
+
+    public async Task<int> RejectPendingProfileInvitationsAsync(Guid ownerUserId, Guid semesterId, Guid keepCandidateId, CancellationToken ct)
+    {
+        var q = from c in db.candidates
+                join p in db.recruitment_posts on c.post_id equals p.post_id
+                where p.user_id == ownerUserId
+                      && p.post_type == "individual"
+                      && p.semester_id == semesterId
+                      && c.status == "pending"
+                      && c.candidate_id != keepCandidateId
+                select c;
+        var items = await q.ToListAsync(ct);
+        if (items.Count == 0) return 0;
+        foreach (var c in items)
+        {
+            c.status = "rejected";
+            c.updated_at = DateTime.UtcNow;
+        }
+
+        return await db.SaveChangesAsync(ct);
+    }
 }

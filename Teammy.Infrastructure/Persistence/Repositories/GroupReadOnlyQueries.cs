@@ -214,6 +214,12 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
                 );
         return await q.ToListAsync(ct);
     }
+
+    public Task<bool> IsActiveMemberAsync(Guid groupId, Guid userId, CancellationToken ct)
+        => db.group_members.AsNoTracking()
+            .AnyAsync(m => m.group_id == groupId
+                           && m.user_id == userId
+                           && (m.status == "member" || m.status == "leader"), ct);
     public async Task<Teammy.Application.Groups.Dtos.UserGroupCheckDto> CheckUserGroupAsync(Guid userId, Guid? semesterId, bool includePending, CancellationToken ct)
     {
         Guid? semId = semesterId;
