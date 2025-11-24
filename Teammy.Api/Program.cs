@@ -48,8 +48,8 @@ builder.Services.AddCors(options =>
     {
         policy
             .WithOrigins(
-                "https://fe-teammy.vercel.app"
-                //"http://localhost:5173"   
+                "https://fe-teammy.vercel.app",
+                "http://localhost:5173"   
             )
             .AllowAnyHeader()
             .AllowAnyMethod()
