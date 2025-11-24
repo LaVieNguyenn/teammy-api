@@ -7,6 +7,7 @@ using Teammy.Application.Kanban.Interfaces;
 using Teammy.Application.Kanban.Services;
 using Teammy.Application.Topics.Services;
 using Teammy.Application.Semesters.Services;
+using Teammy.Application.Skills.Services;
 using Teammy.Application.Users.Services;
 using Teammy.Infrastructure.Auth;
 using Teammy.Infrastructure.Email;
@@ -83,6 +84,11 @@ public static class DependencyInjection
         services.AddScoped<ISemesterRepository, SemesterRepository>();
         services.AddScoped<ISemesterReadOnlyQueries, SemesterReadOnlyQueries>();
         services.AddScoped<SemesterService>(); 
+
+        // Skills
+        services.AddScoped<ISkillDictionaryReadOnlyQueries, SkillDictionaryQueries>();
+        services.AddScoped<ISkillDictionaryWriteRepository, SkillDictionaryWriteRepository>();
+        services.AddScoped<SkillDictionaryService>();
         
         // Semester phase guard
         services.AddScoped<SemesterPhaseGuard>();
