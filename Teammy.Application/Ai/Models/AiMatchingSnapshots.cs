@@ -21,14 +21,27 @@ public sealed record GroupCapacitySnapshot(
     int RemainingSlots
 );
 
-public sealed record TopicMatchSnapshot(
+public sealed record GroupRoleMixSnapshot(
     Guid GroupId,
-    Guid TopicId,
+    int FrontendCount,
+    int BackendCount,
+    int OtherCount
+);
+
+public sealed record RecruitmentPostSnapshot(
+    Guid PostId,
     Guid SemesterId,
     Guid? MajorId,
+    string? MajorName,
     string Title,
     string? Description,
-    int SimpleScore
+    Guid? GroupId,
+    string? GroupName,
+    string Status,
+    string? PositionNeeded,
+    string? RequiredSkills,
+    DateTime CreatedAt,
+    DateTime? ApplicationDeadline
 );
 
 public sealed record TopicAvailabilitySnapshot(
@@ -41,9 +54,8 @@ public sealed record TopicAvailabilitySnapshot(
     bool CanTakeMore
 );
 
-public sealed record GroupRoleMixSnapshot(
+public sealed record GroupMemberSkillSnapshot(
+    Guid UserId,
     Guid GroupId,
-    int FrontendCount,
-    int BackendCount,
-    int OtherCount
+    string? SkillsJson
 );

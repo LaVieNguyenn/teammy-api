@@ -1,13 +1,19 @@
 namespace Teammy.Application.Ai.Dtos;
 
-public sealed record TeamSuggestionDto(
-    Guid GroupId,
-    string Name,
+public sealed record RecruitmentPostSuggestionDto(
+    Guid PostId,
+    string Title,
     string? Description,
+    Guid? GroupId,
+    string? GroupName,
+    Guid? MajorId,
+    string? MajorName,
+    DateTime CreatedAt,
+    DateTime? ApplicationDeadline,
     int Score,
-    int RemainingSlots,
-    bool NeedsFrontend,
-    bool NeedsBackend
+    string? PositionNeeded,
+    string? RequiredSkills,
+    IReadOnlyList<string> MatchingSkills
 );
 
 public sealed record TopicSuggestionDto(
@@ -15,7 +21,8 @@ public sealed record TopicSuggestionDto(
     string Title,
     string? Description,
     int Score,
-    bool CanTakeMore
+    bool CanTakeMore,
+    IReadOnlyList<string> MatchingSkills
 );
 
 public sealed record AutoAssignmentRecordDto(

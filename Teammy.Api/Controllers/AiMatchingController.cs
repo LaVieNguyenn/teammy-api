@@ -17,13 +17,13 @@ public sealed class AiMatchingController : ControllerBase
         _service = service;
     }
 
-    [HttpPost("team-suggestions")]
+    [HttpPost("recruitment-post-suggestions")]
     [Authorize]
-    public async Task<ActionResult<IReadOnlyList<TeamSuggestionDto>>> SuggestTeams(
-        [FromBody] TeamSuggestionRequest request,
+    public async Task<ActionResult<IReadOnlyList<RecruitmentPostSuggestionDto>>> SuggestRecruitmentPosts(
+        [FromBody] RecruitmentPostSuggestionRequest request,
         CancellationToken ct)
     {
-        var result = await _service.SuggestTeamsForStudentAsync(GetCurrentUserId(), request, ct);
+        var result = await _service.SuggestRecruitmentPostsForStudentAsync(GetCurrentUserId(), request, ct);
         return Ok(result);
     }
 
