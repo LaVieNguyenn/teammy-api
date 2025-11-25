@@ -211,6 +211,7 @@ CREATE TABLE IF NOT EXISTS teammy.recruitment_posts (
   title       TEXT NOT NULL,
   description TEXT,
   position_needed TEXT,
+  required_skills JSONB,
   current_members INT,
   status      TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed','expired')),
   application_deadline TIMESTAMPTZ,
@@ -224,6 +225,9 @@ CREATE TABLE IF NOT EXISTS teammy.recruitment_posts (
 );
 CREATE INDEX IF NOT EXISTS ix_posts_semester_status_type
   ON teammy.recruitment_posts(semester_id, status, post_type);
+
+CREATE INDEX IF NOT EXISTS ix_rp_required_skills_gin
+  ON teammy.recruitment_posts USING gin (required_skills jsonb_path_ops);
 
 CREATE TABLE IF NOT EXISTS teammy.candidates (
   candidate_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -470,7 +474,7 @@ WHERE t.status='open';
 -- Students pool (active semester, not in group)
 CREATE MATERIALIZED VIEW IF NOT EXISTS teammy.mv_students_pool AS
 SELECT u.user_id, u.display_name, u.major_id, s.semester_id,
-       u.skills, COALESCE(u.skills->>'primary_role','') AS primary_role,
+       u.skills, COALESCE(u.skills->>'primary_role', u.skills->>'primaryRole','') AS primary_role,
        u.skills_completed
 FROM teammy.users u
 JOIN teammy.user_roles ur ON ur.user_id=u.user_id
@@ -521,6 +525,252 @@ ON CONFLICT (name) DO NOTHING;
 INSERT INTO teammy.semesters (season, year, start_date, end_date, is_active)
 VALUES ('Fall', extract(year from CURRENT_DATE)::int, CURRENT_DATE - 7, CURRENT_DATE + 90, TRUE)
 ON CONFLICT DO NOTHING;
+
+-- Ensure active semester has policy windows for AI guardrails
+INSERT INTO teammy.semester_policy (
+  semester_id,
+  team_self_select_start,
+  team_self_select_end,
+  team_suggest_start,
+  topic_self_select_start,
+  topic_self_select_end,
+  topic_suggest_start,
+  desired_group_size_min,
+  desired_group_size_max)
+SELECT s.semester_id,
+       CURRENT_DATE - 21,
+       CURRENT_DATE + 45,
+       CURRENT_DATE - 7,
+       CURRENT_DATE - 14,
+       CURRENT_DATE + 60,
+       CURRENT_DATE - 7,
+       4,
+       6
+FROM teammy.semesters s
+WHERE s.is_active = TRUE
+ON CONFLICT (semester_id) DO UPDATE
+SET team_self_select_start = EXCLUDED.team_self_select_start,
+    team_self_select_end = EXCLUDED.team_self_select_end,
+    team_suggest_start = EXCLUDED.team_suggest_start,
+    topic_self_select_start = EXCLUDED.topic_self_select_start,
+    topic_self_select_end = EXCLUDED.topic_self_select_end,
+    topic_suggest_start = EXCLUDED.topic_suggest_start,
+    desired_group_size_min = EXCLUDED.desired_group_size_min,
+    desired_group_size_max = EXCLUDED.desired_group_size_max;
+
+-- Majors seed data powering skills & AI context
+INSERT INTO teammy.majors (major_id, major_name) VALUES
+  ('11111111-1111-1111-1111-111111111111', 'Software Engineering'),
+  ('22222222-2222-2222-2222-222222222222', 'Information Systems'),
+  ('33333333-3333-3333-3333-333333333333', 'Digital Product Design')
+ON CONFLICT (major_name) DO NOTHING;
+
+-- Sample students with JSON skills to populate mv_students_pool
+INSERT INTO teammy.users (user_id, email, email_verified, display_name, major_id, skills, skills_completed)
+VALUES
+  ('aaaa1111-1111-1111-1111-aaaaaaaa0001', 'alice@teammy.dev', TRUE, 'Alice Nguyen', '11111111-1111-1111-1111-111111111111',
+   $$
+   {
+     "primary_role": "frontend",
+     "skill_tags": ["react","typescript","figma","tailwind"],
+     "soft_skills": ["teamwork","presentation"]
+   }
+   $$::jsonb, TRUE),
+  ('bbbb1111-1111-1111-1111-bbbbbbbb0002', 'bao@teammy.dev', TRUE, 'Bao Tran', '11111111-1111-1111-1111-111111111111',
+   $$
+   {
+     "primary_role": "backend",
+     "skill_tags": ["dotnet","postgres","azure","redis"],
+     "certifications": ["az-204"]
+   }
+   $$::jsonb, TRUE),
+  ('cccc1111-1111-1111-1111-cccccccc0003', 'chi@teammy.dev', TRUE, 'Chi Le', '22222222-2222-2222-2222-222222222222',
+   $$
+   {
+     "primary_role": "backend",
+     "skill_tags": ["python","data","etl","sql"],
+     "interests": ["bi","analytics"]
+   }
+   $$::jsonb, TRUE),
+  ('dddd1111-1111-1111-1111-dddddddd0004', 'dung@teammy.dev', TRUE, 'Dung Vo', '33333333-3333-3333-3333-333333333333',
+   $$
+   {
+     "primary_role": "frontend",
+     "skill_tags": ["ux","figma","illustrator","motion"],
+     "soft_skills": ["storytelling"]
+   }
+   $$::jsonb, TRUE)
+ON CONFLICT (email) DO UPDATE
+SET display_name = EXCLUDED.display_name,
+    major_id = EXCLUDED.major_id,
+    skills = EXCLUDED.skills,
+    skills_completed = EXCLUDED.skills_completed,
+    updated_at = now();
+
+-- Assign student role
+INSERT INTO teammy.user_roles (user_id, role_id)
+SELECT u.user_id, r.role_id
+FROM teammy.users u
+JOIN teammy.roles r ON r.name = 'student'
+WHERE u.email IN ('alice@teammy.dev','bao@teammy.dev','chi@teammy.dev','dung@teammy.dev')
+ON CONFLICT (user_id, role_id) DO NOTHING;
+
+-- Skills JSON for sample users
+UPDATE teammy.users SET skills = $$
+  {
+    "primary_role": "frontend",
+    "skill_tags": ["react","typescript","tailwind","uiux","signalr"],
+    "portfolio": "https://dribbble.com/alice",
+    "stack": ["react","nextjs","tailwind"]
+  }
+$$::jsonb,
+skills_completed = TRUE
+WHERE email = 'alice@teammy.dev';
+
+UPDATE teammy.users SET skills = $$
+  {
+    "primary_role": "backend",
+    "skill_tags": ["dotnet","postgres","redis","grpc","clean-architecture"],
+    "certifications": ["Azure-204","AWS-Dev"]
+  }
+$$::jsonb,
+skills_completed = TRUE
+WHERE email = 'bao@teammy.dev';
+
+UPDATE teammy.users SET skills = $$
+  {
+    "primaryRole": "backend",
+    "skills": ["python","sql","etl","dbt","powerbi"],
+    "interests": ["data engineering","analytics"]
+  }
+$$::jsonb,
+skills_completed = TRUE
+WHERE email = 'chi@teammy.dev';
+
+UPDATE teammy.users SET skills = $$
+  {
+    "primaryRole": "frontend",
+    "skill_tags": ["flutter","dart","figma","motion-design"],
+    "stack": ["flutter","firebase"]
+  }
+$$::jsonb,
+skills_completed = TRUE
+WHERE email = 'dung@teammy.dev';
+
+
+-- Sample groups used by AI flows
+WITH active_semester AS (
+  SELECT semester_id FROM teammy.semesters WHERE is_active = TRUE LIMIT 1
+),
+se_major AS (
+  SELECT major_id FROM teammy.majors WHERE major_name = 'Software Engineering'
+),
+is_major AS (
+  SELECT major_id FROM teammy.majors WHERE major_name = 'Information Systems'
+)
+INSERT INTO teammy.groups (group_id, semester_id, major_id, name, description, max_members, status)
+SELECT 'aaaa2222-2222-2222-2222-aaaaaaaa0001', s.semester_id, se.major_id,
+     'Alpha Builders', 'Nhóm xây dựng nền tảng cộng tác realtime cho sinh viên CNTT.', 6, 'recruiting'
+FROM active_semester s CROSS JOIN se_major se
+WHERE NOT EXISTS (SELECT 1 FROM teammy.groups WHERE group_id = 'aaaa2222-2222-2222-2222-aaaaaaaa0001')
+UNION ALL
+SELECT 'bbbb2222-2222-2222-2222-bbbbbbbb0002', s.semester_id, isj.major_id,
+     'Insight Squad', 'Nhóm dữ liệu tập trung vào dashboard phân tích học tập.', 5, 'recruiting'
+FROM active_semester s CROSS JOIN is_major isj
+WHERE NOT EXISTS (SELECT 1 FROM teammy.groups WHERE group_id = 'bbbb2222-2222-2222-2222-bbbbbbbb0002');
+
+-- Leaders/members for seeded groups (keeps Alice & Dung free for mv_students_pool)
+WITH alpha_group AS (
+  SELECT group_id, semester_id FROM teammy.groups WHERE group_id = 'aaaa2222-2222-2222-2222-aaaaaaaa0001'
+),
+alpha_lead AS (
+  SELECT user_id FROM teammy.users WHERE email = 'bao@teammy.dev'
+)
+INSERT INTO teammy.group_members (group_member_id, group_id, user_id, semester_id, status)
+SELECT gen_random_uuid(), g.group_id, u.user_id, g.semester_id, 'leader'
+FROM alpha_group g CROSS JOIN alpha_lead u
+WHERE NOT EXISTS (
+  SELECT 1 FROM teammy.group_members WHERE group_id = g.group_id AND user_id = u.user_id);
+
+WITH insight_group AS (
+  SELECT group_id, semester_id FROM teammy.groups WHERE group_id = 'bbbb2222-2222-2222-2222-bbbbbbbb0002'
+),
+insight_lead AS (
+  SELECT user_id FROM teammy.users WHERE email = 'chi@teammy.dev'
+)
+INSERT INTO teammy.group_members (group_member_id, group_id, user_id, semester_id, status)
+SELECT gen_random_uuid(), g.group_id, u.user_id, g.semester_id, 'leader'
+FROM insight_group g CROSS JOIN insight_lead u
+WHERE NOT EXISTS (
+  SELECT 1 FROM teammy.group_members WHERE group_id = g.group_id AND user_id = u.user_id);
+
+-- Open topics with keyword-rich descriptions for topic matching
+WITH active_semester AS (
+  SELECT semester_id FROM teammy.semesters WHERE is_active = TRUE LIMIT 1
+),
+se_major AS (
+  SELECT major_id FROM teammy.majors WHERE major_name = 'Software Engineering'
+),
+is_major AS (
+  SELECT major_id FROM teammy.majors WHERE major_name = 'Information Systems'
+),
+creator AS (
+  SELECT user_id FROM teammy.users WHERE email = 'bao@teammy.dev'
+)
+INSERT INTO teammy.topics (topic_id, semester_id, major_id, title, description, status, created_by)
+SELECT 'aaaa3333-3333-3333-3333-aaaaaaaa0001', s.semester_id, se.major_id,
+     'Realtime Collaboration Hub',
+     'Xây dựng hub realtime với SignalR, React, TypeScript và Redis cache để đồng bộ bảng Kanban.',
+     'open', c.user_id
+FROM active_semester s CROSS JOIN se_major se CROSS JOIN creator c
+WHERE NOT EXISTS (SELECT 1 FROM teammy.topics WHERE topic_id = 'aaaa3333-3333-3333-3333-aaaaaaaa0001')
+UNION ALL
+SELECT 'bbbb3333-3333-3333-3333-bbbbbbbb0002', s.semester_id, isj.major_id,
+     'InsightOps Dashboard',
+     'Pipeline phân tích dữ liệu học tập với Python, dbt, PowerBI và trực quan hoá realtime.',
+     'open', c.user_id
+FROM active_semester s CROSS JOIN is_major isj CROSS JOIN creator c
+WHERE NOT EXISTS (SELECT 1 FROM teammy.topics WHERE topic_id = 'bbbb3333-3333-3333-3333-bbbbbbbb0002');
+
+-- Recruitment posts referencing seeded groups + JSON skill requirements
+WITH alpha_group AS (
+  SELECT g.group_id, g.semester_id, g.major_id FROM teammy.groups g
+  WHERE g.group_id = 'aaaa2222-2222-2222-2222-aaaaaaaa0001'
+),
+insight_group AS (
+  SELECT g.group_id, g.semester_id, g.major_id FROM teammy.groups g
+  WHERE g.group_id = 'bbbb2222-2222-2222-2222-bbbbbbbb0002'
+)
+INSERT INTO teammy.recruitment_posts (
+  post_id, semester_id, post_type, group_id, major_id, title, description,
+  position_needed, required_skills, status, application_deadline)
+SELECT 'aaaa4444-4444-4444-4444-aaaaaaaa0001', ag.semester_id, 'group_hiring', ag.group_id, ag.major_id,
+     'Alpha Builders cần Frontend React',
+     'Tuyển bạn FE build UI realtime: React, TypeScript, Tailwind, SignalR.',
+     'Frontend React / UI-UX',
+     $$
+     {
+     "primary_role": "frontend",
+     "skill_tags": ["react","typescript","tailwind","signalr","uiux"]
+     }
+     $$::jsonb,
+     'open', now() + interval '14 days'
+FROM alpha_group ag
+WHERE NOT EXISTS (SELECT 1 FROM teammy.recruitment_posts WHERE post_id = 'aaaa4444-4444-4444-4444-aaaaaaaa0001')
+UNION ALL
+SELECT 'bbbb4444-4444-4444-4444-bbbbbbbb0002', ig.semester_id, 'group_hiring', ig.group_id, ig.major_id,
+     'Insight Squad tuyển Data Wrangler',
+     'Cần thành viên ETL/analytics: Python, dbt, SQL, dashboard PowerBI.',
+     'Data & Backend (Python/SQL)',
+     $$
+     {
+     "primary_role": "backend",
+     "skill_tags": ["python","sql","dbt","powerbi","etl"]
+     }
+     $$::jsonb,
+     'open', now() + interval '10 days'
+FROM insight_group ig
+WHERE NOT EXISTS (SELECT 1 FROM teammy.recruitment_posts WHERE post_id = 'bbbb4444-4444-4444-4444-bbbbbbbb0002');
 
 
 
