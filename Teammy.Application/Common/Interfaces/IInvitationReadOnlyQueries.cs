@@ -11,5 +11,5 @@ public interface IInvitationReadOnlyQueries
     Task<Guid?> FindPendingIdAsync(Guid groupId, Guid inviteeUserId, CancellationToken ct);
 
     // Check if any invitation exists for (groupId, invitee) and return id + status
-    Task<(Guid InvitationId, string Status)?> FindAnyAsync(Guid groupId, Guid inviteeUserId, CancellationToken ct);
+    Task<(Guid InvitationId, string Status, Guid? TopicId)?> FindAnyAsync(Guid groupId, Guid inviteeUserId, CancellationToken ct);
 }

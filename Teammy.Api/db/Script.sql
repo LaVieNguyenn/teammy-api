@@ -272,36 +272,17 @@ END$$;
 
 CREATE TABLE IF NOT EXISTS teammy.invitations (
   invitation_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  post_id         UUID NOT NULL REFERENCES teammy.recruitment_posts(post_id) ON DELETE CASCADE,
+  group_id        UUID NOT NULL REFERENCES teammy.groups(group_id) ON DELETE CASCADE,
   invitee_user_id UUID NOT NULL REFERENCES teammy.users(user_id) ON DELETE CASCADE,
   invited_by      UUID NOT NULL REFERENCES teammy.users(user_id),
+  topic_id        UUID REFERENCES teammy.topics(topic_id) ON DELETE CASCADE,
   status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','rejected','expired','revoked')),
   message         TEXT,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   responded_at    TIMESTAMPTZ,
   expires_at      TIMESTAMPTZ,
-  CONSTRAINT ux_invite_active UNIQUE (post_id, invitee_user_id)
+  CONSTRAINT ux_invite_active UNIQUE (group_id, invitee_user_id)
 );
-
-CREATE OR REPLACE FUNCTION teammy.fn_invite_requires_group_hiring()
-RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE v_type TEXT;
-BEGIN
-  SELECT post_type INTO v_type FROM teammy.recruitment_posts WHERE post_id = NEW.post_id;
-  IF v_type IS DISTINCT FROM 'group_hiring' THEN
-    RAISE EXCEPTION 'Invitation must reference a group_hiring recruitment post';
-  END IF;
-  RETURN NEW;
-END$$;
-
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_invite_only_group_hiring') THEN
-    CREATE TRIGGER trg_invite_only_group_hiring
-    BEFORE INSERT OR UPDATE OF post_id ON teammy.invitations
-    FOR EACH ROW EXECUTE FUNCTION teammy.fn_invite_requires_group_hiring();
-  END IF;
-END$$;
 
 -- ========== 6) Boards / Tasks / Comments / Files ==========
 CREATE TABLE IF NOT EXISTS teammy.boards (

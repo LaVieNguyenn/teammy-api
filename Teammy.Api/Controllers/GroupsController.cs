@@ -197,7 +197,9 @@ public sealed class GroupsController : ControllerBase
     }
 
     public sealed record TransferLeaderRequest(Guid NewLeaderUserId);
-    public sealed record UpdateGroupRequestBody(string? Name, string? Description, int? MaxMembers, Guid? MajorId, Guid? TopicId, Guid? MentorId);
+    public sealed record UpdateGroupRequestBody(string? Name, string? Description, int? MaxMembers, Guid? MajorId);
+    public sealed record InviteUserRequest(Guid UserId);
+    public sealed record InviteMentorRequest(Guid TopicId, Guid MentorUserId, string? Message);
 
     [HttpPost("{id:guid}/leader/transfer")]
     [Authorize]
@@ -236,9 +238,7 @@ public sealed class GroupsController : ControllerBase
             Name = body.Name,
             Description = body.Description,
             MaxMembers = body.MaxMembers,
-            MajorId = body.MajorId,
-            TopicId = body.TopicId,
-            MentorId = body.MentorId
+            MajorId = body.MajorId
         };
             await _service.UpdateGroupAsync(id, GetUserId(), req, ct);
             return NoContent();
@@ -357,6 +357,7 @@ public sealed class GroupsController : ControllerBase
                     await _postService.RejectAsync(body.PostId.Value, pendingId, GetUserId(), ct);
                     return NoContent();
                 case "invitation":
+                case "mentor_invitation":
                     await _invitations.CancelAsync(pendingId, GetUserId(), ct);
                     return NoContent();
                 default:
@@ -365,6 +366,20 @@ public sealed class GroupsController : ControllerBase
         }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+    }
+
+    [HttpPost("{id:guid}/mentor-invites")]
+    [Authorize]
+    public async Task<ActionResult> InviteMentor([FromRoute] Guid id, [FromBody] InviteMentorRequest req, CancellationToken ct)
+    {
+        try
+        {
+            var invitationId = await _invitations.InviteMentorAsync(id, req.TopicId, req.MentorUserId, GetUserId(), req.Message, ct);
+            return Accepted(new { invitationId });
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
         catch (InvalidOperationException ex) { return Conflict(ex.Message); }
     }
 

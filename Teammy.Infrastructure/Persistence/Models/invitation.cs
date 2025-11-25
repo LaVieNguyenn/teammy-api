@@ -23,9 +23,13 @@ public partial class invitation
 
     public Guid group_id { get; set; }
 
+    public Guid? topic_id { get; set; }
+
     public virtual group group { get; set; } = null!;
 
     public virtual user invited_byNavigation { get; set; } = null!;
 
     public virtual user invitee_user { get; set; } = null!;
+
+    public virtual topic? topic { get; set; }
 }

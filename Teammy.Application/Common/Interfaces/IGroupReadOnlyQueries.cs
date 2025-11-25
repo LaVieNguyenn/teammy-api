@@ -32,6 +32,7 @@ public interface IGroupReadOnlyQueries
     Task<(Guid SemesterId, string? Season, int? Year, DateOnly? StartDate, DateOnly? EndDate, bool IsActive)?> GetSemesterAsync(Guid semesterId, CancellationToken ct);
     Task<(Guid MajorId, string MajorName)?> GetMajorAsync(Guid majorId, CancellationToken ct);
     Task<(Guid TopicId, string Title, string? Description, string Status, Guid CreatedBy, DateTime? CreatedAt)?> GetTopicAsync(Guid topicId, CancellationToken ct);
+    Task<(int MinSize, int MaxSize)> GetGroupSizePolicyAsync(Guid semesterId, CancellationToken ct);
 
     Task<bool> GroupNameExistsAsync(Guid semesterId, string name, Guid? excludeGroupId, CancellationToken ct);
 
