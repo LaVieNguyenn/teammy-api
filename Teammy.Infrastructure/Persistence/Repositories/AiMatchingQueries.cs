@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Teammy.Application.Ai.Models;
@@ -66,47 +68,55 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
             .ToList();
     }
 
-    public async Task<IReadOnlyList<TopicMatchSnapshot>> ListTopicMatchesAsync(Guid groupId, CancellationToken ct)
+    public async Task<IReadOnlyList<RecruitmentPostSnapshot>> ListOpenRecruitmentPostsAsync(Guid semesterId, Guid? majorId, CancellationToken ct)
     {
-        var rows = await _db.mv_group_topic_matches
+        var query = _db.recruitment_posts
             .AsNoTracking()
-            .Where(x => x.group_id == groupId)
-            .ToListAsync(ct);
-
-        return rows
-            .Where(r => r.topic_id.HasValue && r.group_id.HasValue && r.semester_id.HasValue)
-            .Select(r => new TopicMatchSnapshot(
-                r.group_id!.Value,
-                r.topic_id!.Value,
-                r.semester_id!.Value,
-                r.major_id,
-                r.title ?? string.Empty,
-                r.topic_desc,
-                r.simple_score ?? 0))
-            .ToList();
-    }
-
-    public async Task<IReadOnlyList<TopicAvailabilitySnapshot>> ListTopicAvailabilityAsync(Guid semesterId, Guid? majorId, CancellationToken ct)
-    {
-        var query = _db.vw_topics_availables
-            .AsNoTracking()
-            .Where(x => x.semester_id == semesterId);
+            .Where(x => x.semester_id == semesterId)
+            .Where(x => x.status == "open");
 
         if (majorId.HasValue)
             query = query.Where(x => x.major_id == majorId);
 
-        var rows = await query.ToListAsync(ct);
-        return rows
-            .Where(r => r.topic_id.HasValue && r.semester_id.HasValue)
-            .Select(r => new TopicAvailabilitySnapshot(
-                r.topic_id!.Value,
-                r.semester_id!.Value,
-                r.major_id,
-                r.title ?? string.Empty,
-                r.description,
-                r.used_by_groups ?? 0,
-                r.can_take_more ?? false))
-            .ToList();
+        var rows = await (
+                from post in query
+                join grp in _db.groups.AsNoTracking() on post.group_id equals grp.group_id into grpJoin
+                from grp in grpJoin.DefaultIfEmpty()
+                join maj in _db.majors.AsNoTracking() on post.major_id equals maj.major_id into majJoin
+                from major in majJoin.DefaultIfEmpty()
+                orderby post.created_at descending
+                select new RecruitmentPostSnapshot(
+                    post.post_id,
+                    post.semester_id,
+                    post.major_id,
+                    major != null ? major.major_name : null,
+                    post.title,
+                    post.description,
+                    post.group_id,
+                    grp != null ? grp.name : null,
+                    post.status,
+                    post.position_needed,
+                    post.required_skills,
+                    post.created_at,
+                    post.application_deadline))
+            .ToListAsync(ct);
+
+        return rows;
+    }
+
+    public async Task<IReadOnlyList<GroupMemberSkillSnapshot>> ListGroupMemberSkillsAsync(Guid groupId, CancellationToken ct)
+    {
+        var rows = await (
+                from gm in _db.group_members.AsNoTracking()
+                join u in _db.users.AsNoTracking() on gm.user_id equals u.user_id
+                where gm.group_id == groupId && (gm.status == "leader" || gm.status == "member")
+                select new GroupMemberSkillSnapshot(
+                    gm.user_id,
+                    gm.group_id,
+                    u.skills))
+            .ToListAsync(ct);
+
+        return rows;
     }
 
     public async Task<IReadOnlyDictionary<Guid, GroupRoleMixSnapshot>> GetGroupRoleMixAsync(IEnumerable<Guid> groupIds, CancellationToken ct)
@@ -147,6 +157,29 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
         }
 
         return result;
+    }
+
+    public async Task<IReadOnlyList<TopicAvailabilitySnapshot>> ListTopicAvailabilityAsync(Guid semesterId, Guid? majorId, CancellationToken ct)
+    {
+        var query = _db.vw_topics_availables
+            .AsNoTracking()
+            .Where(x => x.semester_id == semesterId);
+
+        if (majorId.HasValue)
+            query = query.Where(x => x.major_id == majorId);
+
+        var rows = await query.ToListAsync(ct);
+        return rows
+            .Where(r => r.topic_id.HasValue && r.semester_id.HasValue)
+            .Select(r => new TopicAvailabilitySnapshot(
+                r.topic_id!.Value,
+                r.semester_id!.Value,
+                r.major_id,
+                r.title ?? string.Empty,
+                r.description,
+                r.used_by_groups ?? 0,
+                r.can_take_more ?? false))
+            .ToList();
     }
 
     public Task RefreshStudentsPoolAsync(CancellationToken ct)
