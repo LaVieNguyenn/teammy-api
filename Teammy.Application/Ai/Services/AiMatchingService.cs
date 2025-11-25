@@ -1,8 +1,8 @@
+using System.Collections.Generic;
 using System.Linq;
 using Teammy.Application.Ai.Dtos;
 using Teammy.Application.Ai.Models;
 using Teammy.Application.Common.Interfaces;
-using Teammy.Application.Groups.Dtos;
 using Teammy.Application.Semesters.Dtos;
 
 namespace Teammy.Application.Ai.Services;
@@ -16,12 +16,12 @@ public sealed class AiMatchingService(
     private const int DefaultSuggestionLimit = 5;
     private const int MaxSuggestionLimit = 20;
 
-    public async Task<IReadOnlyList<TeamSuggestionDto>> SuggestTeamsForStudentAsync(
+    public async Task<IReadOnlyList<RecruitmentPostSuggestionDto>> SuggestRecruitmentPostsForStudentAsync(
         Guid studentId,
-        TeamSuggestionRequest request,
+        RecruitmentPostSuggestionRequest? request,
         CancellationToken ct)
     {
-        request ??= new TeamSuggestionRequest(null, null);
+        request ??= new RecruitmentPostSuggestionRequest(null, null, null);
         await aiQueries.RefreshStudentsPoolAsync(ct);
         var semesterCtx = await ResolveSemesterAsync(request.SemesterId, ct);
         EnsureWindow(DateOnly.FromDateTime(DateTime.UtcNow),
@@ -29,29 +29,28 @@ public sealed class AiMatchingService(
             semesterCtx.Policy.TeamSelfSelectEnd,
             "Thời gian tự ghép nhóm đã đóng, không thể dùng gợi ý AI.");
 
-        var hasGroup = await groupQueries.HasActiveGroupAsync(studentId, semesterCtx.SemesterId, ct);
-        if (hasGroup)
+        if (await groupQueries.HasActiveGroupAsync(studentId, semesterCtx.SemesterId, ct))
             throw new InvalidOperationException("Bạn đã có nhóm trong học kỳ này.");
 
         var profile = await aiQueries.GetStudentProfileAsync(studentId, semesterCtx.SemesterId, ct)
             ?? throw new InvalidOperationException("Không tìm thấy hồ sơ sinh viên trong danh sách ghép tự động.");
 
-        var groups = await aiQueries.ListGroupCapacitiesAsync(semesterCtx.SemesterId, profile.MajorId, ct);
-        if (groups.Count == 0)
-            return Array.Empty<TeamSuggestionDto>();
+        var studentSkills = BuildSkillProfile(profile);
+        var targetMajorId = request.MajorId ?? profile.MajorId;
+        var posts = await aiQueries.ListOpenRecruitmentPostsAsync(semesterCtx.SemesterId, targetMajorId, ct);
+        if (posts.Count == 0)
+            return Array.Empty<RecruitmentPostSuggestionDto>();
 
-        var mixes = await aiQueries.GetGroupRoleMixAsync(groups.Select(g => g.GroupId), ct);
         var limit = NormalizeLimit(request.Limit);
-
-        var items = groups
-            .Select(g => BuildTeamSuggestion(profile, g, mixes.TryGetValue(g.GroupId, out var mix)
-                ? mix
-                : new GroupRoleMixSnapshot(g.GroupId, 0, 0, 0)))
-            .OrderByDescending(x => x.Score)
+        var suggestions = posts
+            .Select(post => BuildPostSuggestion(studentSkills, profile.MajorId, post))
+            .Where(dto => dto is not null)
+            .Select(dto => dto!)
+            .OrderByDescending(dto => dto.Score)
             .Take(limit)
             .ToList();
 
-        return items;
+        return suggestions;
     }
 
     public async Task<IReadOnlyList<TopicSuggestionDto>> SuggestTopicsForGroupAsync(
@@ -78,35 +77,36 @@ public sealed class AiMatchingService(
         if (!detail.MajorId.HasValue)
             throw new InvalidOperationException("Nhóm chưa có chuyên ngành xác định.");
 
-        var matches = await aiQueries.ListTopicMatchesAsync(request.GroupId, ct);
-        if (matches.Count == 0)
-            return Array.Empty<TopicSuggestionDto>();
+        var members = await aiQueries.ListGroupMemberSkillsAsync(request.GroupId, ct);
+        if (members.Count == 0)
+            throw new InvalidOperationException("Nhóm cần ít nhất một thành viên có hồ sơ kỹ năng để gợi ý.");
+
+        var aggregatedProfile = members
+            .Select(m => AiSkillProfile.FromJson(m.SkillsJson))
+            .Where(p => p.HasTags || p.PrimaryRole != AiPrimaryRole.Unknown)
+            .ToList();
+
+        var groupSkillProfile = aggregatedProfile.Count == 0
+            ? AiSkillProfile.Empty
+            : AiSkillProfile.Combine(aggregatedProfile);
 
         var available = await aiQueries.ListTopicAvailabilityAsync(detail.SemesterId, detail.MajorId, ct);
-        var availableDict = available
-            .Where(a => a.CanTakeMore)
-            .ToDictionary(a => a.TopicId, a => a);
-
-        if (availableDict.Count == 0)
+        if (available.Count == 0)
             return Array.Empty<TopicSuggestionDto>();
 
         var limit = NormalizeLimit(request.Limit);
-        var items = matches
-            .Where(m => availableDict.TryGetValue(m.TopicId, out _))
-            .Select(m =>
-            {
-                var bucket = availableDict[m.TopicId];
-                var score = m.SimpleScore + 10;
-                return new TopicSuggestionDto(m.TopicId, m.Title, m.Description, score, bucket.CanTakeMore);
-            })
-            .OrderByDescending(x => x.Score)
+        var items = available
+            .Select(topic => BuildTopicSuggestion(topic, groupSkillProfile))
+            .Where(dto => dto is not null)
+            .Select(dto => dto!)
+            .OrderByDescending(dto => dto.Score)
             .Take(limit)
             .ToList();
 
         return items;
     }
 
-    public async Task<AutoAssignTeamsResultDto> AutoAssignTeamsAsync(AutoAssignTeamsRequest request, CancellationToken ct)
+    public async Task<AutoAssignTeamsResultDto> AutoAssignTeamsAsync(AutoAssignTeamsRequest? request, CancellationToken ct)
     {
         request ??= new AutoAssignTeamsRequest(null, null, null);
         await aiQueries.RefreshStudentsPoolAsync(ct);
@@ -181,26 +181,106 @@ public sealed class AiMatchingService(
         return new AutoAssignTeamsResultDto(assignments.Count, assignments, remainingStudentIds, openGroups);
     }
 
-    private static TeamSuggestionDto BuildTeamSuggestion(
-        StudentProfileSnapshot student,
-        GroupCapacitySnapshot group,
-        GroupRoleMixSnapshot mix)
+    private static AiSkillProfile BuildSkillProfile(StudentProfileSnapshot student)
     {
-        var role = AiRoleHelper.Parse(student.PrimaryRole);
-        var needsFrontend = mix.FrontendCount == 0;
-        var needsBackend = mix.BackendCount == 0;
-        var roleBoost = role switch
+        var parsed = AiSkillProfile.FromJson(student.SkillsJson);
+        var fallbackRole = AiRoleHelper.Parse(student.PrimaryRole);
+        if (parsed.PrimaryRole == AiPrimaryRole.Unknown && fallbackRole != AiPrimaryRole.Unknown)
+            parsed = parsed with { PrimaryRole = fallbackRole };
+        return parsed;
+    }
+
+    private static RecruitmentPostSuggestionDto? BuildPostSuggestion(
+        AiSkillProfile studentProfile,
+        Guid studentMajorId,
+        RecruitmentPostSnapshot post)
+    {
+        var requiredProfile = AiSkillProfile.FromJson(post.RequiredSkills);
+        if (!requiredProfile.HasTags && !string.IsNullOrWhiteSpace(post.PositionNeeded))
+            requiredProfile = AiSkillProfile.FromText(post.PositionNeeded);
+
+        var matchingSkills = studentProfile.FindMatches(requiredProfile).ToList();
+        if (matchingSkills.Count == 0 && !string.IsNullOrWhiteSpace(post.PositionNeeded))
         {
-            AiPrimaryRole.Frontend when needsFrontend => 40,
-            AiPrimaryRole.Backend when needsBackend => 40,
-            AiPrimaryRole.Frontend => 15,
-            AiPrimaryRole.Backend => 15,
-            _ => 5
-        };
-        var capacityBoost = Math.Clamp(group.RemainingSlots, 1, 5) * 5;
-        var completionBoost = student.SkillsCompleted ? 5 : 0;
-        var score = roleBoost + capacityBoost + completionBoost;
-        return new TeamSuggestionDto(group.GroupId, group.Name, group.Description, score, group.RemainingSlots, needsFrontend, needsBackend);
+            var normalized = post.PositionNeeded!.ToLowerInvariant();
+            matchingSkills = studentProfile.Tags
+                .Where(tag => normalized.Contains(tag))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(5)
+                .ToList();
+        }
+
+        var overlapScore = matchingSkills.Count * 18;
+        var roleScore = ScoreRoleMatch(studentProfile.PrimaryRole, requiredProfile.PrimaryRole, post.PositionNeeded);
+        var majorBoost = post.MajorId.HasValue && post.MajorId.Value == studentMajorId ? 15 : 5;
+        var recencyDays = Math.Clamp((int)(DateTime.UtcNow - post.CreatedAt).TotalDays, 0, 30);
+        var recencyBoost = Math.Max(5, 30 - recencyDays);
+        var totalScore = overlapScore + roleScore + majorBoost + recencyBoost;
+
+        if (totalScore <= 20)
+            return null;
+
+        return new RecruitmentPostSuggestionDto(
+            post.PostId,
+            post.Title,
+            post.Description,
+            post.GroupId,
+            post.GroupName,
+            post.MajorId,
+            post.MajorName,
+            post.CreatedAt,
+            post.ApplicationDeadline,
+            totalScore,
+            post.PositionNeeded,
+            post.RequiredSkills,
+            matchingSkills
+        );
+    }
+
+    private static TopicSuggestionDto? BuildTopicSuggestion(TopicAvailabilitySnapshot topic, AiSkillProfile groupProfile)
+    {
+        var searchable = $"{topic.Title} {topic.Description}".ToLowerInvariant();
+        var matchingSkills = groupProfile.HasTags
+            ? groupProfile.Tags.Where(tag => searchable.Contains(tag)).Distinct(StringComparer.OrdinalIgnoreCase).Take(5).ToList()
+            : new List<string>();
+
+        var matchScore = matchingSkills.Count * 12;
+        if (matchingSkills.Count == 0 && !groupProfile.HasTags)
+            matchScore = 8; // fallback so groups without profile still get suggestions
+
+        var roleScore = ScoreRoleMatch(groupProfile.PrimaryRole, InferRoleFromText(searchable), searchable);
+        var capacityBoost = topic.CanTakeMore ? 10 : 0;
+        var totalScore = matchScore + roleScore + capacityBoost;
+
+        if (totalScore <= 10)
+            return null;
+
+        return new TopicSuggestionDto(topic.TopicId, topic.Title, topic.Description, totalScore, topic.CanTakeMore, matchingSkills);
+    }
+
+    private static int ScoreRoleMatch(AiPrimaryRole studentRole, AiPrimaryRole requiredRole, string? textHint)
+    {
+        if (studentRole == AiPrimaryRole.Unknown)
+            return 5;
+
+        if (requiredRole != AiPrimaryRole.Unknown)
+            return studentRole == requiredRole ? 35 : 5;
+
+        var inferred = InferRoleFromText(textHint);
+        return inferred != AiPrimaryRole.Unknown && inferred == studentRole ? 25 : 5;
+    }
+
+    private static AiPrimaryRole InferRoleFromText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return AiPrimaryRole.Unknown;
+
+        var normalized = text.ToLowerInvariant();
+        if (normalized.Contains("frontend") || normalized.Contains("ui") || normalized.Contains("react") || normalized.Contains("figma") || normalized.Contains("flutter"))
+            return AiPrimaryRole.Frontend;
+        if (normalized.Contains("backend") || normalized.Contains("api") || normalized.Contains("server") || normalized.Contains("database") || normalized.Contains("microservice"))
+            return AiPrimaryRole.Backend;
+        return AiPrimaryRole.Other;
     }
 
     private async Task<(Guid SemesterId, SemesterPolicyDto Policy)> ResolveSemesterAsync(Guid? semesterId, CancellationToken ct)
@@ -343,4 +423,5 @@ public sealed class AiMatchingService(
             };
         }
     }
+
 }
