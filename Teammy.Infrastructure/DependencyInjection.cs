@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Files;
 using Teammy.Application.Kanban.Interfaces;
+using Teammy.Application.Ai.Services;
 using Teammy.Application.Kanban.Services;
 using Teammy.Application.Topics.Services;
 using Teammy.Application.Semesters.Services;
@@ -89,6 +90,10 @@ public static class DependencyInjection
         services.AddScoped<ISkillDictionaryReadOnlyQueries, SkillDictionaryQueries>();
         services.AddScoped<ISkillDictionaryWriteRepository, SkillDictionaryWriteRepository>();
         services.AddScoped<SkillDictionaryService>();
+
+        // AI Matching
+        services.AddScoped<IAiMatchingQueries, AiMatchingQueries>();
+        services.AddScoped<AiMatchingService>();
         
         // Semester phase guard
         services.AddScoped<SemesterPhaseGuard>();
