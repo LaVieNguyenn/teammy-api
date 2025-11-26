@@ -55,6 +55,14 @@ public sealed class UsersController : ControllerBase
         return Ok(dto);
     }
 
+    [HttpGet("{userId:guid}/profile")]
+    [Authorize]
+    public async Task<ActionResult<UserProfileDto>> GetProfileById(Guid userId, CancellationToken ct)
+    {
+        var dto = await _profileService.GetProfileAsync(userId, ct);
+        return Ok(dto);
+    }
+
     [HttpPut("me/profile")]
     [Authorize]
     public async Task<ActionResult<UserProfileDto>> UpdateProfile(
