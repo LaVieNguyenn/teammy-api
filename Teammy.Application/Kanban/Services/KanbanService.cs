@@ -53,14 +53,14 @@ public sealed class KanbanService(
         if (!await access.IsMemberAsync(groupId, currentUserId, ct))
             throw new UnauthorizedAccessException("Not a group member");
         await repo.EnsureBoardForGroupAsync(groupId, ct);
-        return await repo.CreateTaskAsync(groupId, req.ColumnId, req.Title.Trim(), req.Description, req.Priority, req.Status, req.DueDate, ct);
+        return await repo.CreateTaskAsync(groupId, req.ColumnId, req.Title.Trim(), req.Description, req.Priority, req.Status, req.DueDate, req.BacklogItemId, ct);
     }
 
     public async Task UpdateTaskAsync(Guid groupId, Guid taskId, Guid currentUserId, UpdateTaskRequest req, CancellationToken ct)
     {
         if (!await access.IsMemberAsync(groupId, currentUserId, ct))
             throw new UnauthorizedAccessException("Not a group member");
-        await repo.UpdateTaskAsync(taskId, req.ColumnId, req.Title.Trim(), req.Description, req.Priority, req.Status, req.DueDate, ct);
+        await repo.UpdateTaskAsync(taskId, req.ColumnId, req.Title.Trim(), req.Description, req.Priority, req.Status, req.DueDate, req.BacklogItemId, ct);
     }
 
     public async Task DeleteTaskAsync(Guid groupId, Guid taskId, Guid currentUserId, CancellationToken ct)

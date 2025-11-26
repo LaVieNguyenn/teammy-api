@@ -10,6 +10,8 @@ using Teammy.Application.Topics.Services;
 using Teammy.Application.Semesters.Services;
 using Teammy.Application.Skills.Services;
 using Teammy.Application.Users.Services;
+using Teammy.Application.ProjectTracking.Interfaces;
+using Teammy.Application.ProjectTracking.Services;
 using Teammy.Infrastructure.Auth;
 using Teammy.Infrastructure.Email;
 using Teammy.Infrastructure.Excel;
@@ -80,6 +82,11 @@ public static class DependencyInjection
         services.AddScoped<IGroupAccessQueries, GroupAccessQueries>();
         services.AddScoped<IFileStorage, GoogleDriveStorage>();
         services.AddScoped<KanbanService>();
+
+        // Project tracking
+        services.AddScoped<IProjectTrackingReadOnlyQueries, ProjectTrackingReadOnlyQueries>();
+        services.AddScoped<IProjectTrackingRepository, ProjectTrackingRepository>();
+        services.AddScoped<ProjectTrackingService>();
 
         // Semester & Semester policies
         services.AddScoped<ISemesterRepository, SemesterRepository>();
