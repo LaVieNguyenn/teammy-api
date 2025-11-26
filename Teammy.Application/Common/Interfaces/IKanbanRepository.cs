@@ -12,8 +12,8 @@ public interface IKanbanRepository
     Task DeleteColumnAsync(Guid columnId, CancellationToken ct);
 
     // Tasks
-    Task<Guid> CreateTaskAsync(Guid groupId, Guid columnId, string title, string? description, string? priority, string? status, DateTime? dueDate, CancellationToken ct);
-    Task UpdateTaskAsync(Guid taskId, Guid? newColumnId, string title, string? description, string? priority, string? status, DateTime? dueDate, CancellationToken ct);
+    Task<Guid> CreateTaskAsync(Guid groupId, Guid columnId, string title, string? description, string? priority, string? status, DateTime? dueDate, Guid? backlogItemId, CancellationToken ct);
+    Task UpdateTaskAsync(Guid taskId, Guid? newColumnId, string title, string? description, string? priority, string? status, DateTime? dueDate, Guid? backlogItemId, CancellationToken ct);
     Task DeleteTaskAsync(Guid taskId, CancellationToken ct);
     Task<MoveTaskResponse> MoveTaskAsync(Guid groupId, Guid taskId, MoveTaskRequest req, CancellationToken ct);
 

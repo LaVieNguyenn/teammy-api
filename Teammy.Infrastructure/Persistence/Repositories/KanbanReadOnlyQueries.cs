@@ -37,6 +37,7 @@ public async Task<BoardVm?> GetBoardAsync(Guid groupId, CancellationToken ct)
             t.priority,
             t.status,
             t.due_date,
+            t.backlog_item_id,
             t.sort_order
         })
         .ToListAsync(ct);
@@ -82,6 +83,7 @@ public async Task<BoardVm?> GetBoardAsync(Guid groupId, CancellationToken ct)
                  t.priority,
                  t.status,
                  t.due_date,
+                 t.backlog_item_id,
                  t.sort_order,
                  mapAss.TryGetValue(t.task_id, out var u)
                      ? u
