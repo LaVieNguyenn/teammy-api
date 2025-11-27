@@ -6,26 +6,20 @@ namespace Teammy.Application.Groups.Services;
 public sealed class GroupService(
     IGroupRepository repo,
     IGroupReadOnlyQueries queries,
-    IRecruitmentPostRepository postRepo,
-    ITopicReadOnlyQueries topicQueries,
-    ITopicWriteRepository topicWrite,
     IUserReadOnlyQueries userQueries)
 {
-    private readonly ITopicReadOnlyQueries _topicQueries = topicQueries;
-    private readonly ITopicWriteRepository _topicWrite = topicWrite;
     private readonly IUserReadOnlyQueries _userQueries = userQueries;
 
     public async Task<Guid> CreateGroupAsync(Guid creatorUserId, CreateGroupRequest req, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(req.Name))
             throw new ArgumentException("Name is required");
-        if (req.MaxMembers <= 0)
-            throw new ArgumentException("MaxMembers must be > 0");
-        if (req.MaxMembers < 4 || req.MaxMembers > 6)
-            throw new ArgumentException("MaxMembers must be between 4 and 6");
-
         var semesterId = req.SemesterId ?? await queries.GetActiveSemesterIdAsync(ct)
             ?? throw new InvalidOperationException("No active semester and no semesterId provided");
+
+        var (minSize, maxSize) = await queries.GetGroupSizePolicyAsync(semesterId, ct);
+        if (req.MaxMembers < minSize || req.MaxMembers > maxSize)
+            throw new ArgumentException($"Members must be between {minSize} and {maxSize} in this semester");
 
         var hasActive = await queries.HasActiveMembershipInSemesterAsync(creatorUserId, semesterId, ct);
         if (hasActive)
@@ -37,7 +31,10 @@ public sealed class GroupService(
         if (!majorId.HasValue)
             throw new InvalidOperationException("User hasn't major");
 
-        var groupId = await repo.CreateGroupAsync(semesterId, req.TopicId, majorId, req.Name, req.Description, req.MaxMembers, ct);
+        if (req.TopicId.HasValue)
+            throw new InvalidOperationException("Topic will be assigned after mentor confirmation");
+
+        var groupId = await repo.CreateGroupAsync(semesterId, null, majorId, req.Name, req.Description, req.MaxMembers, ct);
         await repo.AddMembershipAsync(groupId, creatorUserId, semesterId, "leader", ct);
         return groupId;
     }
@@ -123,46 +120,14 @@ public sealed class GroupService(
         if (req.MaxMembers.HasValue)
         {
             var (_, activeCount) = await queries.GetGroupCapacityAsync(groupId, ct);
-            if (req.MaxMembers.Value < 4 || req.MaxMembers.Value > 6)
-                throw new InvalidOperationException("MaxMembers must be between 4 and 6");
+            var (minSize, maxSize) = await queries.GetGroupSizePolicyAsync(detail.SemesterId, ct);
+            if (req.MaxMembers.Value < minSize || req.MaxMembers.Value > maxSize)
+                throw new InvalidOperationException($"Members must be between {minSize} and {maxSize} in this semester");
             if (req.MaxMembers.Value < activeCount)
                 throw new InvalidOperationException($"MaxMembers cannot be less than current active members ({activeCount})");
         }
 
-        var setTopicAndActivate = false;
-        Guid? mentorId = req.MentorId;
-        Guid? topicToClose = null;
-        Guid? previousTopicId = detail.TopicId;
-        if (req.TopicId.HasValue)
-        {
-            var (maxMembers, activeCount) = await queries.GetGroupCapacityAsync(groupId, ct);
-            if (activeCount < maxMembers)
-                throw new InvalidOperationException("Group must be full to select a topic");
-            setTopicAndActivate = true;
-            topicToClose = req.TopicId;
-
-            if (!mentorId.HasValue)
-            {
-                mentorId = await _topicQueries.GetDefaultMentorIdAsync(req.TopicId.Value, ct)
-                    ?? throw new InvalidOperationException("Selected topic does not have an assigned mentor");
-            }
-        }
-
-        await repo.UpdateGroupAsync(groupId, req.Name, req.Description, req.MaxMembers, req.MajorId, req.TopicId, mentorId, ct);
-
-        if (setTopicAndActivate)
-        {
-            if (topicToClose.HasValue)
-            {
-                await _topicWrite.SetStatusAsync(topicToClose.Value, "closed", ct);
-            }
-            if (previousTopicId.HasValue && (!req.TopicId.HasValue || previousTopicId.Value != req.TopicId.Value))
-            {
-                await _topicWrite.SetStatusAsync(previousTopicId.Value, "open", ct);
-            }
-            await repo.SetStatusAsync(groupId, "active", ct);
-            await postRepo.CloseAllOpenPostsForGroupAsync(groupId, ct);
-        }
+        await repo.UpdateGroupAsync(groupId, req.Name, req.Description, req.MaxMembers, req.MajorId, null, null, ct);
     }
 
     // Leader remove a member 

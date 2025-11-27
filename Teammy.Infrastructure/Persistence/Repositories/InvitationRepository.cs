@@ -7,12 +7,13 @@ namespace Teammy.Infrastructure.Persistence.Repositories;
 
 public sealed class InvitationRepository(AppDbContext db) : IInvitationRepository
 {
-    public async Task<Guid> CreateAsync(Guid groupId, Guid inviteeUserId, Guid invitedBy, string? message, DateTime? expiresAt, CancellationToken ct)
+    public async Task<Guid> CreateAsync(Guid groupId, Guid inviteeUserId, Guid invitedBy, string? message, DateTime? expiresAt, Guid? topicId, CancellationToken ct)
     {
         var inv = new invitation
         {
             invitation_id = Guid.NewGuid(),
             group_id = groupId,
+            topic_id = topicId,
             invitee_user_id = inviteeUserId,
             invited_by = invitedBy,
             status = "pending",
@@ -66,5 +67,20 @@ public sealed class InvitationRepository(AppDbContext db) : IInvitationRepositor
         inv.responded_at = null;
         inv.expires_at = expiresAt;
         await db.SaveChangesAsync(ct);
+    }
+
+    public async Task<int> RevokePendingMentorInvitesAsync(Guid groupId, Guid exceptInvitationId, CancellationToken ct)
+    {
+        var items = await db.invitations
+            .Where(i => i.group_id == groupId && i.invitation_id != exceptInvitationId && i.topic_id != null && i.status == "pending")
+            .ToListAsync(ct);
+        if (items.Count == 0) return 0;
+        foreach (var inv in items)
+        {
+            inv.status = "revoked";
+            inv.responded_at = DateTime.UtcNow;
+        }
+        await db.SaveChangesAsync(ct);
+        return items.Count;
     }
 }

@@ -253,6 +253,19 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
             .Select(t => new ValueTuple<Guid, string, string?, string, Guid, DateTime?>(t.topic_id, t.title, t.description, t.status, t.created_by, t.created_at))
             .FirstOrDefaultAsync(ct)
             .ContinueWith(t => t.Result == default ? (ValueTuple<Guid, string, string?, string, Guid, DateTime?>?)null : t.Result, ct);
+
+    public async Task<(int MinSize, int MaxSize)> GetGroupSizePolicyAsync(Guid semesterId, CancellationToken ct)
+    {
+        var policy = await db.semester_policies.AsNoTracking()
+            .Where(p => p.semester_id == semesterId)
+            .Select(p => new { p.desired_group_size_min, p.desired_group_size_max })
+            .FirstOrDefaultAsync(ct);
+        if (policy is null)
+            return (4, 6);
+        var min = policy.desired_group_size_min <= 0 ? 4 : policy.desired_group_size_min;
+        var max = policy.desired_group_size_max < min ? min : policy.desired_group_size_max;
+        return (min, max);
+    }
     public Task<(Guid MajorId, string MajorName)?> GetMajorAsync(Guid majorId, CancellationToken ct)
         => db.majors.AsNoTracking()
             .Where(m => m.major_id == majorId)
@@ -281,17 +294,21 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
                 u.display_name!,
                 u.avatar_url,
                 c.created_at,
-                c.message)
+                c.message,
+                null,
+                null)
         ).ToListAsync(ct);
 
         var invs = await (
             from i in db.invitations.AsNoTracking()
             join u in db.users.AsNoTracking() on i.invitee_user_id equals u.user_id into uu
             from u in uu.DefaultIfEmpty()
+            join t in db.topics.AsNoTracking() on i.topic_id equals t.topic_id into tt
+            from t in tt.DefaultIfEmpty()
             where i.group_id == groupId && i.status == "pending"
             orderby i.created_at descending
             select new Teammy.Application.Groups.Dtos.GroupPendingItemDto(
-                "invitation",
+                i.topic_id != null ? "mentor_invitation" : "invitation",
                 i.invitation_id,
                 null,
                 i.invitee_user_id,
@@ -299,7 +316,9 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
                 u != null ? u.display_name! : string.Empty,
                 u != null ? u.avatar_url : null,
                 i.created_at,
-                i.message)
+                i.message,
+                i.topic_id,
+                t != null ? t.title : null)
         ).ToListAsync(ct);
 
         return apps

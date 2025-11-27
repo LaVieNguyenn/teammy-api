@@ -58,6 +58,20 @@ public sealed class SemesterReadOnlyQueries : ISemesterReadOnlyQueries
 
         return s is null ? null : MapDetail(now, s);
     }
+
+    public Task<SemesterPolicyDto?> GetPolicyAsync(Guid semesterId, CancellationToken ct)
+        => _db.semester_policies.AsNoTracking()
+            .Where(p => p.semester_id == semesterId)
+            .Select(p => new SemesterPolicyDto(
+                p.team_self_select_start,
+                p.team_self_select_end,
+                p.team_suggest_start,
+                p.topic_self_select_start,
+                p.topic_self_select_end,
+                p.topic_suggest_start,
+                p.desired_group_size_min,
+                p.desired_group_size_max))
+            .FirstOrDefaultAsync(ct);
     private static SemesterDetailDto MapDetail(DateTime now, semester s)
     {
         SemesterPolicyDto? p = null;
