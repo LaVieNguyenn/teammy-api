@@ -19,28 +19,56 @@ namespace Teammy.Infrastructure.Persistence.Repositories
 
         public async Task<CurrentUserDto?> GetCurrentUserAsync(Guid userId, CancellationToken ct)
         {
-            var query =
-                from u in _db.users
-                join ur in _db.user_roles on u.user_id equals ur.user_id
-                join r in _db.roles on ur.role_id equals r.role_id
-                where u.user_id == userId
-                select new
-                {
-                    User = u,
-                    RoleName = r.name
-                };
+            var user = await _db.users.AsNoTracking()
+                .Include(u => u.major)
+                .FirstOrDefaultAsync(u => u.user_id == userId, ct);
 
-            var row = await query.AsNoTracking().FirstOrDefaultAsync(ct);
-            if (row is null) return null;
+            if (user is null) return null;
+
+            var roles = await (from ur in _db.user_roles.AsNoTracking()
+                               join r in _db.roles.AsNoTracking() on ur.role_id equals r.role_id
+                               where ur.user_id == userId
+                               select new UserRoleDto(ur.role_id, r.name))
+                .ToListAsync(ct);
+
+            var primaryRole = roles.Count > 0 ? roles[0].Name : "student";
+
+            JsonElement? skills = null;
+            if (!string.IsNullOrWhiteSpace(user.skills))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(user.skills);
+                    skills = doc.RootElement.Clone();
+                }
+                catch
+                {
+                    // ignore malformed json
+                }
+            }
+
+            var major = user.major is null
+                ? null
+                : new MajorSummaryDto(user.major.major_id, user.major.major_name);
 
             return new CurrentUserDto(
-                row.User.user_id,
-                row.User.email!,
-                row.User.display_name!,
-                row.RoleName!,
-                row.User.avatar_url,
-                row.User.email_verified,
-                row.User.skills_completed
+                user.user_id,
+                user.email!,
+                user.display_name!,
+                user.avatar_url,
+                user.email_verified,
+                user.skills_completed,
+                user.is_active,
+                primaryRole,
+                roles,
+                user.phone,
+                user.student_code,
+                user.gender,
+                user.major_id,
+                major,
+                skills,
+                user.created_at,
+                user.updated_at
             );
         }
 
