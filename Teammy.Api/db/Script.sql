@@ -352,6 +352,64 @@ CREATE TABLE IF NOT EXISTS teammy.shared_files (
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ========== 6b) Backlog & Milestones ==========
+CREATE TABLE IF NOT EXISTS teammy.backlog_items (
+  backlog_item_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  group_id        UUID NOT NULL REFERENCES teammy.groups(group_id) ON DELETE CASCADE,
+  title           TEXT NOT NULL,
+  description     TEXT,
+  priority        TEXT,
+  status          TEXT NOT NULL DEFAULT 'planned'
+                   CHECK (status IN ('planned','ready','in_progress','blocked','completed','archived')),
+  category        TEXT,
+  story_points    INT,
+  owner_user_id   UUID REFERENCES teammy.users(user_id) ON DELETE SET NULL,
+  created_by      UUID NOT NULL REFERENCES teammy.users(user_id),
+  due_date        TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_backlog_items_group_status
+  ON teammy.backlog_items(group_id, status);
+CREATE INDEX IF NOT EXISTS ix_backlog_items_owner
+  ON teammy.backlog_items(owner_user_id);
+
+ALTER TABLE teammy.tasks
+  ADD COLUMN IF NOT EXISTS backlog_item_id UUID REFERENCES teammy.backlog_items(backlog_item_id) ON DELETE SET NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_tasks_backlog_item
+  ON teammy.tasks(backlog_item_id)
+  WHERE backlog_item_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS teammy.milestones (
+  milestone_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  group_id     UUID NOT NULL REFERENCES teammy.groups(group_id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  description  TEXT,
+  target_date  DATE,
+  status       TEXT NOT NULL DEFAULT 'planned'
+                 CHECK (status IN ('planned','in_progress','completed','blocked','archived','slipped')),
+  completed_at TIMESTAMPTZ,
+  created_by   UUID NOT NULL REFERENCES teammy.users(user_id),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_milestones_group_status
+  ON teammy.milestones(group_id, status);
+CREATE INDEX IF NOT EXISTS ix_milestones_target_date
+  ON teammy.milestones(target_date);
+
+CREATE TABLE IF NOT EXISTS teammy.milestone_items (
+  milestone_item_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  milestone_id      UUID NOT NULL REFERENCES teammy.milestones(milestone_id) ON DELETE CASCADE,
+  backlog_item_id   UUID NOT NULL REFERENCES teammy.backlog_items(backlog_item_id) ON DELETE CASCADE,
+  added_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (milestone_id, backlog_item_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_milestone_items_backlog
+  ON teammy.milestone_items(backlog_item_id);
+
 -- ========== 7) Chat ==========
 CREATE TABLE IF NOT EXISTS teammy.chat_sessions (
   chat_session_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -14,6 +14,8 @@ public partial class AppDbContext : DbContext
 
     public virtual DbSet<announcement> announcements { get; set; }
 
+    public virtual DbSet<backlog_item> backlog_items { get; set; }
+
     public virtual DbSet<board> boards { get; set; }
 
     public virtual DbSet<candidate> candidates { get; set; }
@@ -35,6 +37,10 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<major> majors { get; set; }
 
     public virtual DbSet<message> messages { get; set; }
+
+    public virtual DbSet<milestone> milestones { get; set; }
+
+    public virtual DbSet<milestone_item> milestone_items { get; set; }
 
     public virtual DbSet<mv_group_capacity> mv_group_capacities { get; set; }
 
@@ -105,6 +111,37 @@ public partial class AppDbContext : DbContext
                 .HasForeignKey(d => d.target_group_id)
                 .OnDelete(DeleteBehavior.Cascade)
                 .HasConstraintName("announcements_target_group_id_fkey");
+        });
+
+        modelBuilder.Entity<backlog_item>(entity =>
+        {
+            entity.HasKey(e => e.backlog_item_id).HasName("backlog_items_pkey");
+
+            entity.ToTable("backlog_items", "teammy");
+
+            entity.HasIndex(e => e.owner_user_id, "ix_backlog_items_owner");
+
+            entity.HasIndex(e => new { e.group_id, e.status }, "ix_backlog_items_group_status");
+
+            entity.Property(e => e.backlog_item_id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.created_at).HasDefaultValueSql("now()");
+            entity.Property(e => e.status).HasDefaultValueSql("'planned'::text");
+            entity.Property(e => e.updated_at).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.created_byNavigation).WithMany(p => p.backlog_itemcreated_bies)
+                .HasForeignKey(d => d.created_by)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("backlog_items_created_by_fkey");
+
+            entity.HasOne(d => d.group).WithMany(p => p.backlog_items)
+                .HasForeignKey(d => d.group_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("backlog_items_group_id_fkey");
+
+            entity.HasOne(d => d.owner_user).WithMany(p => p.backlog_itemowner_users)
+                .HasForeignKey(d => d.owner_user_id)
+                .OnDelete(DeleteBehavior.SetNull)
+                .HasConstraintName("backlog_items_owner_user_id_fkey");
         });
 
         modelBuilder.Entity<board>(entity =>
@@ -373,6 +410,54 @@ public partial class AppDbContext : DbContext
                 .HasConstraintName("messages_sender_id_fkey");
         });
 
+        modelBuilder.Entity<milestone>(entity =>
+        {
+            entity.HasKey(e => e.milestone_id).HasName("milestones_pkey");
+
+            entity.ToTable("milestones", "teammy");
+
+            entity.HasIndex(e => e.target_date, "ix_milestones_target_date");
+
+            entity.HasIndex(e => new { e.group_id, e.status }, "ix_milestones_group_status");
+
+            entity.Property(e => e.milestone_id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.created_at).HasDefaultValueSql("now()");
+            entity.Property(e => e.status).HasDefaultValueSql("'planned'::text");
+            entity.Property(e => e.updated_at).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.created_byNavigation).WithMany(p => p.milestone_created_bies)
+                .HasForeignKey(d => d.created_by)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("milestones_created_by_fkey");
+
+            entity.HasOne(d => d.group).WithMany(p => p.milestones)
+                .HasForeignKey(d => d.group_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("milestones_group_id_fkey");
+        });
+
+        modelBuilder.Entity<milestone_item>(entity =>
+        {
+            entity.HasKey(e => e.milestone_item_id).HasName("milestone_items_pkey");
+
+            entity.ToTable("milestone_items", "teammy");
+
+            entity.HasIndex(e => e.backlog_item_id, "ux_milestone_items_backlog").IsUnique();
+
+            entity.HasIndex(e => new { e.milestone_id, e.backlog_item_id }, "milestone_items_milestone_id_backlog_item_id_key").IsUnique();
+
+            entity.Property(e => e.milestone_item_id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.added_at).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.backlog_item).WithMany(p => p.milestone_items)
+                .HasForeignKey(d => d.backlog_item_id)
+                .HasConstraintName("milestone_items_backlog_item_id_fkey");
+
+            entity.HasOne(d => d.milestone).WithMany(p => p.milestone_items)
+                .HasForeignKey(d => d.milestone_id)
+                .HasConstraintName("milestone_items_milestone_id_fkey");
+        });
+
         modelBuilder.Entity<mv_group_capacity>(entity =>
         {
             entity
@@ -530,6 +615,10 @@ public partial class AppDbContext : DbContext
 
             entity.HasIndex(e => new { e.column_id, e.sort_order }, "idx_tasks_column_sort");
 
+            entity.HasIndex(e => e.backlog_item_id, "ux_tasks_backlog_item")
+                .IsUnique()
+                .HasFilter("(backlog_item_id IS NOT NULL)");
+
             entity.Property(e => e.task_id).HasDefaultValueSql("gen_random_uuid()");
             entity.Property(e => e.created_at).HasDefaultValueSql("now()");
             entity.Property(e => e.sort_order).HasPrecision(20, 6);
@@ -542,6 +631,11 @@ public partial class AppDbContext : DbContext
             entity.HasOne(d => d.group).WithMany(p => p.tasks)
                 .HasForeignKey(d => d.group_id)
                 .HasConstraintName("tasks_group_id_fkey");
+
+            entity.HasOne(d => d.backlog_item).WithMany(p => p.tasks)
+                .HasForeignKey(d => d.backlog_item_id)
+                .OnDelete(DeleteBehavior.SetNull)
+                .HasConstraintName("tasks_backlog_item_id_fkey");
         });
 
         modelBuilder.Entity<task_assignment>(entity =>
