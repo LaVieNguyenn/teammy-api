@@ -1,4 +1,5 @@
 using Teammy.Application.Common.Interfaces;
+using System.Text.Json;
 using Teammy.Application.Posts.Dtos;
 
 namespace Teammy.Application.Posts.Services;
@@ -29,7 +30,19 @@ public sealed class RecruitmentPostService(
                      .ToUniversalTime();
         if (expiresAt <= DateTime.UtcNow)
             throw new ArgumentException("Expiration time must be in the future");
-        var postId = await repo.CreateRecruitmentPostAsync(semesterId, postType: "group_hiring", groupId: req.GroupId, userId: null, targetMajorId, req.Title, req.Description, req.Skills, expiresAt, ct);
+        var requiredSkillsJson = SerializeSkills(req.Skills);
+        var postId = await repo.CreateRecruitmentPostAsync(
+            semesterId,
+            postType: "group_hiring",
+            groupId: req.GroupId,
+            userId: null,
+            targetMajorId,
+            req.Title,
+            req.Description,
+            req.PositionNeeded,
+            requiredSkillsJson,
+            expiresAt,
+            ct);
         return postId;
     }
 
@@ -88,7 +101,11 @@ public sealed class RecruitmentPostService(
         => EnsureOwner(postId, currentUserId, ct, () => queries.ListApplicationsAsync(postId, ct));
 
     public Task UpdateAsync(Guid postId, Guid currentUserId, UpdateRecruitmentPostRequest req, CancellationToken ct)
-        => EnsureOwner(postId, currentUserId, ct, () => repo.UpdatePostAsync(postId, req.Title, req.Description, req.Skills, req.Status, ct));
+        => EnsureOwner(postId, currentUserId, ct, () =>
+        {
+            var requiredSkillsJson = SerializeSkills(req.Skills);
+            return repo.UpdatePostAsync(postId, req.Title, req.Description, req.PositionNeeded, req.Status, requiredSkillsJson, ct);
+        });
 
     public Task DeleteAsync(Guid postId, Guid currentUserId, CancellationToken ct)
         => EnsureOwner(postId, currentUserId, ct, () => repo.DeletePostAsync(postId, ct));
@@ -170,7 +187,7 @@ public sealed class RecruitmentPostService(
 
         if (owner.ApplicationDeadline.HasValue && owner.ApplicationDeadline.Value <= DateTime.UtcNow)
         {
-            await repo.UpdatePostAsync(postId, null, null, null, "expired", ct);
+            await repo.UpdatePostAsync(postId, null, null, null, "expired", null, ct);
             throw new InvalidOperationException("Recruitment post expired");
         }
     }
@@ -183,5 +200,17 @@ public sealed class RecruitmentPostService(
                 throw new UnauthorizedAccessException("Not a group post");
             throw new InvalidOperationException("Post does not accept applications");
         }
+    }
+
+    private static string? SerializeSkills(List<string>? skills)
+    {
+        if (skills is null || skills.Count == 0) return null;
+        var normalized = skills
+            .Select(s => s?.Trim())
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (normalized.Count == 0) return null;
+        return JsonSerializer.Serialize(normalized);
     }
 }

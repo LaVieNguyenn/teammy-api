@@ -12,13 +12,14 @@ public interface IRecruitmentPostRepository
         Guid? majorId,
         string title,
         string? description,
-        string? skills,
+        string? positionNeeded,
+        string? requiredSkillsJson,
         DateTime? applicationDeadline,
         CancellationToken ct);
 
     Task<Guid> CreateApplicationAsync(Guid postId, Guid? applicantUserId, Guid? applicantGroupId, Guid appliedByUserId, string? message, CancellationToken ct);
 
-    Task UpdatePostAsync(Guid postId, string? title, string? description, string? skills, string? status, CancellationToken ct);
+    Task UpdatePostAsync(Guid postId, string? title, string? description, string? positionNeeded, string? status, string? requiredSkillsJson, CancellationToken ct);
     Task DeletePostAsync(Guid postId, CancellationToken ct);
 
     Task UpdateApplicationStatusAsync(Guid applicationId, string newStatus, CancellationToken ct);
