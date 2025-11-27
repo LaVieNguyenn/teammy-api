@@ -44,6 +44,20 @@ public sealed record RecruitmentPostSnapshot(
     DateTime? ApplicationDeadline
 );
 
+public sealed record ProfilePostSnapshot(
+    Guid PostId,
+    Guid SemesterId,
+    Guid? MajorId,
+    string Title,
+    string? Description,
+    Guid OwnerUserId,
+    string OwnerDisplayName,
+    string? SkillsJson,
+    string? SkillsText,
+    string? PrimaryRole,
+    DateTime CreatedAt
+);
+
 public sealed record TopicAvailabilitySnapshot(
     Guid TopicId,
     Guid SemesterId,
