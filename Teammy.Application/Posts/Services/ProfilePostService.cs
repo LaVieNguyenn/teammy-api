@@ -19,9 +19,11 @@ public sealed class ProfilePostService(
         var userInActiveGroup = await groupQueries.HasActiveGroupAsync(currentUserId, semesterId, ct);
         if (userInActiveGroup)
             throw new InvalidOperationException("Members of active groups cannot create profile posts");
-        // Reuse recruitment_post with post_type = 'profile' and user_id set
-        // GroupId here is null
-        return await repo.CreateRecruitmentPostAsync(semesterId, postType: "individual", groupId: null, userId: currentUserId, req.MajorId, req.Title, req.Description, req.Skills, null, ct);
+        var userDetail = await _userQueries.GetAdminDetailAsync(currentUserId, ct)
+            ?? throw new InvalidOperationException("User not found");
+        var targetMajor = req.MajorId ?? userDetail.MajorId;
+
+        return await repo.CreateRecruitmentPostAsync(semesterId, postType: "individual", groupId: null, userId: currentUserId, targetMajor, req.Title, req.Description, req.Skills, null, ct);
     }
 
     public Task<ProfilePostDetailDto?> GetAsync(Guid id, ExpandOptions expand, CancellationToken ct)

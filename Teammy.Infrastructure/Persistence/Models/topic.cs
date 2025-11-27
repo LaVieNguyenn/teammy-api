@@ -30,4 +30,6 @@ public partial class topic
     public virtual semester semester { get; set; } = null!;
 
     public virtual ICollection<user> mentors { get; set; } = new List<user>();
+
+    public virtual ICollection<invitation> invitations { get; set; } = new List<invitation>();
 }
