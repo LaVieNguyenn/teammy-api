@@ -35,6 +35,10 @@ public partial class user
 
     public virtual ICollection<announcement> announcements { get; set; } = new List<announcement>();
 
+    public virtual ICollection<backlog_item> backlog_itemcreated_bies { get; set; } = new List<backlog_item>();
+
+    public virtual ICollection<backlog_item> backlog_itemowner_users { get; set; } = new List<backlog_item>();
+
     public virtual ICollection<candidate> candidateapplicant_users { get; set; } = new List<candidate>();
 
     public virtual ICollection<candidate> candidateapplied_by_users { get; set; } = new List<candidate>();
@@ -52,6 +56,8 @@ public partial class user
     public virtual major? major { get; set; }
 
     public virtual ICollection<message> messages { get; set; } = new List<message>();
+
+    public virtual ICollection<milestone> milestone_created_bies { get; set; } = new List<milestone>();
 
     public virtual ICollection<recruitment_post> recruitment_posts { get; set; } = new List<recruitment_post>();
 

@@ -29,6 +29,8 @@ public partial class group
 
     public virtual ICollection<announcement> announcements { get; set; } = new List<announcement>();
 
+    public virtual ICollection<backlog_item> backlog_items { get; set; } = new List<backlog_item>();
+
     public virtual board? board { get; set; }
 
     public virtual ICollection<candidate> candidates { get; set; } = new List<candidate>();
@@ -44,6 +46,8 @@ public partial class group
     public virtual user? mentor { get; set; }
 
     public virtual ICollection<recruitment_post> recruitment_posts { get; set; } = new List<recruitment_post>();
+
+    public virtual ICollection<milestone> milestones { get; set; } = new List<milestone>();
 
     public virtual semester semester { get; set; } = null!;
 

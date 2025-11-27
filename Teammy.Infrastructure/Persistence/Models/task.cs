@@ -11,6 +11,8 @@ public partial class task
 
     public Guid column_id { get; set; }
 
+    public Guid? backlog_item_id { get; set; }
+
     public string title { get; set; } = null!;
 
     public string? description { get; set; }
@@ -36,4 +38,6 @@ public partial class task
     public virtual ICollection<shared_file> shared_files { get; set; } = new List<shared_file>();
 
     public virtual ICollection<task_assignment> task_assignments { get; set; } = new List<task_assignment>();
+
+    public virtual backlog_item? backlog_item { get; set; }
 }

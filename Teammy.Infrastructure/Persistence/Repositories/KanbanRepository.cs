@@ -1,3 +1,4 @@
+using System;
 using Microsoft.EntityFrameworkCore;
 using Teammy.Application.Kanban.Dtos;
 using Teammy.Application.Kanban.Interfaces;
@@ -132,10 +133,19 @@ public sealed class KanbanRepository(AppDbContext db) : IKanbanRepository
     }
 
     // Tasks
-    public async Task<Guid> CreateTaskAsync(Guid groupId, Guid columnId, string title, string? description, string? priority, string? status, DateTime? dueDate, CancellationToken ct)
+    public async Task<Guid> CreateTaskAsync(Guid groupId, Guid columnId, string title, string? description, string? priority, string? status, DateTime? dueDate, Guid? backlogItemId, CancellationToken ct)
     {
-        var ok = await db.columns.Include(c => c.board).AnyAsync(c => c.column_id == columnId && c.board.group_id == groupId, ct);
-        if (!ok) throw new InvalidOperationException("Column does not belong to group board");
+        var column = await db.columns.Include(c => c.board)
+            .FirstOrDefaultAsync(c => c.column_id == columnId, ct)
+            ?? throw new InvalidOperationException("Column not found");
+        if (column.board.group_id != groupId)
+            throw new InvalidOperationException("Column does not belong to group board");
+
+        backlog_item? backlog = null;
+        if (backlogItemId is Guid backlogId)
+        {
+            backlog = await EnsureBacklogAvailableAsync(backlogId, groupId, null, ct);
+        }
 
         var tail = await db.tasks.Where(t => t.column_id == columnId).MaxAsync(t => (decimal?)t.sort_order, ct) ?? 0m;
 
@@ -145,6 +155,7 @@ public sealed class KanbanRepository(AppDbContext db) : IKanbanRepository
             task_id = Guid.NewGuid(),
             group_id = groupId,
             column_id = columnId,
+            backlog_item_id = backlogItemId,
             title = title,
             description = string.IsNullOrWhiteSpace(description) ? null : description,
             priority = string.IsNullOrWhiteSpace(priority) ? null : priority,
@@ -155,20 +166,38 @@ public sealed class KanbanRepository(AppDbContext db) : IKanbanRepository
             updated_at = now
         };
         db.tasks.Add(e);
+
+        if (backlog is not null)
+        {
+            ApplyBacklogProgress(backlog, column.is_done);
+        }
+
         await db.SaveChangesAsync(ct);
         return e.task_id;
     }
 
-    public async Task UpdateTaskAsync(Guid taskId, Guid? newColumnId, string title, string? description, string? priority, string? status, DateTime? dueDate, CancellationToken ct)
+    public async Task UpdateTaskAsync(Guid taskId, Guid? newColumnId, string title, string? description, string? priority, string? status, DateTime? dueDate, Guid? backlogItemId, CancellationToken ct)
     {
-        var t = await db.tasks.FirstOrDefaultAsync(x => x.task_id == taskId, ct)
+        var t = await db.tasks.Include(x => x.column).ThenInclude(c => c.board)
+              .FirstOrDefaultAsync(x => x.task_id == taskId, ct)
               ?? throw new KeyNotFoundException("Task not found");
+
+        var targetColumn = t.column;
+        var columnChanged = false;
 
         if (newColumnId is not null && newColumnId.Value != t.column_id)
         {
+            var dest = await db.columns.Include(c => c.board)
+                .FirstOrDefaultAsync(c => c.column_id == newColumnId, ct)
+                ?? throw new InvalidOperationException("Column not found");
+            if (dest.board.group_id != t.group_id)
+                throw new InvalidOperationException("Column does not belong to group board");
+
             var tail = await db.tasks.Where(z => z.column_id == newColumnId).MaxAsync(z => (decimal?)z.sort_order, ct) ?? 0m;
             t.column_id = newColumnId.Value;
             t.sort_order = tail + GAP;
+            targetColumn = dest;
+            columnChanged = true;
         }
 
         t.title = title;
@@ -178,13 +207,37 @@ public sealed class KanbanRepository(AppDbContext db) : IKanbanRepository
         t.due_date = dueDate;
         t.updated_at = DateTime.UtcNow;
 
+        if (backlogItemId != t.backlog_item_id)
+        {
+            if (backlogItemId is Guid newBacklogId)
+            {
+                var backlog = await EnsureBacklogAvailableAsync(newBacklogId, t.group_id, taskId, ct);
+                t.backlog_item_id = newBacklogId;
+                ApplyBacklogProgress(backlog, targetColumn.is_done);
+            }
+            else
+            {
+                await ResetBacklogAsync(t.backlog_item_id, targetColumn.is_done, ct);
+                t.backlog_item_id = null;
+            }
+        }
+        else if (columnChanged && t.backlog_item_id is Guid existingBacklogId)
+        {
+            await UpdateLinkedBacklogAsync(existingBacklogId, targetColumn.is_done, ct);
+        }
+
         await db.SaveChangesAsync(ct);
     }
 
     public async Task DeleteTaskAsync(Guid taskId, CancellationToken ct)
     {
-        var t = await db.tasks.FirstOrDefaultAsync(x => x.task_id == taskId, ct)
-              ?? throw new KeyNotFoundException("Task not found");
+        var t = await db.tasks.Include(x => x.column)
+            .FirstOrDefaultAsync(x => x.task_id == taskId, ct)
+            ?? throw new KeyNotFoundException("Task not found");
+
+        var wasDone = t.column?.is_done ?? false;
+        await ResetBacklogAsync(t.backlog_item_id, wasDone, ct);
+
         db.tasks.Remove(t); // CASCADE comments/assignments
         await db.SaveChangesAsync(ct);
     }
@@ -220,6 +273,9 @@ public sealed class KanbanRepository(AppDbContext db) : IKanbanRepository
         task.column_id = req.ColumnId;
         task.sort_order = newSort;
         task.updated_at = DateTime.UtcNow;
+
+        await UpdateLinkedBacklogAsync(task.backlog_item_id, dstCol.is_done, ct);
+
         await db.SaveChangesAsync(ct);
 
         return new MoveTaskResponse(taskId, req.ColumnId, newSort);
@@ -324,6 +380,45 @@ public sealed class KanbanRepository(AppDbContext db) : IKanbanRepository
         if (f is null) return;
         db.shared_files.Remove(f);
         await db.SaveChangesAsync(ct);
+    }
+
+    private async Task<backlog_item> EnsureBacklogAvailableAsync(Guid backlogItemId, Guid groupId, Guid? ignoreTaskId, CancellationToken ct)
+    {
+        var backlog = await db.backlog_items.FirstOrDefaultAsync(b => b.backlog_item_id == backlogItemId && b.group_id == groupId, ct)
+            ?? throw new InvalidOperationException("Backlog item not found in this group");
+
+        if (string.Equals(backlog.status, "archived", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Backlog item is archived");
+
+        var linked = await db.tasks.AsNoTracking()
+            .AnyAsync(t => t.backlog_item_id == backlogItemId && (!ignoreTaskId.HasValue || t.task_id != ignoreTaskId.Value), ct);
+        if (linked)
+            throw new InvalidOperationException("Backlog item already linked to another task");
+
+        return backlog;
+    }
+
+    private static void ApplyBacklogProgress(backlog_item backlog, bool columnIsDone)
+    {
+        backlog.status = columnIsDone ? "completed" : "in_progress";
+        backlog.updated_at = DateTime.UtcNow;
+    }
+
+    private async Task UpdateLinkedBacklogAsync(Guid? backlogItemId, bool columnIsDone, CancellationToken ct)
+    {
+        if (backlogItemId is null) return;
+        var backlog = await db.backlog_items.FirstOrDefaultAsync(b => b.backlog_item_id == backlogItemId, ct);
+        if (backlog is null) return;
+        ApplyBacklogProgress(backlog, columnIsDone);
+    }
+
+    private async Task ResetBacklogAsync(Guid? backlogItemId, bool columnWasDone, CancellationToken ct)
+    {
+        if (backlogItemId is null) return;
+        var backlog = await db.backlog_items.FirstOrDefaultAsync(b => b.backlog_item_id == backlogItemId, ct);
+        if (backlog is null) return;
+        backlog.status = columnWasDone ? "completed" : "ready";
+        backlog.updated_at = DateTime.UtcNow;
     }
 
     private async Task ResequenceColumnsAsync(Guid boardId, CancellationToken ct)
