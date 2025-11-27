@@ -16,6 +16,20 @@ public sealed record RecruitmentPostSuggestionDto(
     IReadOnlyList<string> MatchingSkills
 );
 
+public sealed record ProfilePostSuggestionDto(
+    Guid PostId,
+    Guid OwnerUserId,
+    string OwnerDisplayName,
+    string Title,
+    string? Description,
+    Guid? MajorId,
+    DateTime CreatedAt,
+    int Score,
+    string? SkillsText,
+    string? PrimaryRole,
+    IReadOnlyList<string> MatchingSkills
+);
+
 public sealed record TopicSuggestionDto(
     Guid TopicId,
     string Title,
@@ -23,6 +37,19 @@ public sealed record TopicSuggestionDto(
     int Score,
     bool CanTakeMore,
     IReadOnlyList<string> MatchingSkills
+);
+
+public sealed record AutoAssignTopicResultDto(
+    Guid GroupId,
+    Guid TopicId,
+    string TopicTitle,
+    int Score
+);
+
+public sealed record AutoAssignTopicBatchResultDto(
+    int AssignedCount,
+    IReadOnlyList<AutoAssignTopicResultDto> Assignments,
+    IReadOnlyList<Guid> SkippedGroupIds
 );
 
 public sealed record AutoAssignmentRecordDto(

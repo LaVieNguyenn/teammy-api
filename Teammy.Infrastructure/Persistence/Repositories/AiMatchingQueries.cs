@@ -73,6 +73,7 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
         var query = _db.recruitment_posts
             .AsNoTracking()
             .Where(x => x.semester_id == semesterId)
+            .Where(x => x.post_type == "group_hiring")
             .Where(x => x.status == "open");
 
         if (majorId.HasValue)
@@ -99,6 +100,43 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
                     post.required_skills,
                     post.created_at,
                     post.application_deadline))
+            .ToListAsync(ct);
+
+        return rows;
+    }
+
+    public async Task<IReadOnlyList<ProfilePostSnapshot>> ListOpenProfilePostsAsync(Guid semesterId, Guid? majorId, CancellationToken ct)
+    {
+        var query = _db.recruitment_posts
+            .AsNoTracking()
+            .Where(x => x.semester_id == semesterId)
+            .Where(x => x.post_type == "individual")
+            .Where(x => x.status == "open")
+            .Where(x => x.user_id != null);
+
+        if (majorId.HasValue)
+            query = query.Where(x => x.major_id == majorId);
+
+        var rows = await (
+                from post in query
+                join owner in _db.users.AsNoTracking() on post.user_id equals owner.user_id
+                join pool in _db.mv_students_pools.AsNoTracking()
+                    on new { user_id = post.user_id, semester_id = (Guid?)post.semester_id }
+                    equals new { user_id = pool.user_id, semester_id = pool.semester_id } into poolJoin
+                from pool in poolJoin.DefaultIfEmpty()
+                orderby post.created_at descending
+                select new ProfilePostSnapshot(
+                    post.post_id,
+                    post.semester_id,
+                    post.major_id,
+                    post.title,
+                    post.description,
+                    post.user_id!.Value,
+                    owner.display_name ?? owner.email ?? string.Empty,
+                    pool != null ? pool.skills : owner.skills,
+                    post.position_needed,
+                    pool != null ? pool.primary_role : null,
+                    post.created_at))
             .ToListAsync(ct);
 
         return rows;

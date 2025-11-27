@@ -11,7 +11,10 @@ public sealed class AiMatchingService(
     IAiMatchingQueries aiQueries,
     IGroupReadOnlyQueries groupQueries,
     IGroupRepository groupRepository,
-    ISemesterReadOnlyQueries semesterQueries)
+    ISemesterReadOnlyQueries semesterQueries,
+    IRecruitmentPostRepository postRepository,
+    ITopicWriteRepository topicWriteRepository,
+    ITopicReadOnlyQueries topicQueries)
 {
     private const int DefaultSuggestionLimit = 5;
     private const int MaxSuggestionLimit = 20;
@@ -60,13 +63,25 @@ public sealed class AiMatchingService(
     {
         if (request is null)
             throw new ArgumentNullException(nameof(request));
+        return await SuggestTopicsInternalAsync(request.GroupId, currentUserId, enforceMembership: true, request.Limit, ct);
+    }
 
-        var detail = await groupQueries.GetGroupAsync(request.GroupId, ct)
+    private async Task<IReadOnlyList<TopicSuggestionDto>> SuggestTopicsInternalAsync(
+        Guid groupId,
+        Guid currentUserId,
+        bool enforceMembership,
+        int? limit,
+        CancellationToken ct)
+    {
+        var detail = await groupQueries.GetGroupAsync(groupId, ct)
             ?? throw new KeyNotFoundException("Không tìm thấy nhóm.");
 
-        var isMember = await groupQueries.IsActiveMemberAsync(request.GroupId, currentUserId, ct);
-        if (!isMember)
-            throw new UnauthorizedAccessException("Chỉ thành viên nhóm mới được xem gợi ý topic.");
+        if (enforceMembership)
+        {
+            var isMember = await groupQueries.IsActiveMemberAsync(groupId, currentUserId, ct);
+            if (!isMember)
+                throw new UnauthorizedAccessException("Chỉ thành viên nhóm mới được xem gợi ý topic.");
+        }
 
         var semesterCtx = await ResolveSemesterAsync(detail.SemesterId, ct);
         EnsureWindow(DateOnly.FromDateTime(DateTime.UtcNow),
@@ -77,7 +92,7 @@ public sealed class AiMatchingService(
         if (!detail.MajorId.HasValue)
             throw new InvalidOperationException("Nhóm chưa có chuyên ngành xác định.");
 
-        var members = await aiQueries.ListGroupMemberSkillsAsync(request.GroupId, ct);
+        var members = await aiQueries.ListGroupMemberSkillsAsync(groupId, ct);
         if (members.Count == 0)
             throw new InvalidOperationException("Nhóm cần ít nhất một thành viên có hồ sơ kỹ năng để gợi ý.");
 
@@ -94,16 +109,75 @@ public sealed class AiMatchingService(
         if (available.Count == 0)
             return Array.Empty<TopicSuggestionDto>();
 
-        var limit = NormalizeLimit(request.Limit);
+        var limitValue = NormalizeLimit(limit);
         var items = available
             .Select(topic => BuildTopicSuggestion(topic, groupSkillProfile))
+            .Where(dto => dto is not null)
+            .Select(dto => dto!)
+            .OrderByDescending(dto => dto.Score)
+            .Take(limitValue)
+            .ToList();
+
+        return items;
+    }
+
+    public async Task<IReadOnlyList<ProfilePostSuggestionDto>> SuggestProfilePostsForGroupAsync(
+        Guid currentUserId,
+        ProfilePostSuggestionRequest request,
+        CancellationToken ct)
+    {
+        if (request is null)
+            throw new ArgumentNullException(nameof(request));
+
+        var detail = await groupQueries.GetGroupAsync(request.GroupId, ct)
+            ?? throw new KeyNotFoundException("Không tìm thấy nhóm.");
+
+        var isMember = await groupQueries.IsActiveMemberAsync(request.GroupId, currentUserId, ct);
+        if (!isMember)
+            throw new UnauthorizedAccessException("Chỉ thành viên nhóm mới được xem gợi ý.");
+
+        var (maxMembers, activeCount) = await groupQueries.GetGroupCapacityAsync(request.GroupId, ct);
+        if (activeCount >= maxMembers)
+            throw new InvalidOperationException("Nhóm đã đủ thành viên.");
+
+        var semesterCtx = await ResolveSemesterAsync(detail.SemesterId, ct);
+        EnsureWindow(DateOnly.FromDateTime(DateTime.UtcNow),
+            semesterCtx.Policy.TeamSuggestStart,
+            semesterCtx.Policy.TeamSelfSelectEnd,
+            "Đã quá hạn tự ghép nhóm.");
+
+        if (!detail.MajorId.HasValue)
+            throw new InvalidOperationException("Nhóm chưa có chuyên ngành xác định.");
+
+        var members = await aiQueries.ListGroupMemberSkillsAsync(request.GroupId, ct);
+        var aggregatedProfile = members
+            .Select(m => AiSkillProfile.FromJson(m.SkillsJson))
+            .Where(p => p.HasTags || p.PrimaryRole != AiPrimaryRole.Unknown)
+            .ToList();
+
+        var groupSkillProfile = aggregatedProfile.Count == 0
+            ? AiSkillProfile.Empty
+            : AiSkillProfile.Combine(aggregatedProfile);
+
+        var mixes = await aiQueries.GetGroupRoleMixAsync(new[] { request.GroupId }, ct);
+        var mix = mixes.TryGetValue(request.GroupId, out var snapshot)
+            ? snapshot
+            : new GroupRoleMixSnapshot(request.GroupId, 0, 0, 0);
+
+        var posts = await aiQueries.ListOpenProfilePostsAsync(detail.SemesterId, detail.MajorId, ct);
+        if (posts.Count == 0)
+            return Array.Empty<ProfilePostSuggestionDto>();
+
+        var limit = NormalizeLimit(request.Limit);
+        var suggestions = posts
+            .Select(post => BuildProfilePostSuggestion(post, groupSkillProfile, mix))
             .Where(dto => dto is not null)
             .Select(dto => dto!)
             .OrderByDescending(dto => dto.Score)
             .Take(limit)
             .ToList();
 
-        return items;
+        return suggestions;
     }
 
     public async Task<AutoAssignTeamsResultDto> AutoAssignTeamsAsync(AutoAssignTeamsRequest? request, CancellationToken ct)
@@ -181,6 +255,119 @@ public sealed class AiMatchingService(
         return new AutoAssignTeamsResultDto(assignments.Count, assignments, remainingStudentIds, openGroups);
     }
 
+    public async Task<AutoAssignTopicBatchResultDto> AutoAssignTopicAsync(
+        Guid currentUserId,
+        bool canManageAllGroups,
+        AutoAssignTopicRequest? request,
+        CancellationToken ct)
+    {
+        request ??= new AutoAssignTopicRequest(null, null, null, null);
+
+        if (request.GroupId.HasValue)
+        {
+            var assignment = await AssignTopicToGroupAsync(request.GroupId.Value, currentUserId, enforceMembership: true, request.LimitPerGroup, throwIfUnavailable: true, ct)
+                ?? throw new InvalidOperationException("Không tìm thấy topic phù hợp.");
+            return new AutoAssignTopicBatchResultDto(1, new[] { assignment }, Array.Empty<Guid>());
+        }
+
+        if (!canManageAllGroups)
+            throw new UnauthorizedAccessException("Chỉ admin hoặc moderator mới được phép auto assign cho toàn bộ nhóm.");
+
+        var semesterId = request.SemesterId
+            ?? await groupQueries.GetActiveSemesterIdAsync(ct)
+            ?? throw new InvalidOperationException("Không tìm thấy học kỳ.");
+
+        var groups = await groupQueries.ListGroupsAsync(null, request.MajorId, null, ct);
+        var targets = groups
+            .Where(g => g.Topic is null
+                        && g.Semester.SemesterId == semesterId
+                        && g.CurrentMembers >= g.MaxMembers)
+            .Select(g => g.Id)
+            .Distinct()
+            .ToList();
+
+        if (targets.Count == 0)
+            return new AutoAssignTopicBatchResultDto(0, Array.Empty<AutoAssignTopicResultDto>(), Array.Empty<Guid>());
+
+        var assignments = new List<AutoAssignTopicResultDto>();
+        var skipped = new List<Guid>();
+
+        foreach (var groupId in targets)
+        {
+            try
+            {
+                var result = await AssignTopicToGroupAsync(groupId, currentUserId, enforceMembership: false, request.LimitPerGroup, throwIfUnavailable: false, ct);
+                if (result is not null)
+                    assignments.Add(result);
+                else
+                    skipped.Add(groupId);
+            }
+            catch
+            {
+                skipped.Add(groupId);
+            }
+        }
+
+        return new AutoAssignTopicBatchResultDto(assignments.Count, assignments, skipped);
+    }
+
+    private async Task<AutoAssignTopicResultDto?> AssignTopicToGroupAsync(
+        Guid groupId,
+        Guid actorUserId,
+        bool enforceMembership,
+        int? limit,
+        bool throwIfUnavailable,
+        CancellationToken ct)
+    {
+        var detail = await groupQueries.GetGroupAsync(groupId, ct)
+            ?? throw new KeyNotFoundException("Không tìm thấy nhóm.");
+
+        if (detail.TopicId.HasValue)
+        {
+            if (throwIfUnavailable)
+                throw new InvalidOperationException("Nhóm đã có topic.");
+            return null;
+        }
+
+        var (maxMembers, activeCount) = await groupQueries.GetGroupCapacityAsync(groupId, ct);
+        if (activeCount < maxMembers)
+        {
+            if (throwIfUnavailable)
+                throw new InvalidOperationException("Nhóm chưa đủ thành viên để chọn topic.");
+            return null;
+        }
+
+        var suggestions = await SuggestTopicsInternalAsync(groupId, actorUserId, enforceMembership, limit, ct);
+        if (suggestions.Count == 0)
+        {
+            if (throwIfUnavailable)
+                throw new InvalidOperationException("Không tìm thấy topic phù hợp.");
+            return null;
+        }
+
+        var chosen = suggestions.First();
+        var mentorId = await topicQueries.GetDefaultMentorIdAsync(chosen.TopicId, ct);
+        if (!mentorId.HasValue)
+        {
+            var topicDetail = await topicQueries.GetByIdAsync(chosen.TopicId, ct);
+            mentorId = topicDetail?.Mentors.FirstOrDefault()?.MentorId;
+        }
+
+        if (!mentorId.HasValue)
+        {
+            if (throwIfUnavailable)
+                throw new InvalidOperationException("Topic chưa cấu hình mentor.");
+            return null;
+        }
+
+        await groupRepository.UpdateGroupAsync(groupId, null, null, null, null, chosen.TopicId, mentorId, ct);
+        await groupRepository.SetStatusAsync(groupId, "active", ct);
+        await topicWriteRepository.SetStatusAsync(chosen.TopicId, "closed", ct);
+        await postRepository.CloseAllOpenPostsForGroupAsync(groupId, ct);
+
+        return new AutoAssignTopicResultDto(groupId, chosen.TopicId, chosen.Title, chosen.Score);
+    }
+
     private static AiSkillProfile BuildSkillProfile(StudentProfileSnapshot student)
     {
         var parsed = AiSkillProfile.FromJson(student.SkillsJson);
@@ -256,6 +443,57 @@ public sealed class AiMatchingService(
             return null;
 
         return new TopicSuggestionDto(topic.TopicId, topic.Title, topic.Description, totalScore, topic.CanTakeMore, matchingSkills);
+    }
+
+    private static ProfilePostSuggestionDto? BuildProfilePostSuggestion(
+        ProfilePostSnapshot post,
+        AiSkillProfile groupProfile,
+        GroupRoleMixSnapshot mix)
+    {
+        var candidateProfile = AiSkillProfile.FromJson(post.SkillsJson);
+        if (!candidateProfile.HasTags && !string.IsNullOrWhiteSpace(post.SkillsText))
+            candidateProfile = AiSkillProfile.FromText(post.SkillsText);
+
+        var matchingSkills = candidateProfile.FindMatches(groupProfile).ToList();
+        if (matchingSkills.Count == 0 && candidateProfile.HasTags)
+        {
+            matchingSkills = candidateProfile.Tags
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(5)
+                .ToList();
+        }
+
+        var needsFrontend = mix.FrontendCount == 0;
+        var needsBackend = mix.BackendCount == 0;
+        var role = candidateProfile.PrimaryRole;
+        var roleScore = role switch
+        {
+            AiPrimaryRole.Frontend when needsFrontend => 40,
+            AiPrimaryRole.Backend when needsBackend => 40,
+            AiPrimaryRole.Unknown => 15,
+            _ => 20
+        };
+
+        var overlapScore = matchingSkills.Count * 12;
+        var recencyDays = Math.Clamp((int)(DateTime.UtcNow - post.CreatedAt).TotalDays, 0, 30);
+        var recencyBoost = Math.Max(5, 30 - recencyDays);
+        var totalScore = roleScore + overlapScore + recencyBoost;
+
+        if (totalScore <= 20)
+            return null;
+
+        return new ProfilePostSuggestionDto(
+            post.PostId,
+            post.OwnerUserId,
+            post.OwnerDisplayName,
+            post.Title,
+            post.Description,
+            post.MajorId,
+            post.CreatedAt,
+            totalScore,
+            post.SkillsText,
+            AiRoleHelper.ToDisplayString(role),
+            matchingSkills);
     }
 
     private static int ScoreRoleMatch(AiPrimaryRole studentRole, AiPrimaryRole requiredRole, string? textHint)

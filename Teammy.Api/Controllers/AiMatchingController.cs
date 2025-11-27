@@ -37,6 +37,16 @@ public sealed class AiMatchingController : ControllerBase
         return Ok(result);
     }
 
+    [HttpPost("profile-post-suggestions")]
+    [Authorize]
+    public async Task<ActionResult<IReadOnlyList<ProfilePostSuggestionDto>>> SuggestProfilePosts(
+        [FromBody] ProfilePostSuggestionRequest request,
+        CancellationToken ct)
+    {
+        var result = await _service.SuggestProfilePostsForGroupAsync(GetCurrentUserId(), request, ct);
+        return Ok(result);
+    }
+
     [HttpPost("auto-assign/teams")]
     [Authorize(Roles = "admin,moderator")]
     public async Task<ActionResult<AutoAssignTeamsResultDto>> AutoAssignTeams(
@@ -44,6 +54,20 @@ public sealed class AiMatchingController : ControllerBase
         CancellationToken ct)
     {
         var result = await _service.AutoAssignTeamsAsync(request, ct);
+        return Ok(result);
+    }
+
+    [HttpPost("auto-assign/topic")]
+    [Authorize]
+    public async Task<ActionResult<AutoAssignTopicBatchResultDto>> AutoAssignTopic(
+        [FromBody] AutoAssignTopicRequest request,
+        CancellationToken ct)
+    {
+        var isAdmin = User.IsInRole("admin") || User.IsInRole("moderator");
+        if (!isAdmin && (request is null || !request.GroupId.HasValue))
+            return StatusCode(403, "Chỉ admin/moderator mới được phép auto assign cho toàn bộ nhóm.");
+
+        var result = await _service.AutoAssignTopicAsync(GetCurrentUserId(), isAdmin, request, ct);
         return Ok(result);
     }
 

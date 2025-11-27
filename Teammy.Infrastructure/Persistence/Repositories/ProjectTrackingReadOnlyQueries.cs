@@ -40,7 +40,20 @@ public sealed class ProjectTrackingReadOnlyQueries(AppDbContext db) : IProjectTr
             {
                 Milestone = m,
                 Total = m.milestone_items.Count(),
-                Completed = m.milestone_items.Count(mi => mi.backlog_item.status == "completed")
+                Completed = m.milestone_items.Count(mi => mi.backlog_item.status == "completed"),
+                Items = m.milestone_items
+                    .Select(mi => new
+                    {
+                        mi.backlog_item_id,
+                        Title = mi.backlog_item.title,
+                        Status = mi.backlog_item.status,
+                        mi.backlog_item.due_date,
+                        Task = mi.backlog_item.tasks
+                            .OrderByDescending(t => t.updated_at)
+                            .Select(t => new { t.task_id, t.column.column_name, t.column.is_done })
+                            .FirstOrDefault()
+                    })
+                    .ToList()
             })
             .ToListAsync(ct);
 
@@ -56,7 +69,18 @@ public sealed class ProjectTrackingReadOnlyQueries(AppDbContext db) : IProjectTr
             x.Completed,
             CalculatePercent(x.Completed, x.Total),
             x.Milestone.created_at,
-            x.Milestone.updated_at
+            x.Milestone.updated_at,
+            x.Items.Count == 0
+                ? null
+                : x.Items.Select(i => new MilestoneItemStatusVm(
+                    i.backlog_item_id,
+                    i.Title,
+                    i.Status,
+                    i.due_date,
+                    i.Task?.task_id,
+                    i.Task?.column_name,
+                    i.Task?.is_done
+                )).ToList()
         )).ToList();
     }
 
@@ -68,7 +92,20 @@ public sealed class ProjectTrackingReadOnlyQueries(AppDbContext db) : IProjectTr
             {
                 Milestone = m,
                 Total = m.milestone_items.Count(),
-                Completed = m.milestone_items.Count(mi => mi.backlog_item.status == "completed")
+                Completed = m.milestone_items.Count(mi => mi.backlog_item.status == "completed"),
+                Items = m.milestone_items
+                    .Select(mi => new
+                    {
+                        mi.backlog_item_id,
+                        Title = mi.backlog_item.title,
+                        Status = mi.backlog_item.status,
+                        mi.backlog_item.due_date,
+                        Task = mi.backlog_item.tasks
+                            .OrderByDescending(t => t.updated_at)
+                            .Select(t => new { t.task_id, t.column.column_name, t.column.is_done })
+                            .FirstOrDefault()
+                    })
+                    .ToList()
             })
             .FirstOrDefaultAsync(ct);
 
@@ -86,7 +123,18 @@ public sealed class ProjectTrackingReadOnlyQueries(AppDbContext db) : IProjectTr
             data.Completed,
             CalculatePercent(data.Completed, data.Total),
             data.Milestone.created_at,
-            data.Milestone.updated_at
+            data.Milestone.updated_at,
+            data.Items.Count == 0
+                ? null
+                : data.Items.Select(i => new MilestoneItemStatusVm(
+                    i.backlog_item_id,
+                    i.Title,
+                    i.Status,
+                    i.due_date,
+                    i.Task?.task_id,
+                    i.Task?.column_name,
+                    i.Task?.is_done
+                )).ToList()
         );
     }
 
@@ -228,7 +276,20 @@ public sealed class ProjectTrackingReadOnlyQueries(AppDbContext db) : IProjectTr
             {
                 Milestone = m,
                 Total = m.milestone_items.Count(),
-                Completed = m.milestone_items.Count(mi => mi.backlog_item.status == "completed")
+                Completed = m.milestone_items.Count(mi => mi.backlog_item.status == "completed"),
+                Items = m.milestone_items
+                    .Select(mi => new
+                    {
+                        mi.backlog_item_id,
+                        Title = mi.backlog_item.title,
+                        Status = mi.backlog_item.status,
+                        mi.backlog_item.due_date,
+                        Task = mi.backlog_item.tasks
+                            .OrderByDescending(t => t.updated_at)
+                            .Select(t => new { t.task_id, t.column.column_name, t.column.is_done })
+                            .FirstOrDefault()
+                    })
+                    .ToList()
             })
             .OrderBy(m => m.Milestone.target_date)
             .ThenBy(m => m.Milestone.name)
@@ -241,7 +302,18 @@ public sealed class ProjectTrackingReadOnlyQueries(AppDbContext db) : IProjectTr
             x.Milestone.target_date,
             x.Total,
             x.Completed,
-            CalculatePercent(x.Completed, x.Total)
+            CalculatePercent(x.Completed, x.Total),
+            x.Items.Count == 0
+                ? null
+                : x.Items.Select(i => new MilestoneItemStatusVm(
+                    i.backlog_item_id,
+                    i.Title,
+                    i.Status,
+                    i.due_date,
+                    i.Task?.task_id,
+                    i.Task?.column_name,
+                    i.Task?.is_done
+                )).ToList()
         )).ToList();
 
         var total = statusCounts.Total;
