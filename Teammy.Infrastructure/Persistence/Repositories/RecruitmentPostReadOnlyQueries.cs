@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Posts.Dtos;
@@ -73,6 +74,7 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                     : null,
                 x.p.description,
                 x.p.position_needed,
+                ParseSkills(x.p.required_skills),
                 x.p.created_at,
                 x.p.group_id != null
                     ? db.group_members.Count(mb => mb.group_id == x.p.group_id && (mb.status == "member" || mb.status == "leader"))
@@ -165,6 +167,7 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                     ? new PostMajorDto(x.m.major_id, x.m.major_name)
                     : null,
                 x.p.position_needed,
+                ParseSkills(x.p.required_skills),
                 x.p.group_id != null
                     ? db.group_members.Count(mb => mb.group_id == x.p.group_id && (mb.status == "member" || mb.status == "leader"))
                     : 0,
@@ -361,6 +364,7 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                     ? new PostMajorDto(x.m.major_id, x.m.major_name)
                     : null,
                 x.p.position_needed,
+                ParseSkills(x.p.required_skills),
                 x.p.group_id != null
                     ? db.group_members.Count(mb => mb.group_id == x.p.group_id && (mb.status == "member" || mb.status == "leader"))
                     : 0,
@@ -455,4 +459,18 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                 x.p.position_needed
             ))
             .FirstOrDefaultAsync(ct);
+    private static IReadOnlyList<string>? ParseSkills(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            var list = JsonSerializer.Deserialize<List<string>>(json);
+            if (list is null || list.Count == 0) return null;
+            return list;
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }

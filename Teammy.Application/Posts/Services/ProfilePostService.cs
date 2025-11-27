@@ -23,7 +23,18 @@ public sealed class ProfilePostService(
             ?? throw new InvalidOperationException("User not found");
         var targetMajor = req.MajorId ?? userDetail.MajorId;
 
-        return await repo.CreateRecruitmentPostAsync(semesterId, postType: "individual", groupId: null, userId: currentUserId, targetMajor, req.Title, req.Description, req.Skills, null, ct);
+        return await repo.CreateRecruitmentPostAsync(
+            semesterId,
+            postType: "individual",
+            groupId: null,
+            userId: currentUserId,
+            targetMajor,
+            req.Title,
+            req.Description,
+            req.Skills,
+            requiredSkillsJson: null,
+            applicationDeadline: null,
+            ct);
     }
 
     public Task<ProfilePostDetailDto?> GetAsync(Guid id, ExpandOptions expand, CancellationToken ct)
@@ -43,7 +54,7 @@ public sealed class ProfilePostService(
 
         if (owner.ApplicationDeadline.HasValue && owner.ApplicationDeadline.Value <= DateTime.UtcNow)
         {
-            await repo.UpdatePostAsync(profilePostId, null, null, null, "expired", ct);
+            await repo.UpdatePostAsync(profilePostId, null, null, null, "expired", null, ct);
             throw new InvalidOperationException("Profile post expired");
         }
 
