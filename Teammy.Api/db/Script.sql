@@ -211,6 +211,7 @@ CREATE TABLE IF NOT EXISTS teammy.recruitment_posts (
   title       TEXT NOT NULL,
   description TEXT,
   position_needed TEXT,
+  required_skills JSONB,
   current_members INT,
   status      TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed','expired')),
   application_deadline TIMESTAMPTZ,
