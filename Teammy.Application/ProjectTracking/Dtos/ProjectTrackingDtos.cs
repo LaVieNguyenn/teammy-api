@@ -57,7 +57,8 @@ public sealed record MilestoneVm(
     int CompletedItems,
     decimal CompletionPercent,
     DateTime CreatedAt,
-    DateTime UpdatedAt
+    DateTime UpdatedAt,
+    IReadOnlyList<MilestoneItemStatusVm>? Items
 );
 
 public sealed record CreateMilestoneRequest(string Name, string? Description, DateOnly? TargetDate);
@@ -127,4 +128,23 @@ public sealed record BacklogStatusSummary(
 
 public sealed record ColumnProgressVm(Guid ColumnId, string ColumnName, bool IsDone, int TaskCount);
 
-public sealed record MilestoneProgressVm(Guid MilestoneId, string Name, string Status, DateOnly? TargetDate, int TotalItems, int CompletedItems, decimal CompletionPercent);
+public sealed record MilestoneProgressVm(
+    Guid MilestoneId,
+    string Name,
+    string Status,
+    DateOnly? TargetDate,
+    int TotalItems,
+    int CompletedItems,
+    decimal CompletionPercent,
+    IReadOnlyList<MilestoneItemStatusVm>? Items
+);
+
+public sealed record MilestoneItemStatusVm(
+    Guid BacklogItemId,
+    string Title,
+    string Status,
+    DateTime? DueDate,
+    Guid? LinkedTaskId,
+    string? ColumnName,
+    bool? ColumnIsDone
+);
