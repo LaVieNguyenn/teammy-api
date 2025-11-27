@@ -399,6 +399,8 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
             .SelectMany(x => x.ms.DefaultIfEmpty(), (x, m) => new { x.ps.p, x.ps.s, m })
             .GroupJoin(db.users.AsNoTracking(), t => t.p.user_id, u => u.user_id, (t, us) => new { t.p, t.s, t.m, us })
             .SelectMany(x => x.us.DefaultIfEmpty(), (x, u) => new { x.p, x.s, x.m, u })
+            .GroupJoin(db.majors.AsNoTracking(), t => t.u != null ? (Guid?)t.u.major_id : null, um => (Guid?)um.major_id, (t, ums) => new { t.p, t.s, t.m, t.u, ums })
+            .SelectMany(x => x.ums.DefaultIfEmpty(), (x, um) => new { x.p, x.s, x.m, x.u, um })
             .Select(x => new ProfilePostSummaryDto(
                 x.p.post_id,
                 x.p.semester_id,
@@ -412,7 +414,22 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                 x.p.user_id,
                 x.u != null ? x.u.display_name : null,
                 (expand & Teammy.Application.Posts.Dtos.ExpandOptions.User) != 0 && x.u != null
-                    ? new PostUserDto(x.u.user_id, x.u.email, x.u.display_name, x.u.avatar_url, x.u.email_verified)
+                    ? new ProfilePostUserDto(
+                        x.u.user_id,
+                        x.u.email,
+                        x.u.display_name,
+                        x.u.avatar_url,
+                        x.u.email_verified,
+                        x.u.phone,
+                        x.u.student_code,
+                        x.u.gender,
+                        x.u.major_id,
+                        x.um != null ? x.um.major_name : null,
+                        x.u.skills,
+                        x.u.skills_completed,
+                        x.u.is_active,
+                        x.u.created_at,
+                        x.u.updated_at)
                     : null,
                 x.p.major_id,
                 x.m != null ? x.m.major_name : null,
@@ -434,6 +451,8 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
             .SelectMany(x => x.ms.DefaultIfEmpty(), (x, m) => new { x.ps.p, x.ps.s, m })
             .GroupJoin(db.users.AsNoTracking(), t => t.p.user_id, u => u.user_id, (t, us) => new { t.p, t.s, t.m, us })
             .SelectMany(x => x.us.DefaultIfEmpty(), (x, u) => new { x.p, x.s, x.m, u })
+            .GroupJoin(db.majors.AsNoTracking(), t => t.u != null ? (Guid?)t.u.major_id : null, um => (Guid?)um.major_id, (t, ums) => new { t.p, t.s, t.m, t.u, ums })
+            .SelectMany(x => x.ums.DefaultIfEmpty(), (x, um) => new { x.p, x.s, x.m, x.u, um })
             .Select(x => new ProfilePostDetailDto(
                 x.p.post_id,
                 x.p.semester_id,
@@ -447,7 +466,22 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                 x.p.user_id,
                 x.u != null ? x.u.display_name : null,
                 (expand & Teammy.Application.Posts.Dtos.ExpandOptions.User) != 0 && x.u != null
-                    ? new PostUserDto(x.u.user_id, x.u.email, x.u.display_name, x.u.avatar_url, x.u.email_verified)
+                    ? new ProfilePostUserDto(
+                        x.u.user_id,
+                        x.u.email,
+                        x.u.display_name,
+                        x.u.avatar_url,
+                        x.u.email_verified,
+                        x.u.phone,
+                        x.u.student_code,
+                        x.u.gender,
+                        x.u.major_id,
+                        x.um != null ? x.um.major_name : null,
+                        x.u.skills,
+                        x.u.skills_completed,
+                        x.u.is_active,
+                        x.u.created_at,
+                        x.u.updated_at)
                     : null,
                 x.p.major_id,
                 x.m != null ? x.m.major_name : null,
