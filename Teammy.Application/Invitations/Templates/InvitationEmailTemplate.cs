@@ -80,5 +80,92 @@ public static class InvitationEmailTemplate
 
         return (subject, html);
     }
-}
 
+    public static (string Subject, string Html) BuildMentorInvite(
+        string appName,
+        string leaderName,
+        string leaderEmail,
+        string groupName,
+        string topicTitle,
+        string? topicDescription,
+        string actionUrl,
+        string? note,
+        string? logoUrl = null,
+        string brandHex = "#2563EB"
+    )
+    {
+        var subject = $"{appName} – {leaderName} requests you as mentor for {groupName}";
+        var safeLeader = System.Net.WebUtility.HtmlEncode(leaderName);
+        var safeLeaderEmail = System.Net.WebUtility.HtmlEncode(leaderEmail);
+        var safeGroup = System.Net.WebUtility.HtmlEncode(groupName);
+        var safeTopic = System.Net.WebUtility.HtmlEncode(topicTitle);
+        var safeDesc = System.Net.WebUtility.HtmlEncode(topicDescription ?? "No description provided");
+        var safeAction = System.Net.WebUtility.HtmlEncode(actionUrl);
+        var safeNote = string.IsNullOrWhiteSpace(note) ? null : System.Net.WebUtility.HtmlEncode(note);
+
+        var noteBlock = safeNote is null
+            ? string.Empty
+            : $@"<tr>
+                  <td style=""padding:16px 24px 0 24px;font-size:14px;color:#0f172a;"">
+                    <div style=""font-weight:600;margin-bottom:4px;"">Message from {safeLeader}</div>
+                    <div style=""color:#334155;"">{safeNote}</div>
+                  </td>
+                </tr>";
+
+        var html = $@"<!doctype html>
+<html>
+  <head>
+    <meta name=""viewport"" content=""width=device-width, initial-scale=1"" />
+    <meta http-equiv=""Content-Type"" content=""text/html; charset=UTF-8"" />
+    <title>{subject}</title>
+  </head>
+  <body style=""margin:0;background:#f2f6fc;font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#0f172a;"">
+    <table role=""presentation"" border=""0"" cellpadding=""0"" cellspacing=""0"" width=""100%"">
+      <tr><td align=""center"" style=""padding:24px;"">
+        <table role=""presentation"" width=""640"" style=""max-width:640px;background:#ffffff;border-radius:12px;border:1px solid #dbe3f0;"" cellpadding=""0"" cellspacing=""0"">
+          <tr>
+            <td style=""padding:24px 24px 8px 24px;font-size:18px;font-weight:600;color:#0f172a;"">
+              Mentor invitation for {safeGroup}
+            </td>
+          </tr>
+          <tr>
+            <td style=""padding:0 24px 12px 24px;color:#475569;font-size:14px;"">
+              <b>{safeLeader}</b> (<a href=""mailto:{safeLeaderEmail}"" style=""color:{brandHex};text-decoration:none;"">{safeLeaderEmail}</a>)
+              is requesting you to mentor the group <b>{safeGroup}</b> on topic <b>{safeTopic}</b>.
+            </td>
+          </tr>
+          <tr>
+            <td style=""padding:0 24px 16px 24px;"">
+              <table width=""100%"" style=""border:1px solid #e2e8f0;border-radius:8px;"" cellpadding=""0"" cellspacing=""0"">
+                <tr>
+                  <td style=""padding:12px 16px;font-size:13px;color:#475569;text-transform:uppercase;letter-spacing:1px;"">Topic</td>
+                </tr>
+                <tr>
+                  <td style=""padding:12px 16px;border-top:1px solid #e2e8f0;"">
+                    <div style=""font-size:15px;color:#0f172a;font-weight:600;"">{safeTopic}</div>
+                    <div style=""font-size:13px;color:#475569;margin-top:4px;"">{safeDesc}</div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          {noteBlock}
+          <tr>
+            <td style=""padding:24px 24px 0 24px;"">
+              <a href=""{safeAction}"" style=""background:{brandHex};color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600;"">Review invitation</a>
+            </td>
+          </tr>
+          <tr>
+            <td style=""padding:16px 24px 24px 24px;font-size:12px;color:#94a3b8;"">
+              © {DateTime.UtcNow:yyyy} {appName}. All rights reserved.
+            </td>
+          </tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>";
+
+        return (subject, html);
+    }
+}

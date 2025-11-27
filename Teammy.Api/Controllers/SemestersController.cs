@@ -18,7 +18,7 @@ public sealed class SemestersController(SemesterService service) : ControllerBas
         return userId;
     }
     [HttpPost]
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = "admin")]
     public async Task<ActionResult> Create([FromBody] SemesterUpsertRequest req, CancellationToken ct)
     {
         try
@@ -33,7 +33,7 @@ public sealed class SemestersController(SemesterService service) : ControllerBas
         }
     }
     [HttpPut("{id:guid}")]
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = "admin")]
     public async Task<ActionResult> Update([FromRoute] Guid id, [FromBody] SemesterUpsertRequest req, CancellationToken ct)
     {
         try
@@ -73,8 +73,18 @@ public sealed class SemestersController(SemesterService service) : ControllerBas
         if (d is null) return NotFound();
         return Ok(d);
     }
+
+    [HttpGet("{id:guid}/policy")]
+    [Authorize(Roles = "admin,moderator")]
+    public async Task<ActionResult<SemesterPolicyDto>> GetPolicy([FromRoute] Guid id, CancellationToken ct)
+    {
+        var policy = await service.GetPolicyAsync(id, ct);
+        if (policy is null) return NotFound();
+        return Ok(policy);
+    }
+
     [HttpPut("{id:guid}/policy")]
-    [Authorize(Roles = "Admin,Moderator")]
+    [Authorize(Roles = "admin,moderator")]
     public async Task<ActionResult> UpsertPolicy(
         [FromRoute] Guid id,
         [FromBody] SemesterPolicyUpsertRequest req,
@@ -95,7 +105,7 @@ public sealed class SemestersController(SemesterService service) : ControllerBas
         }
     }
     [HttpPost("{id:guid}/activate")]
-     [Authorize(Roles = "Admin")]
+     [Authorize(Roles = "admin")]
     public async Task<ActionResult> Activate([FromRoute] Guid id, CancellationToken ct)
     {
         try

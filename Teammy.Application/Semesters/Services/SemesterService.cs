@@ -38,6 +38,9 @@ public sealed class SemesterService(
     public Task<SemesterDetailDto?> GetActiveSemesterAsync(CancellationToken ct)
         => queries.GetActiveAsync(ct);
 
+    public Task<SemesterPolicyDto?> GetPolicyAsync(Guid id, CancellationToken ct)
+        => queries.GetPolicyAsync(id, ct);
+
     public async Task UpsertPolicyAsync(Guid id, SemesterPolicyUpsertRequest req, CancellationToken ct)
     {
         if (req.TeamSelfSelectStart > req.TeamSelfSelectEnd)
