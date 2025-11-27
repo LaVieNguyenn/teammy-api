@@ -6,6 +6,4 @@ public sealed class UpdateGroupRequest
     public string? Description { get; set; }
     public int? MaxMembers { get; set; }
     public Guid? MajorId { get; set; }
-    public Guid? TopicId { get; set; }
-    public Guid? MentorId { get; set; }
 }

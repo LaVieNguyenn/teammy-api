@@ -363,6 +363,11 @@ public partial class AppDbContext : DbContext
                 .HasForeignKey(d => d.group_id)
                 .HasConstraintName("fk_invitations_group");
 
+            entity.HasOne(d => d.topic).WithMany(p => p.invitations)
+                .HasForeignKey(d => d.topic_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("invitations_topic_id_fkey");
+
             entity.HasOne(d => d.invited_byNavigation).WithMany(p => p.invitationinvited_byNavigations)
                 .HasForeignKey(d => d.invited_by)
                 .OnDelete(DeleteBehavior.ClientSetNull)
