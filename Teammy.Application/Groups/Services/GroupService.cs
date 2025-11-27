@@ -19,7 +19,7 @@ public sealed class GroupService(
 
         var (minSize, maxSize) = await queries.GetGroupSizePolicyAsync(semesterId, ct);
         if (req.MaxMembers < minSize || req.MaxMembers > maxSize)
-            throw new ArgumentException($"MaxMembers must be between {minSize} and {maxSize}");
+            throw new ArgumentException($"Members must be between {minSize} and {maxSize} in this semester");
 
         var hasActive = await queries.HasActiveMembershipInSemesterAsync(creatorUserId, semesterId, ct);
         if (hasActive)
@@ -122,7 +122,7 @@ public sealed class GroupService(
             var (_, activeCount) = await queries.GetGroupCapacityAsync(groupId, ct);
             var (minSize, maxSize) = await queries.GetGroupSizePolicyAsync(detail.SemesterId, ct);
             if (req.MaxMembers.Value < minSize || req.MaxMembers.Value > maxSize)
-                throw new InvalidOperationException($"MaxMembers must be between {minSize} and {maxSize}");
+                throw new InvalidOperationException($"Members must be between {minSize} and {maxSize} in this semester");
             if (req.MaxMembers.Value < activeCount)
                 throw new InvalidOperationException($"MaxMembers cannot be less than current active members ({activeCount})");
         }

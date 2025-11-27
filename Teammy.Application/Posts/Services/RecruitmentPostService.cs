@@ -22,13 +22,14 @@ public sealed class RecruitmentPostService(
             throw new InvalidOperationException("Active group cannot create recruitment posts");
 
         var semesterId = detail.SemesterId;
+        var targetMajorId = req.MajorId ?? detail.MajorId;
         await repo.CloseAllOpenPostsForGroupAsync(req.GroupId, ct);
         DateTime expiresAt;
        expiresAt = DateTime.SpecifyKind(req.ExpiresAt.Value, DateTimeKind.Local)
                      .ToUniversalTime();
         if (expiresAt <= DateTime.UtcNow)
             throw new ArgumentException("Expiration time must be in the future");
-        var postId = await repo.CreateRecruitmentPostAsync(semesterId, postType: "group_hiring", groupId: req.GroupId, userId: null, req.MajorId, req.Title, req.Description, req.Skills, expiresAt, ct);
+        var postId = await repo.CreateRecruitmentPostAsync(semesterId, postType: "group_hiring", groupId: req.GroupId, userId: null, targetMajorId, req.Title, req.Description, req.Skills, expiresAt, ct);
         return postId;
     }
 
