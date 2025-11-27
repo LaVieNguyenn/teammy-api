@@ -1,11 +1,27 @@
+using System.Text.Json;
+
 namespace Teammy.Application.Auth.Dtos;
 
 public sealed record CurrentUserDto(
-    Guid   UserId,
+    Guid UserId,
     string Email,
     string DisplayName,
-    string Role,
     string? AvatarUrl,
-    bool   EmailVerified,
-    bool   SkillsCompleted
+    bool EmailVerified,
+    bool SkillsCompleted,
+    bool IsActive,
+    string Role,
+    IReadOnlyList<UserRoleDto> Roles,
+    string? Phone,
+    string? StudentCode,
+    string? Gender,
+    Guid? MajorId,
+    MajorSummaryDto? Major,
+    JsonElement? Skills,
+    DateTime CreatedAt,
+    DateTime UpdatedAt
 );
+
+public sealed record UserRoleDto(Guid RoleId, string Name);
+
+public sealed record MajorSummaryDto(Guid MajorId, string Name);
