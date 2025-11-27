@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
 namespace Teammy.Application.Posts.Dtos;
@@ -7,21 +8,17 @@ public sealed class CreateRecruitmentPostRequest
     public Guid GroupId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string? Description { get; set; }
-    public string? Skills { get; set; }
+    public List<string>? Skills { get; set; }
     public Guid? MajorId { get; set; }
     public DateTime? ExpiresAt { get; set; }
     [JsonPropertyName("position_needed")]
-    public string? PositionNeeded
-    {
-        get => Skills;
-        set => Skills = value;
-    }
+    public string? PositionNeeded { get; set; }
 
     [JsonPropertyName("positionNeeded")]
     public string? PositionNeededCamel
     {
-        get => Skills;
-        set => Skills = value;
+        get => PositionNeeded;
+        set => PositionNeeded = value;
     }
 }
 
@@ -40,6 +37,7 @@ public sealed record RecruitmentPostSummaryDto(
     string? MajorName,
     PostMajorDto? Major,
     string? PositionNeeded,
+    IReadOnlyList<string>? Skills,
     int CurrentMembers,
     string? Description,
     DateTime CreatedAt,
@@ -66,6 +64,7 @@ public sealed record RecruitmentPostDetailDto(
     PostMajorDto? Major,
     string? Description,
     string? PositionNeeded,
+    IReadOnlyList<string>? Skills,
     DateTime CreatedAt,
     int CurrentMembers,
     DateTime? ApplicationDeadline,
@@ -93,20 +92,16 @@ public sealed class UpdateRecruitmentPostRequest
     public string? Status { get; set; } // open | closed | full
     public string? Title { get; set; }
     public string? Description { get; set; }
-    public string? Skills { get; set; }
+    public List<string>? Skills { get; set; }
 
     [JsonPropertyName("position_needed")]
-    public string? PositionNeeded
-    {
-        get => Skills;
-        set => Skills = value;
-    }
+    public string? PositionNeeded { get; set; }
 
     [JsonPropertyName("positionNeeded")]
     public string? PositionNeededCamel
     {
-        get => Skills;
-        set => Skills = value;
+        get => PositionNeeded;
+        set => PositionNeeded = value;
     }
     
 }

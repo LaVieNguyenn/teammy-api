@@ -7,7 +7,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories;
 
 public sealed class RecruitmentPostRepository(AppDbContext db) : IRecruitmentPostRepository
 {
-    public async Task<Guid> CreateRecruitmentPostAsync(Guid semesterId, string postType, Guid? groupId, Guid? userId, Guid? majorId, string title, string? description, string? skills, DateTime? applicationDeadline, CancellationToken ct)
+    public async Task<Guid> CreateRecruitmentPostAsync(Guid semesterId, string postType, Guid? groupId, Guid? userId, Guid? majorId, string title, string? description, string? positionNeeded, string? requiredSkillsJson, DateTime? applicationDeadline, CancellationToken ct)
     {
         var post = new recruitment_post
         {
@@ -19,7 +19,8 @@ public sealed class RecruitmentPostRepository(AppDbContext db) : IRecruitmentPos
             major_id = majorId,
             title = title,
             description = description,
-            position_needed = skills,
+            position_needed = positionNeeded,
+            required_skills = requiredSkillsJson,
             status = "open",
             application_deadline = applicationDeadline,
             created_at = DateTime.UtcNow,
@@ -49,13 +50,14 @@ public sealed class RecruitmentPostRepository(AppDbContext db) : IRecruitmentPos
         return c.candidate_id;
     }
 
-    public async Task UpdatePostAsync(Guid postId, string? title, string? description, string? skills, string? status, CancellationToken ct)
+    public async Task UpdatePostAsync(Guid postId, string? title, string? description, string? positionNeeded, string? status, string? requiredSkillsJson, CancellationToken ct)
     {
         var post = await db.recruitment_posts.FirstOrDefaultAsync(x => x.post_id == postId, ct)
             ?? throw new KeyNotFoundException("Post not found");
         if (title is not null) post.title = title;
         if (description is not null) post.description = description;
-        if (skills is not null) post.position_needed = skills;
+        if (positionNeeded is not null) post.position_needed = positionNeeded;
+        if (requiredSkillsJson is not null) post.required_skills = requiredSkillsJson;
         if (!string.IsNullOrWhiteSpace(status)) post.status = status!;
         post.updated_at = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
