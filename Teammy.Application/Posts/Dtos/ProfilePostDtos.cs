@@ -8,6 +8,24 @@ public sealed class CreateProfilePostRequest
     public Guid? MajorId { get; set; }
 }
 
+public sealed record ProfilePostUserDto(
+    Guid   UserId,
+    string Email,
+    string DisplayName,
+    string? AvatarUrl,
+    bool   EmailVerified,
+    string? Phone,
+    string? StudentCode,
+    string? Gender,
+    Guid?  MajorId,
+    string? MajorName,
+    string? Skills,
+    bool   SkillsCompleted,
+    bool   IsActive,
+    DateTime CreatedAt,
+    DateTime UpdatedAt
+);
+
 public sealed record ProfilePostSummaryDto(
     Guid   Id,
     Guid   SemesterId,
@@ -18,7 +36,7 @@ public sealed record ProfilePostSummaryDto(
     string Type,
     Guid?  UserId,
     string? UserDisplayName,
-    PostUserDto? User,
+    ProfilePostUserDto? User,
     Guid?  MajorId,
     string? MajorName,
     PostMajorDto? Major,
@@ -37,7 +55,7 @@ public sealed record ProfilePostDetailDto(
     string Type,
     Guid?  UserId,
     string? UserDisplayName,
-    PostUserDto? User,
+    ProfilePostUserDto? User,
     Guid?  MajorId,
     string? MajorName,
     PostMajorDto? Major,
