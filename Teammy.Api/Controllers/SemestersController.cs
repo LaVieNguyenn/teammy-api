@@ -73,6 +73,16 @@ public sealed class SemestersController(SemesterService service) : ControllerBas
         if (d is null) return NotFound();
         return Ok(d);
     }
+
+    [HttpGet("{id:guid}/policy")]
+    [Authorize(Roles = "admin,moderator")]
+    public async Task<ActionResult<SemesterPolicyDto>> GetPolicy([FromRoute] Guid id, CancellationToken ct)
+    {
+        var policy = await service.GetPolicyAsync(id, ct);
+        if (policy is null) return NotFound();
+        return Ok(policy);
+    }
+
     [HttpPut("{id:guid}/policy")]
     [Authorize(Roles = "admin,moderator")]
     public async Task<ActionResult> UpsertPolicy(
