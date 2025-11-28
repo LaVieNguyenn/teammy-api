@@ -25,6 +25,7 @@ namespace Teammy.Application.Topics.Dtos
         // Topic
         string Title,
         string? Description,
+        string? Source,
         string Status,       // 'open' | 'closed' | 'archived'
 
         // Created by
@@ -54,6 +55,7 @@ namespace Teammy.Application.Topics.Dtos
         // Topic
         string Title,
         string? Description,
+        string? Source,
         string Status,
 
         // Created by
@@ -72,6 +74,7 @@ namespace Teammy.Application.Topics.Dtos
         Guid?  MajorId,
         string Title,
         string? Description,
+        string? Source,
         string Status,               // open/closed/archived
         List<string> MentorEmails    
     );
@@ -81,6 +84,7 @@ namespace Teammy.Application.Topics.Dtos
         Guid?  MajorId,
         string Title,
         string? Description,
+        string? Source,
         string Status,               // open/closed/archived
         List<string> MentorEmails    
     );
