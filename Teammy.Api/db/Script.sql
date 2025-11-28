@@ -68,11 +68,15 @@ CREATE TABLE IF NOT EXISTS teammy.topics (
   major_id     UUID REFERENCES teammy.majors(major_id) ON DELETE SET NULL,
   title        TEXT NOT NULL,
   description  TEXT,
+  source       TEXT,
   status       TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed','archived')),
   created_by   UUID NOT NULL REFERENCES teammy.users(user_id),
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (semester_id, title)
 );
+
+ALTER TABLE teammy.topics
+  ADD COLUMN IF NOT EXISTS source TEXT;
 
 CREATE TABLE IF NOT EXISTS teammy.topics_mentor (
   topic_id  UUID NOT NULL REFERENCES teammy.topics(topic_id) ON DELETE CASCADE,

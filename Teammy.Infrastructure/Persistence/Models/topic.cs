@@ -15,6 +15,8 @@ public partial class topic
 
     public string? description { get; set; }
 
+    public string? source { get; set; }
+
     public string status { get; set; } = null!;
 
     public Guid created_by { get; set; }
