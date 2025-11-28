@@ -133,9 +133,9 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
                     post.description,
                     post.user_id!.Value,
                     owner.display_name ?? owner.email ?? string.Empty,
-                    pool != null ? pool.skills : owner.skills,
+                    pool.skills ?? owner.skills,
                     post.position_needed,
-                    pool != null ? pool.primary_role : null,
+                    pool.primary_role,
                     post.created_at))
             .ToListAsync(ct);
 

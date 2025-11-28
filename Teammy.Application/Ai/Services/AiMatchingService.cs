@@ -383,6 +383,9 @@ public sealed class AiMatchingService(
         RecruitmentPostSnapshot post)
     {
         var requiredProfile = AiSkillProfile.FromJson(post.RequiredSkills);
+        var requiredSkillTags = requiredProfile.HasTags
+            ? requiredProfile.Tags.Where(tag => !string.IsNullOrWhiteSpace(tag)).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+            : null;
         if (!requiredProfile.HasTags && !string.IsNullOrWhiteSpace(post.PositionNeeded))
             requiredProfile = AiSkillProfile.FromText(post.PositionNeeded);
 
@@ -419,7 +422,7 @@ public sealed class AiMatchingService(
             post.ApplicationDeadline,
             totalScore,
             post.PositionNeeded,
-            post.RequiredSkills,
+            requiredSkillTags,
             matchingSkills
         );
     }
