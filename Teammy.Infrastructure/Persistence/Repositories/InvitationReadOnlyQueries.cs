@@ -66,6 +66,7 @@ public sealed class InvitationReadOnlyQueries(AppDbContext db) : IInvitationRead
     public Task<(Guid InvitationId, string Status, Guid? TopicId)?> FindAnyAsync(Guid groupId, Guid inviteeUserId, CancellationToken ct)
         => db.invitations.AsNoTracking()
             .Where(i => i.group_id == groupId && i.invitee_user_id == inviteeUserId)
+            .OrderByDescending(i => i.created_at)
             .Select(i => new ValueTuple<Guid, string, Guid?>(i.invitation_id, i.status, i.topic_id))
             .FirstOrDefaultAsync(ct)
             .ContinueWith(t => t.Result == default ? (ValueTuple<Guid,string, Guid?>?)null : t.Result, ct);

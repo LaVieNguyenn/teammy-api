@@ -284,9 +284,12 @@ CREATE TABLE IF NOT EXISTS teammy.invitations (
   message         TEXT,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   responded_at    TIMESTAMPTZ,
-  expires_at      TIMESTAMPTZ,
-  CONSTRAINT ux_invite_active UNIQUE (group_id, invitee_user_id)
+  expires_at      TIMESTAMPTZ
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_invite_pending_per_user
+  ON teammy.invitations(group_id, invitee_user_id)
+  WHERE status = 'pending';
 
 -- ========== 6) Boards / Tasks / Comments / Files ==========
 CREATE TABLE IF NOT EXISTS teammy.boards (

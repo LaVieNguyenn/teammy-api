@@ -101,12 +101,22 @@ public sealed class InvitationService(
             var (dupId, status, existingTopicId) = existingAny.Value;
             if (existingTopicId is null)
                 throw new InvalidOperationException("invite_exists_member");
-            if (existingTopicId != topicId)
-                throw new InvalidOperationException("invite_exists_other_topic");
-            if (status != "pending")
-                throw new InvalidOperationException($"invite_exists:{dupId}:{status}");
-            await repo.ResetPendingAsync(dupId, now, expiresAt, ct);
-            invitationId = dupId;
+
+            if (existingTopicId == topicId)
+            {
+                if (status != "pending")
+                    throw new InvalidOperationException($"invite_exists:{dupId}:{status}");
+
+                await repo.ResetPendingAsync(dupId, now, expiresAt, ct);
+                invitationId = dupId;
+            }
+            else
+            {
+                if (status == "pending")
+                    throw new InvalidOperationException("invite_pending_other_topic");
+
+                invitationId = await repo.CreateAsync(groupId, mentorUserId, invitedByUserId, message, expiresAt, topicId, ct);
+            }
         }
         else
         {
