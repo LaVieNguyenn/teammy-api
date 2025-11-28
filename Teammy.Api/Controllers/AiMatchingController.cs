@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Teammy.Application.Ai.Dtos;
 using Teammy.Application.Ai.Services;
@@ -19,56 +20,79 @@ public sealed class AiMatchingController : ControllerBase
 
     [HttpPost("recruitment-post-suggestions")]
     [Authorize]
-    public async Task<ActionResult<IReadOnlyList<RecruitmentPostSuggestionDto>>> SuggestRecruitmentPosts(
+    public async Task<ActionResult<AiResponse<IReadOnlyList<RecruitmentPostSuggestionDto>>>> SuggestRecruitmentPosts(
         [FromBody] RecruitmentPostSuggestionRequest request,
         CancellationToken ct)
     {
-        var result = await _service.SuggestRecruitmentPostsForStudentAsync(GetCurrentUserId(), request, ct);
-        return Ok(result);
+        return await HandleAiRequestAsync(() =>
+            _service.SuggestRecruitmentPostsForStudentAsync(GetCurrentUserId(), request, ct));
     }
 
     [HttpPost("topic-suggestions")]
     [Authorize]
-    public async Task<ActionResult<IReadOnlyList<TopicSuggestionDto>>> SuggestTopics(
+    public async Task<ActionResult<AiResponse<IReadOnlyList<TopicSuggestionDto>>>> SuggestTopics(
         [FromBody] TopicSuggestionRequest request,
         CancellationToken ct)
     {
-        var result = await _service.SuggestTopicsForGroupAsync(GetCurrentUserId(), request, ct);
-        return Ok(result);
+        if (request is null)
+            throw new ArgumentNullException(nameof(request));
+
+        return await HandleAiRequestAsync(() =>
+            _service.SuggestTopicsForGroupAsync(GetCurrentUserId(), request, ct));
     }
 
     [HttpPost("profile-post-suggestions")]
     [Authorize]
-    public async Task<ActionResult<IReadOnlyList<ProfilePostSuggestionDto>>> SuggestProfilePosts(
+    public async Task<ActionResult<AiResponse<IReadOnlyList<ProfilePostSuggestionDto>>>> SuggestProfilePosts(
         [FromBody] ProfilePostSuggestionRequest request,
         CancellationToken ct)
     {
-        var result = await _service.SuggestProfilePostsForGroupAsync(GetCurrentUserId(), request, ct);
-        return Ok(result);
+        if (request is null)
+            throw new ArgumentNullException(nameof(request));
+
+        return await HandleAiRequestAsync(() =>
+            _service.SuggestProfilePostsForGroupAsync(GetCurrentUserId(), request, ct));
     }
 
     [HttpPost("auto-assign/teams")]
     [Authorize(Roles = "admin,moderator")]
-    public async Task<ActionResult<AutoAssignTeamsResultDto>> AutoAssignTeams(
+    public async Task<ActionResult<AiResponse<AutoAssignTeamsResultDto>>> AutoAssignTeams(
         [FromBody] AutoAssignTeamsRequest request,
         CancellationToken ct)
     {
-        var result = await _service.AutoAssignTeamsAsync(request, ct);
-        return Ok(result);
+        return await HandleAiRequestAsync(() => _service.AutoAssignTeamsAsync(request, ct));
     }
 
     [HttpPost("auto-assign/topic")]
     [Authorize]
-    public async Task<ActionResult<AutoAssignTopicBatchResultDto>> AutoAssignTopic(
+    public async Task<ActionResult<AiResponse<AutoAssignTopicBatchResultDto>>> AutoAssignTopic(
         [FromBody] AutoAssignTopicRequest request,
         CancellationToken ct)
     {
         var isAdmin = User.IsInRole("admin") || User.IsInRole("moderator");
         if (!isAdmin && (request is null || !request.GroupId.HasValue))
-            return StatusCode(403, "Chỉ admin/moderator mới được phép auto assign cho toàn bộ nhóm.");
+            return StatusCode(StatusCodes.Status403Forbidden,
+                AiResponse<AutoAssignTopicBatchResultDto>.FromError("Chỉ admin/moderator mới được phép auto assign cho toàn bộ nhóm."));
 
-        var result = await _service.AutoAssignTopicAsync(GetCurrentUserId(), isAdmin, request, ct);
-        return Ok(result);
+        return await HandleAiRequestAsync(() =>
+            _service.AutoAssignTopicAsync(GetCurrentUserId(), isAdmin, request, ct));
+    }
+
+    private async Task<ActionResult<AiResponse<T>>> HandleAiRequestAsync<T>(Func<Task<T>> action)
+    {
+        try
+        {
+            var data = await action();
+            return Ok(AiResponse<T>.FromSuccess(data));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, AiResponse<T>.FromError(ex.Message));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or KeyNotFoundException)
+        {
+            return Ok(AiResponse<T>.FromError(ex.Message));
+        }
     }
 
     private Guid GetCurrentUserId()
