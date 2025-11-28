@@ -20,15 +20,7 @@ public sealed class ExcelTopicImportService(
     ITopicMentorService topicMentors
 ) : ITopicImportService
 {
-    private static readonly string[] Headers =
-    {
-        "SemesterCode",  // A
-        "Title",         // B
-        "Description",   // C
-        "Status",        // D
-        "MajorName",     // E
-        "MentorEmails"   // F  (nhiều email, ngăn bởi ; hoặc ,)
-    };
+    private static readonly string[] Headers = TopicImportColumns.All;
 
     private static readonly string[] Allowed = { "open", "closed", "archived" };
 
@@ -41,24 +33,26 @@ public sealed class ExcelTopicImportService(
         for (int i = 0; i < Headers.Length; i++)
             ws.Cell(1, i + 1).Value = Headers[i];
 
-        ws.Range("A1:F1").Style.Font.Bold = true;
-        ws.Columns(1, 6).Width = 30;
+        ws.Range("A1:G1").Style.Font.Bold = true;
+        ws.Columns(1, 7).Width = 30;
 
         // Sample row 1
         ws.Cell(2, 1).Value = "FALL25";
         ws.Cell(2, 2).Value = "IoT Sensor Hub";
         ws.Cell(2, 3).Value = "Gateway thu thập dữ liệu cảm biến";
-        ws.Cell(2, 4).Value = "open";
-        ws.Cell(2, 5).Value = "Công nghệ thông tin";
-        ws.Cell(2, 6).Value = "mentor1@gmail.com; mentor2@gmail.com";
+        ws.Cell(2, 4).Value = "https://files.school.edu/topics/fall25.pdf";
+        ws.Cell(2, 5).Value = "open";
+        ws.Cell(2, 6).Value = "Công nghệ thông tin";
+        ws.Cell(2, 7).Value = "mentor1@gmail.com; mentor2@gmail.com";
 
         // Sample row 2
         ws.Cell(3, 1).Value = "SPRING26";
         ws.Cell(3, 2).Value = "E-Commerce Platform";
         ws.Cell(3, 3).Value = "Hệ thống bán hàng đa kênh";
-        ws.Cell(3, 4).Value = "closed";
-        ws.Cell(3, 5).Value = "";
-        ws.Cell(3, 6).Value = "mentor@gmail.com";
+        ws.Cell(3, 4).Value = "";
+        ws.Cell(3, 5).Value = "closed";
+        ws.Cell(3, 6).Value = "";
+        ws.Cell(3, 7).Value = "mentor@gmail.com";
 
         using var ms = new MemoryStream();
         wb.SaveAs(ms);
@@ -85,9 +79,10 @@ public sealed class ExcelTopicImportService(
             string rawSem       = ws.Cell(r, 1).GetString().Trim();
             string ttl          = ws.Cell(r, 2).GetString().Trim();
             string des          = ws.Cell(r, 3).GetString().Trim();
-            string stsRaw       = ws.Cell(r, 4).GetString().Trim();
-            string mj           = ws.Cell(r, 5).GetString().Trim();
-            string rawMentors   = ws.Cell(r, 6).GetString().Trim();
+            string sourceRaw    = ws.Cell(r, 4).GetString().Trim();
+            string stsRaw       = ws.Cell(r, 5).GetString().Trim();
+            string mj           = ws.Cell(r, 6).GetString().Trim();
+            string rawMentors   = ws.Cell(r, 7).GetString().Trim();
 
             // Nếu cả SemesterCode lẫn Title trống thì coi như dòng trống
             if (string.IsNullOrWhiteSpace(rawSem) && string.IsNullOrWhiteSpace(ttl))
@@ -105,6 +100,13 @@ public sealed class ExcelTopicImportService(
             if (string.IsNullOrWhiteSpace(ttl))
             {
                 errors.Add($"Row {r}: Title required");
+                skipped++;
+                continue;
+            }
+
+            if (!TryNormalizeSource(sourceRaw, out var normalizedSource, out var sourceError))
+            {
+                errors.Add($"Row {r}: {sourceError}");
                 skipped++;
                 continue;
             }
@@ -153,6 +155,7 @@ public sealed class ExcelTopicImportService(
                 string.IsNullOrWhiteSpace(des) ? null : des,
                 sts,
                 majorId,
+                normalizedSource,
                 performedBy,
                 ct);
 
@@ -207,6 +210,7 @@ public sealed class ExcelTopicImportService(
             string semesterCode = row?.SemesterCode?.Trim() ?? string.Empty;
             string title = row?.Title?.Trim() ?? string.Empty;
             string description = row?.Description?.Trim() ?? string.Empty;
+            string source = row?.Source?.Trim() ?? string.Empty;
             string status = row?.Status?.Trim() ?? string.Empty;
             string major = row?.MajorName?.Trim() ?? string.Empty;
             var mentorEmails = row?.MentorEmails ?? Array.Empty<string>();
@@ -214,6 +218,7 @@ public sealed class ExcelTopicImportService(
             bool rowIsEmpty = string.IsNullOrWhiteSpace(semesterCode)
                               && string.IsNullOrWhiteSpace(title)
                               && string.IsNullOrWhiteSpace(description)
+                              && string.IsNullOrWhiteSpace(source)
                               && string.IsNullOrWhiteSpace(status)
                               && string.IsNullOrWhiteSpace(major)
                               && (mentorEmails.Count == 0 || mentorEmails.All(string.IsNullOrWhiteSpace));
@@ -221,12 +226,13 @@ public sealed class ExcelTopicImportService(
             if (rowIsEmpty)
             {
                 const string emptyMessage = "Row is empty";
-                columns.Add(new TopicColumnValidation("SemesterCode", false, emptyMessage));
-                columns.Add(new TopicColumnValidation("Title", false, emptyMessage));
-                columns.Add(new TopicColumnValidation("Description", false, emptyMessage));
-                columns.Add(new TopicColumnValidation("Status", false, emptyMessage));
-                columns.Add(new TopicColumnValidation("MajorName", false, emptyMessage));
-                columns.Add(new TopicColumnValidation("MentorEmails", false, emptyMessage));
+                columns.Add(new TopicColumnValidation(TopicImportColumns.SemesterCode, false, emptyMessage));
+                columns.Add(new TopicColumnValidation(TopicImportColumns.Title, false, emptyMessage));
+                columns.Add(new TopicColumnValidation(TopicImportColumns.Description, false, emptyMessage));
+                columns.Add(new TopicColumnValidation(TopicImportColumns.Source, false, emptyMessage));
+                columns.Add(new TopicColumnValidation(TopicImportColumns.Status, false, emptyMessage));
+                columns.Add(new TopicColumnValidation(TopicImportColumns.MajorName, false, emptyMessage));
+                columns.Add(new TopicColumnValidation(TopicImportColumns.MentorEmails, false, emptyMessage));
                 messages.Add("Row has no data");
                 invalidCount++;
                 results.Add(new TopicImportRowValidation(rowNumber, false, columns, messages));
@@ -261,13 +267,24 @@ public sealed class ExcelTopicImportService(
                 if (!cachedSemesterValid)
                     semesterError = "SemesterCode format is invalid";
             }
-            columns.Add(new TopicColumnValidation("SemesterCode", semesterValid, semesterError));
+            columns.Add(new TopicColumnValidation(TopicImportColumns.SemesterCode, semesterValid, semesterError));
 
             // Title
             bool titleValid = !string.IsNullOrWhiteSpace(title);
-            columns.Add(new TopicColumnValidation("Title", titleValid, titleValid ? null : "Title is required"));
+            columns.Add(new TopicColumnValidation(TopicImportColumns.Title, titleValid, titleValid ? null : "Title is required"));
 
-            columns.Add(new TopicColumnValidation("Description", true, null));
+            columns.Add(new TopicColumnValidation(TopicImportColumns.Description, true, null));
+
+            bool sourceValid = true;
+            string? sourceError = null;
+            if (!string.IsNullOrWhiteSpace(source))
+            {
+                if (!TryNormalizeSource(source, out _, out sourceError))
+                {
+                    sourceValid = false;
+                }
+            }
+            columns.Add(new TopicColumnValidation(TopicImportColumns.Source, sourceValid, sourceError));
 
             // Status
             bool statusValid = true;
@@ -281,7 +298,7 @@ public sealed class ExcelTopicImportService(
                     statusError = "Status must be open, closed, or archived";
                 }
             }
-            columns.Add(new TopicColumnValidation("Status", statusValid, statusError));
+            columns.Add(new TopicColumnValidation(TopicImportColumns.Status, statusValid, statusError));
 
             // Major
             bool majorValid = true;
@@ -301,7 +318,7 @@ public sealed class ExcelTopicImportService(
                     majorError = $"Major '{major}' not found";
                 }
             }
-            columns.Add(new TopicColumnValidation("MajorName", majorValid, majorError));
+            columns.Add(new TopicColumnValidation(TopicImportColumns.MajorName, majorValid, majorError));
 
             // Mentors
             bool mentorsValid = true;
@@ -335,7 +352,7 @@ public sealed class ExcelTopicImportService(
             }
 
             columns.Add(new TopicColumnValidation(
-                "MentorEmails",
+                TopicImportColumns.MentorEmails,
                 mentorsValid,
                 mentorsValid ? null : string.Join("; ", mentorErrors)));
 
@@ -377,6 +394,26 @@ public sealed class ExcelTopicImportService(
     }
 
     // ===== Helper parse danh sách email mentor =====
+    private static bool TryNormalizeSource(string? raw, out string? normalized, out string? error)
+    {
+        normalized = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(raw))
+            return true;
+
+        var trimmed = raw.Trim();
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            error = "Source must be a valid http(s) link";
+            return false;
+        }
+
+        normalized = uri.ToString();
+        return true;
+    }
+
     private static List<string> ParseEmails(string raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
