@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Teammy.Application.Announcements.Services;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Files;
 using Teammy.Application.Kanban.Interfaces;
@@ -97,6 +98,12 @@ public static class DependencyInjection
         services.AddScoped<ISkillDictionaryReadOnlyQueries, SkillDictionaryQueries>();
         services.AddScoped<ISkillDictionaryWriteRepository, SkillDictionaryWriteRepository>();
         services.AddScoped<SkillDictionaryService>();
+
+        // Announcements
+        services.AddScoped<IAnnouncementRepository, AnnouncementRepository>();
+        services.AddScoped<IAnnouncementReadOnlyQueries, AnnouncementReadOnlyQueries>();
+        services.AddScoped<IAnnouncementRecipientQueries, AnnouncementRecipientQueries>();
+        services.AddScoped<AnnouncementService>();
 
         // AI Matching
         services.AddScoped<IAiMatchingQueries, AiMatchingQueries>();
