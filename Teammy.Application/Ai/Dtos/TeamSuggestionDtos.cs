@@ -12,7 +12,7 @@ public sealed record RecruitmentPostSuggestionDto(
     DateTime? ApplicationDeadline,
     int Score,
     string? PositionNeeded,
-    string? RequiredSkills,
+    IReadOnlyList<string>? RequiredSkills,
     IReadOnlyList<string> MatchingSkills
 );
 

@@ -19,12 +19,13 @@ public sealed record AiSkillProfile(AiPrimaryRole PrimaryRole, IReadOnlyCollecti
         try
         {
             using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object)
-                return Empty;
-
-            var role = ExtractRole(doc.RootElement);
-            var tags = ExtractTags(doc.RootElement);
-            return new AiSkillProfile(AiRoleHelper.Parse(role), tags);
+            return doc.RootElement.ValueKind switch
+            {
+                JsonValueKind.Object => BuildFromObject(doc.RootElement),
+                JsonValueKind.Array => BuildFromArray(doc.RootElement),
+                JsonValueKind.String => FromText(doc.RootElement.GetString()),
+                _ => Empty
+            };
         }
         catch
         {
@@ -114,6 +115,20 @@ public sealed record AiSkillProfile(AiPrimaryRole PrimaryRole, IReadOnlyCollecti
         AddTags(root, "stack", tags);
 
         return tags;
+    }
+
+    private static AiSkillProfile BuildFromObject(JsonElement root)
+    {
+        var role = ExtractRole(root);
+        var tags = ExtractTags(root);
+        return new AiSkillProfile(AiRoleHelper.Parse(role), tags);
+    }
+
+    private static AiSkillProfile BuildFromArray(JsonElement array)
+    {
+        var tags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        AddTags(array, tags);
+        return new AiSkillProfile(AiPrimaryRole.Unknown, tags);
     }
 
     private static void AddTags(JsonElement root, string propertyName, HashSet<string> tags)

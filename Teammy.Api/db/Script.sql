@@ -511,16 +511,44 @@ LEFT JOIN used u ON u.topic_id = t.topic_id
 WHERE t.status='open';
 
 -- Students pool (active semester, not in group)
-CREATE MATERIALIZED VIEW IF NOT EXISTS teammy.mv_students_pool AS
-SELECT u.user_id, u.display_name, u.major_id, s.semester_id,
-       u.skills, COALESCE(u.skills->>'primary_role', u.skills->>'primaryRole','') AS primary_role,
-       u.skills_completed
+DROP MATERIALIZED VIEW IF EXISTS teammy.mv_students_pool;
+
+CREATE MATERIALIZED VIEW teammy.mv_students_pool AS
+SELECT
+  u.user_id,
+  u.display_name,
+  u.major_id,
+  s.semester_id,
+  CASE
+    WHEN u.skills IS NULL THEN NULL
+    WHEN jsonb_typeof(u.skills) = 'array' THEN jsonb_build_object(
+      'skill_tags',
+      COALESCE(
+        (
+          SELECT jsonb_agg(value)
+          FROM jsonb_array_elements(u.skills) AS value
+          WHERE value IS NOT NULL AND jsonb_typeof(value) = 'string'
+        ),
+        '[]'::jsonb
+      )
+    )
+    WHEN jsonb_typeof(u.skills) = 'string' THEN jsonb_build_object('skill_tags', jsonb_build_array(u.skills))
+    ELSE u.skills
+  END AS skills,
+  COALESCE(
+    u.skills->>'primary_role',
+    u.skills->>'primaryRole',
+    u.skills->>'primary'
+  ) AS primary_role,
+  u.skills_completed
 FROM teammy.users u
-JOIN teammy.user_roles ur ON ur.user_id=u.user_id
-JOIN teammy.roles r ON r.role_id=ur.role_id AND r.name='student'
-JOIN teammy.semesters s ON s.is_active=TRUE
+JOIN teammy.user_roles ur ON ur.user_id = u.user_id
+JOIN teammy.roles r ON r.role_id = ur.role_id AND r.name = 'student'
+JOIN teammy.semesters s ON s.is_active = TRUE
 LEFT JOIN teammy.group_members gm
-  ON gm.user_id=u.user_id AND gm.semester_id=s.semester_id AND gm.status IN ('pending','member','leader')
+  ON gm.user_id = u.user_id
+  AND gm.semester_id = s.semester_id
+  AND gm.status IN ('pending','member','leader')
 WHERE gm.group_member_id IS NULL;
 
 -- Group capacity
