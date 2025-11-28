@@ -8,8 +8,7 @@ public sealed class AppUrlProvider(IConfiguration cfg) : IAppUrlProvider
     public string GetInvitationUrl(Guid invitationId, Guid groupId)
     {
         var baseUrl = cfg["App:ClientUrl"]?.TrimEnd('/') ?? "https://teammy.vercel.app";
-        // Frontend route suggestion: /invitations/{id}?groupId=...
-        return $"{baseUrl}/invitations/{invitationId}?groupId={groupId}";
+        return $"{baseUrl}/login";
     }
 }
 
