@@ -16,9 +16,9 @@ public sealed class ProfilePostService(
     {
         if (string.IsNullOrWhiteSpace(req.Title)) throw new ArgumentException("Title is required");
         var semesterId = await queries.GetActiveSemesterIdAsync(ct) ?? throw new InvalidOperationException("No active semester");
-        var userInActiveGroup = await groupQueries.HasActiveGroupAsync(currentUserId, semesterId, ct);
-        if (userInActiveGroup)
-            throw new InvalidOperationException("Members of active groups cannot create profile posts");
+        var userInGroup = await groupQueries.HasActiveMembershipInSemesterAsync(currentUserId, semesterId, ct);
+        if (userInGroup)
+            throw new InvalidOperationException("Members of groups cannot create profile posts");
         var userDetail = await _userQueries.GetAdminDetailAsync(currentUserId, ct)
             ?? throw new InvalidOperationException("User not found");
         var targetMajor = req.MajorId ?? userDetail.MajorId;
