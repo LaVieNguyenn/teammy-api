@@ -16,8 +16,8 @@ public sealed class ProfilePostService(
     {
         if (string.IsNullOrWhiteSpace(req.Title)) throw new ArgumentException("Title is required");
         var semesterId = await queries.GetActiveSemesterIdAsync(ct) ?? throw new InvalidOperationException("No active semester");
-        var userInGroup = await groupQueries.HasActiveMembershipInSemesterAsync(currentUserId, semesterId, ct);
-        if (userInGroup)
+        var membership = await groupQueries.CheckUserGroupAsync(currentUserId, semesterId, includePending: false, ct);
+        if (membership.HasGroup)
             throw new InvalidOperationException("Members of groups cannot create profile posts");
         var userDetail = await _userQueries.GetAdminDetailAsync(currentUserId, ct)
             ?? throw new InvalidOperationException("User not found");
@@ -133,6 +133,7 @@ public sealed class ProfilePostService(
         }
 
         await groupRepo.AddMembershipAsync(invitation.GroupId, currentUserId, invitation.SemesterId, "member", ct);
+        await repo.DeleteProfilePostsForUserAsync(currentUserId, invitation.SemesterId, ct);
         await repo.UpdateApplicationStatusAsync(candidateId, "accepted", ct);
         await repo.RejectPendingProfileInvitationsAsync(currentUserId, invitation.SemesterId, candidateId, ct);
     }

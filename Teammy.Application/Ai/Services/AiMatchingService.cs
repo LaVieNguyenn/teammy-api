@@ -228,6 +228,7 @@ public sealed class AiMatchingService(
                         break;
 
                     await groupRepository.AddMembershipAsync(groupState.GroupId, candidate.UserId, groupState.SemesterId, "member", ct);
+                    await postRepository.DeleteProfilePostsForUserAsync(candidate.UserId, groupState.SemesterId, ct);
                     assignments.Add(new AutoAssignmentRecordDto(
                         candidate.UserId,
                         groupState.GroupId,
