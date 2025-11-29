@@ -162,4 +162,17 @@ public sealed class RecruitmentPostRepository(AppDbContext db) : IRecruitmentPos
 
         return await db.SaveChangesAsync(ct);
     }
+
+    public async Task<int> DeleteProfilePostsForUserAsync(Guid userId, Guid semesterId, CancellationToken ct)
+    {
+        var posts = await db.recruitment_posts
+            .Where(p => p.post_type == "individual"
+                        && p.user_id == userId
+                        && p.semester_id == semesterId)
+            .ToListAsync(ct);
+
+        if (posts.Count == 0) return 0;
+        db.recruitment_posts.RemoveRange(posts);
+        return await db.SaveChangesAsync(ct);
+    }
 }

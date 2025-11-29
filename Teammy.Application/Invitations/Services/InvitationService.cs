@@ -175,12 +175,11 @@ public sealed class InvitationService(
         if (hasActive) throw new InvalidOperationException("User already has active/pending membership in this semester");
 
         await groupRepo.AddMembershipAsync(inv.GroupId, currentUserId, inv.SemesterId, "member", ct);
+        await postRepo.DeleteProfilePostsForUserAsync(currentUserId, inv.SemesterId, ct);
         await repo.UpdateStatusAsync(invitationId, "accepted", DateTime.UtcNow, ct);
 
-        // Cleanup: reject other pending applications by this user to the same group
         await postRepo.RejectPendingApplicationsForUserInGroupAsync(inv.GroupId, currentUserId, ct);
 
-        // Posts stay open until leader selects topic (handled in group update)
     }
 
     public async Task DeclineAsync(Guid invitationId, Guid currentUserId, CancellationToken ct)
