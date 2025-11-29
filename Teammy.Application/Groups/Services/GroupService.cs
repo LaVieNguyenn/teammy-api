@@ -6,9 +6,11 @@ namespace Teammy.Application.Groups.Services;
 public sealed class GroupService(
     IGroupRepository repo,
     IGroupReadOnlyQueries queries,
-    IUserReadOnlyQueries userQueries)
+    IUserReadOnlyQueries userQueries,
+    IRecruitmentPostRepository postRepo)
 {
     private readonly IUserReadOnlyQueries _userQueries = userQueries;
+    private readonly IRecruitmentPostRepository _postRepo = postRepo;
 
     public async Task<Guid> CreateGroupAsync(Guid creatorUserId, CreateGroupRequest req, CancellationToken ct)
     {
@@ -36,6 +38,7 @@ public sealed class GroupService(
 
         var groupId = await repo.CreateGroupAsync(semesterId, null, majorId, req.Name, req.Description, req.MaxMembers, ct);
         await repo.AddMembershipAsync(groupId, creatorUserId, semesterId, "leader", ct);
+        await _postRepo.DeleteProfilePostsForUserAsync(creatorUserId, semesterId, ct);
         return groupId;
     }
 

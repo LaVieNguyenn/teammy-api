@@ -383,7 +383,12 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
 
     public async Task<IReadOnlyList<ProfilePostSummaryDto>> ListProfilePostsAsync(string? skills, Guid? majorId, string? status, Teammy.Application.Posts.Dtos.ExpandOptions expand, CancellationToken ct)
     {
-        var q = db.recruitment_posts.AsNoTracking().Where(p => p.post_type == "individual");
+        var q = db.recruitment_posts.AsNoTracking()
+            .Where(p => p.post_type == "individual"
+                        && !db.group_members.Any(m =>
+                            m.user_id == p.user_id
+                            && m.semester_id == p.semester_id
+                            && (m.status == "member" || m.status == "leader")));
         if (!string.IsNullOrWhiteSpace(status)) q = q.Where(p => p.status == status);
         if (majorId.HasValue) q = q.Where(p => p.major_id == majorId);
         if (!string.IsNullOrWhiteSpace(skills))
@@ -445,7 +450,12 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
 
     public Task<ProfilePostDetailDto?> GetProfilePostAsync(Guid id, Teammy.Application.Posts.Dtos.ExpandOptions expand, CancellationToken ct)
         => db.recruitment_posts.AsNoTracking()
-            .Where(p => p.post_id == id && p.post_type == "individual")
+            .Where(p => p.post_id == id
+                        && p.post_type == "individual"
+                        && !db.group_members.Any(m =>
+                            m.user_id == p.user_id
+                            && m.semester_id == p.semester_id
+                            && (m.status == "member" || m.status == "leader")))
             .Join(db.semesters.AsNoTracking(), p => p.semester_id, s => s.semester_id, (p, s) => new { p, s })
             .GroupJoin(db.majors.AsNoTracking(), ps => ps.p.major_id, m => m.major_id, (ps, ms) => new { ps, ms })
             .SelectMany(x => x.ms.DefaultIfEmpty(), (x, m) => new { x.ps.p, x.ps.s, m })
