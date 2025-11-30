@@ -8,5 +8,5 @@ public sealed class CreateGroupRequest
     public Guid? MajorId { get; set; }
     public int MaxMembers { get; set; }
     public Guid? SemesterId { get; set; }
+    public IReadOnlyList<string>? Skills { get; set; }
 }
-
