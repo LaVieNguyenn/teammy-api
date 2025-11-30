@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Groups.Dtos;
@@ -72,7 +73,8 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
     ),
                 db.group_members.Count(m =>
                     m.group_id == x.g.group_id &&
-                    activeStatuses.Contains(m.status))
+                    activeStatuses.Contains(m.status)),
+                ParseSkills(x.g.skills)
             ))
             .ToListAsync(ct);
 
@@ -94,7 +96,8 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
                 g.max_members,
                 g.topic_id,
                 g.major_id,
-                db.group_members.Count(m => m.group_id == g.group_id && activeStatuses.Contains(m.status))
+                db.group_members.Count(m => m.group_id == g.group_id && activeStatuses.Contains(m.status)),
+                ParseSkills(g.skills)
             ))
             .FirstOrDefaultAsync(ct);
     }
@@ -200,19 +203,27 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
     }
     public async Task<IReadOnlyList<Teammy.Application.Groups.Dtos.GroupMemberDto>> ListActiveMembersAsync(Guid groupId, CancellationToken ct)
     {
-        var q = from m in db.group_members.AsNoTracking()
-                join u in db.users.AsNoTracking() on m.user_id equals u.user_id
-                where m.group_id == groupId && (m.status == "member" || m.status == "leader")
-                orderby m.status descending, m.joined_at
-                select new Teammy.Application.Groups.Dtos.GroupMemberDto(
-                    u.user_id,
-                    u.email!,
-                    u.display_name!,
-                    m.status,
-                    m.joined_at,
-                    u.avatar_url
-                );
-        return await q.ToListAsync(ct);
+        var members = await (from m in db.group_members.AsNoTracking()
+                             join u in db.users.AsNoTracking() on m.user_id equals u.user_id
+                             where m.group_id == groupId && (m.status == "member" || m.status == "leader")
+                             orderby m.status descending, m.joined_at
+                             select new { Member = m, User = u }).ToListAsync(ct);
+
+        var memberIds = members.Select(x => x.Member.group_member_id).ToList();
+        var rolesLookup = await db.group_member_roles.AsNoTracking()
+            .Where(r => memberIds.Contains(r.group_member_id))
+            .GroupBy(r => r.group_member_id)
+            .Select(g => new { GroupMemberId = g.Key, Roles = g.Select(r => r.role_name).ToList() })
+            .ToDictionaryAsync(x => x.GroupMemberId, x => (IReadOnlyList<string>)x.Roles, ct);
+
+        return members.Select(x => new Teammy.Application.Groups.Dtos.GroupMemberDto(
+            x.User.user_id,
+            x.User.email!,
+            x.User.display_name!,
+            x.Member.status,
+            x.Member.joined_at,
+            x.User.avatar_url,
+            rolesLookup.TryGetValue(x.Member.group_member_id, out var roles) ? roles : Array.Empty<string>())).ToList();
     }
 
     public Task<bool> IsActiveMemberAsync(Guid groupId, Guid userId, CancellationToken ct)
@@ -325,5 +336,20 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
             .Concat(invs)
             .OrderByDescending(x => x.CreatedAt)
             .ToList();
+    }
+
+    private static IReadOnlyList<string>? ParseSkills(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            var list = JsonSerializer.Deserialize<List<string>>(json);
+            if (list is null || list.Count == 0) return null;
+            return list;
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

@@ -10,7 +10,8 @@ public sealed record GroupSummaryDto(
     TopicDto? Topic,
     MajorDto? Major,
     MentorDto? Mentor,
-    int CurrentMembers
+    int CurrentMembers,
+    IReadOnlyList<string>? Skills
 );
 public record MentorDto(
     Guid Id,
@@ -33,7 +34,8 @@ public sealed record GroupDetailDto(
     int    MaxMembers,
     Guid?  TopicId,
     Guid?  MajorId,
-    int    CurrentMembers
+    int    CurrentMembers,
+    IReadOnlyList<string>? Skills
 );
 
 public sealed record InviteUserRequest(Guid UserId);
