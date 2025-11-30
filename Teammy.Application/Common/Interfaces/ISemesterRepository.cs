@@ -8,4 +8,5 @@ public interface ISemesterRepository
     Task<bool> UpdateAsync(Guid semesterId, string season, int year, DateOnly startDate, DateOnly endDate, CancellationToken ct);
     Task<bool> UpsertPolicyAsync(Guid semesterId, SemesterPolicyUpsertRequest req, CancellationToken ct);
     Task<bool> ActivateAsync(Guid semesterId, CancellationToken ct);
+    Task EnsureCurrentStateAsync(CancellationToken ct);
 }

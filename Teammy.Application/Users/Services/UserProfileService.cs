@@ -39,6 +39,7 @@ public sealed class UserProfileService(
             current.MajorId,
             skillsJson,
             request.SkillsCompleted,
+            NormalizePortfolio(request.PortfolioUrl),
             ct);
 
         return await GetProfileAsync(userId, ct);
@@ -71,4 +72,7 @@ public sealed class UserProfileService(
             return null;
         return JsonSerializer.Serialize(value);
     }
+
+    private static string? NormalizePortfolio(string? raw)
+        => string.IsNullOrWhiteSpace(raw) ? null : raw.Trim();
 }

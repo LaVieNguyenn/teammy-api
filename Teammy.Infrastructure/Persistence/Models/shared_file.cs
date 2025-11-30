@@ -13,6 +13,8 @@ public partial class shared_file
 
     public Guid? task_id { get; set; }
 
+    public string? file_name { get; set; }
+
     public string file_url { get; set; } = null!;
 
     public string? file_type { get; set; }
