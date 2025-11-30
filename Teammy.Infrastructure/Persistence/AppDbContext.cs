@@ -31,6 +31,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<group> groups { get; set; }
 
     public virtual DbSet<group_member> group_members { get; set; }
+    public virtual DbSet<group_member_role> group_member_roles { get; set; }
 
     public virtual DbSet<invitation> invitations { get; set; }
 
@@ -297,6 +298,7 @@ public partial class AppDbContext : DbContext
             entity.Property(e => e.created_at).HasDefaultValueSql("now()");
             entity.Property(e => e.status).HasDefaultValueSql("'recruiting'::text");
             entity.Property(e => e.updated_at).HasDefaultValueSql("now()");
+            entity.Property(e => e.skills).HasColumnType("jsonb");
 
             entity.HasOne(d => d.major).WithMany(p => p.groups)
                 .HasForeignKey(d => d.major_id)
@@ -347,6 +349,25 @@ public partial class AppDbContext : DbContext
             entity.HasOne(d => d.user).WithMany(p => p.group_members)
                 .HasForeignKey(d => d.user_id)
                 .HasConstraintName("group_members_user_id_fkey");
+        });
+
+        modelBuilder.Entity<group_member_role>(entity =>
+        {
+            entity.HasKey(e => e.group_member_role_id).HasName("group_member_roles_pkey");
+
+            entity.ToTable("group_member_roles", "teammy");
+
+            entity.HasIndex(e => new { e.group_member_id, e.role_name }, "ux_group_member_role")
+                .IsUnique();
+
+            entity.Property(e => e.group_member_role_id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.assigned_at).HasDefaultValueSql("now()");
+
+            entity.HasOne<group_member>()
+                .WithMany()
+                .HasForeignKey(e => e.group_member_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("group_member_roles_group_member_id_fkey");
         });
 
         modelBuilder.Entity<invitation>(entity =>

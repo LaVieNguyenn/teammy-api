@@ -91,10 +91,13 @@ CREATE TABLE IF NOT EXISTS teammy.groups (
   description  TEXT,
   max_members  INT  NOT NULL CHECK (max_members > 0),
   status       TEXT NOT NULL DEFAULT 'recruiting' CHECK (status IN ('recruiting','active','closed')),
+  skills       JSONB,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (semester_id, name)
 );
+CREATE INDEX IF NOT EXISTS ix_groups_skills_gin
+  ON teammy.groups USING gin (skills jsonb_path_ops);
 
 CREATE TABLE IF NOT EXISTS teammy.group_members (
   group_member_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -105,6 +108,17 @@ CREATE TABLE IF NOT EXISTS teammy.group_members (
   joined_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   left_at         TIMESTAMPTZ
 );
+
+CREATE TABLE IF NOT EXISTS teammy.group_member_roles (
+  group_member_role_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  group_member_id      UUID NOT NULL REFERENCES teammy.group_members(group_member_id) ON DELETE CASCADE,
+  role_name            TEXT NOT NULL,
+  assigned_by          UUID REFERENCES teammy.users(user_id),
+  assigned_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (group_member_id, role_name)
+);
+CREATE INDEX IF NOT EXISTS ix_member_roles_member
+  ON teammy.group_member_roles(group_member_id);
 
 -- unique: 1 người/1 team/1 kỳ (active)
 CREATE UNIQUE INDEX IF NOT EXISTS ux_member_user_semester_active

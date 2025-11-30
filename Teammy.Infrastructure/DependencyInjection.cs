@@ -50,6 +50,7 @@ public static class DependencyInjection
         services.AddScoped<IRecruitmentPostRepository, RecruitmentPostRepository>();
         services.AddScoped<IRecruitmentPostReadOnlyQueries, RecruitmentPostReadOnlyQueries>();
         services.AddScoped<IChatRepository, ChatRepository>();
+        services.AddScoped<IDashboardReadOnlyQueries, DashboardReadOnlyQueries>();
 
         // Invitations
         services.AddScoped<IInvitationRepository, InvitationRepository>();

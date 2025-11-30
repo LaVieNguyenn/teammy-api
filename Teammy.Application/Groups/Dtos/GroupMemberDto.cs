@@ -6,6 +6,6 @@ public sealed record GroupMemberDto(
     string DisplayName,
     string Role,        // leader | member
     DateTime JoinedAt,
-    string? AvatarUrl
+    string? AvatarUrl,
+    IReadOnlyList<string>? AssignedRoles
 );
-

@@ -361,7 +361,7 @@ public sealed class AiMatchingService(
             return null;
         }
 
-        await groupRepository.UpdateGroupAsync(groupId, null, null, null, null, chosen.TopicId, mentorId, ct);
+        await groupRepository.UpdateGroupAsync(groupId, null, null, null, null, chosen.TopicId, mentorId, null, ct);
         await groupRepository.SetStatusAsync(groupId, "active", ct);
         await topicWriteRepository.SetStatusAsync(chosen.TopicId, "closed", ct);
         await postRepository.CloseAllOpenPostsForGroupAsync(groupId, ct);
