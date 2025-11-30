@@ -19,7 +19,8 @@ public sealed record CurrentUserDto(
     MajorSummaryDto? Major,
     JsonElement? Skills,
     DateTime CreatedAt,
-    DateTime UpdatedAt
+    DateTime UpdatedAt,
+    string? PortfolioUrl
 );
 
 public sealed record UserRoleDto(Guid RoleId, string Name);

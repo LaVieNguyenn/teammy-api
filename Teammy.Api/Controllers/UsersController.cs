@@ -210,6 +210,7 @@ public sealed class UsersController : ControllerBase
             request.Gender,
             request.MajorId,
             request.IsActive,
+            request.PortfolioUrl,
             ct);
 
         await _userWrite.SetSingleRoleAsync(userId, roleId.Value, ct);

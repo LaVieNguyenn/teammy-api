@@ -14,7 +14,8 @@ public sealed record AdminUserListItemDto(
     string? MajorName,
     string? StudentCode,
     string? Gender,
-    DateTime CreatedAt
+    DateTime CreatedAt,
+    string? PortfolioUrl
 );
 
 public sealed record AdminUserDetailDto(
@@ -31,5 +32,6 @@ public sealed record AdminUserDetailDto(
     string? Gender,
     bool   SkillsCompleted,
     DateTime CreatedAt,
-    DateTime UpdatedAt
+    DateTime UpdatedAt,
+    string? PortfolioUrl
 );

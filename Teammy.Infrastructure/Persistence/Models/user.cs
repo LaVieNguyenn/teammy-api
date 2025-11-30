@@ -23,6 +23,8 @@ public partial class user
 
     public Guid? major_id { get; set; }
 
+    public string? portfolio_url { get; set; }
+
     public string? skills { get; set; }
 
     public bool skills_completed { get; set; }

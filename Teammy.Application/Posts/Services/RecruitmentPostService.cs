@@ -124,6 +124,7 @@ public sealed class RecruitmentPostService(
         if (hasActive) throw new InvalidOperationException("User already has active/pending membership in this semester");
 
         await groupRepo.AddMembershipAsync(owner.GroupId.Value, app.ApplicantUserId.Value, owner.SemesterId, "member", ct);
+        await repo.DeleteProfilePostsForUserAsync(app.ApplicantUserId.Value, owner.SemesterId, ct);
         await repo.UpdateApplicationStatusAsync(appId, "accepted", ct);
 
         // Cleanup duplicates: reject other pending applications by this user to the same group

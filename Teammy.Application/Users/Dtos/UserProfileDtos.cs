@@ -13,7 +13,8 @@ public sealed record UserProfileDto(
     string? MajorName,
     JsonElement? Skills,
     bool SkillsCompleted,
-    string? AvatarUrl
+    string? AvatarUrl,
+    string? PortfolioUrl
 );
 
 public sealed record UpdateUserProfileRequest(
@@ -21,5 +22,6 @@ public sealed record UpdateUserProfileRequest(
     string? Phone,
     string? Gender,
     JsonElement? Skills,
-    bool SkillsCompleted
+    bool SkillsCompleted,
+    string? PortfolioUrl
 );

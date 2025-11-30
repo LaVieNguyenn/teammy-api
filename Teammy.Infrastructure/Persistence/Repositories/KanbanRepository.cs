@@ -356,7 +356,7 @@ public sealed class KanbanRepository(AppDbContext db) : IKanbanRepository
     }
 
     // Files
-    public async Task<Guid> AddSharedFileAsync(Guid groupId, Guid uploadedBy, Guid? taskId, string fileUrl, string? fileType, long? fileSize, string? description, CancellationToken ct)
+    public async Task<Guid> AddSharedFileAsync(Guid groupId, Guid uploadedBy, Guid? taskId, string fileName, string fileUrl, string? fileType, long? fileSize, string? description, CancellationToken ct)
     {
         if (taskId.HasValue)
         {
@@ -364,12 +364,17 @@ public sealed class KanbanRepository(AppDbContext db) : IKanbanRepository
             if (!ok) throw new InvalidOperationException("Task not in this group");
         }
 
+        var safeName = string.IsNullOrWhiteSpace(fileName) ? "attachment" : fileName.Trim();
+        if (safeName.Length > 255)
+            safeName = safeName[..255];
+
         var e = new shared_file
         {
             file_id = Guid.NewGuid(),
             group_id = groupId,
             uploaded_by = uploadedBy,
             task_id = taskId,
+            file_name = safeName,
             file_url = fileUrl,
             file_type = fileType,
             file_size = fileSize,
