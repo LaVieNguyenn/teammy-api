@@ -24,9 +24,9 @@ public sealed class AiMatchingService(
         RecruitmentPostSuggestionRequest? request,
         CancellationToken ct)
     {
-        request ??= new RecruitmentPostSuggestionRequest(null, null, null);
+        request ??= new RecruitmentPostSuggestionRequest(null, null);
         await aiQueries.RefreshStudentsPoolAsync(ct);
-        var semesterCtx = await ResolveSemesterAsync(request.SemesterId, ct);
+        var semesterCtx = await ResolveSemesterAsync(null, ct);
         EnsureWindow(DateOnly.FromDateTime(DateTime.UtcNow),
             semesterCtx.Policy.TeamSuggestStart,
             semesterCtx.Policy.TeamSelfSelectEnd,
@@ -44,9 +44,25 @@ public sealed class AiMatchingService(
         if (posts.Count == 0)
             return Array.Empty<RecruitmentPostSuggestionDto>();
 
+        var groupIds = posts
+            .Where(p => p.GroupId.HasValue)
+            .Select(p => p.GroupId!.Value)
+            .Distinct()
+            .ToArray();
+
+        var mixes = groupIds.Length == 0
+            ? new Dictionary<Guid, GroupRoleMixSnapshot>()
+            : await aiQueries.GetGroupRoleMixAsync(groupIds, ct);
+
         var limit = NormalizeLimit(request.Limit);
         var suggestions = posts
-            .Select(post => BuildPostSuggestion(studentSkills, profile.MajorId, post))
+            .Select(post =>
+            {
+                GroupRoleMixSnapshot? mix = null;
+                if (post.GroupId is Guid gid && mixes.TryGetValue(gid, out var snapshot))
+                    mix = snapshot;
+                return BuildPostSuggestion(studentSkills, profile.MajorId, post, mix);
+            })
             .Where(dto => dto is not null)
             .Select(dto => dto!)
             .OrderByDescending(dto => dto.Score)
@@ -182,9 +198,9 @@ public sealed class AiMatchingService(
 
     public async Task<AutoAssignTeamsResultDto> AutoAssignTeamsAsync(AutoAssignTeamsRequest? request, CancellationToken ct)
     {
-        request ??= new AutoAssignTeamsRequest(null, null, null);
+        request ??= new AutoAssignTeamsRequest(null, null);
         await aiQueries.RefreshStudentsPoolAsync(ct);
-        var semesterCtx = await ResolveSemesterAsync(request.SemesterId, ct);
+        var semesterCtx = await ResolveSemesterAsync(null, ct);
         var semesterId = semesterCtx.SemesterId;
 
         var students = await aiQueries.ListUnassignedStudentsAsync(semesterId, request.MajorId, ct);
@@ -262,7 +278,7 @@ public sealed class AiMatchingService(
         AutoAssignTopicRequest? request,
         CancellationToken ct)
     {
-        request ??= new AutoAssignTopicRequest(null, null, null, null);
+        request ??= new AutoAssignTopicRequest(null, null, null);
 
         if (request.GroupId.HasValue)
         {
@@ -274,8 +290,7 @@ public sealed class AiMatchingService(
         if (!canManageAllGroups)
             throw new UnauthorizedAccessException("Chỉ admin hoặc moderator mới được phép auto assign cho toàn bộ nhóm.");
 
-        var semesterId = request.SemesterId
-            ?? await groupQueries.GetActiveSemesterIdAsync(ct)
+        var semesterId = await groupQueries.GetActiveSemesterIdAsync(ct)
             ?? throw new InvalidOperationException("Không tìm thấy học kỳ.");
 
         var groups = await groupQueries.ListGroupsAsync(null, request.MajorId, null, ct);
@@ -381,7 +396,8 @@ public sealed class AiMatchingService(
     private static RecruitmentPostSuggestionDto? BuildPostSuggestion(
         AiSkillProfile studentProfile,
         Guid studentMajorId,
-        RecruitmentPostSnapshot post)
+        RecruitmentPostSnapshot post,
+        GroupRoleMixSnapshot? mix)
     {
         var requiredProfile = AiSkillProfile.FromJson(post.RequiredSkills);
         var requiredSkillTags = requiredProfile.HasTags
@@ -406,7 +422,8 @@ public sealed class AiMatchingService(
         var majorBoost = post.MajorId.HasValue && post.MajorId.Value == studentMajorId ? 15 : 5;
         var recencyDays = Math.Clamp((int)(DateTime.UtcNow - post.CreatedAt).TotalDays, 0, 30);
         var recencyBoost = Math.Max(5, 30 - recencyDays);
-        var totalScore = overlapScore + roleScore + majorBoost + recencyBoost;
+        var needAdjustment = CalculateRoleNeedAdjustment(studentProfile.PrimaryRole, mix);
+        var totalScore = overlapScore + roleScore + majorBoost + recencyBoost + needAdjustment;
 
         if (totalScore <= 20)
             return null;
@@ -426,6 +443,33 @@ public sealed class AiMatchingService(
             requiredSkillTags,
             matchingSkills
         );
+    }
+
+    private static int CalculateRoleNeedAdjustment(AiPrimaryRole candidateRole, GroupRoleMixSnapshot? mix)
+    {
+        if (mix is null || candidateRole == AiPrimaryRole.Unknown)
+            return 0;
+
+        var frontendHeavy = mix.FrontendCount >= 2
+                            && mix.FrontendCount >= mix.BackendCount + 1
+                            && mix.FrontendCount >= mix.OtherCount + 1;
+
+        var backendNeeded = mix.BackendCount == 0
+                            || (mix.FrontendCount >= 2 && mix.BackendCount + 1 <= mix.FrontendCount - 1);
+        var mobileNeeded = mix.OtherCount == 0 && mix.FrontendCount >= 2;
+
+        var adjustment = 0;
+
+        if (backendNeeded && candidateRole == AiPrimaryRole.Backend)
+            adjustment += mix.BackendCount == 0 ? 28 : 20;
+
+        if (mobileNeeded && candidateRole == AiPrimaryRole.Other)
+            adjustment += 18;
+
+        if (frontendHeavy && candidateRole == AiPrimaryRole.Frontend)
+            adjustment -= mix.FrontendCount >= 3 ? 25 : 15;
+
+        return adjustment;
     }
 
     private static TopicSuggestionDto? BuildTopicSuggestion(TopicAvailabilitySnapshot topic, AiSkillProfile groupProfile)

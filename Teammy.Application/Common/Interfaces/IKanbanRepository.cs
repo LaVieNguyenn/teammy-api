@@ -25,6 +25,6 @@ public interface IKanbanRepository
     Task DeleteCommentAsync(Guid commentId, Guid performedBy, CancellationToken ct);
 
     // Files
-    Task<Guid> AddSharedFileAsync(Guid groupId, Guid uploadedBy, Guid? taskId, string fileUrl, string? fileType, long? fileSize, string? description, CancellationToken ct);
+    Task<Guid> AddSharedFileAsync(Guid groupId, Guid uploadedBy, Guid? taskId, string fileName, string fileUrl, string? fileType, long? fileSize, string? description, CancellationToken ct);
     Task DeleteSharedFileAsync(Guid fileId, Guid performedBy, CancellationToken ct);
 }
