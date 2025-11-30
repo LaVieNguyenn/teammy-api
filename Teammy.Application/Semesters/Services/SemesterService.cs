@@ -29,14 +29,20 @@ public sealed class SemesterService(
         if (!ok) throw new KeyNotFoundException("Semester not found");
     }
 
-    public Task<IReadOnlyList<SemesterSummaryDto>> GetSemestersAsync(CancellationToken ct)
-        => queries.ListAsync(ct);
+    public async Task<IReadOnlyList<SemesterSummaryDto>> GetSemestersAsync(CancellationToken ct)
+    {
+        await repo.EnsureCurrentStateAsync(ct);
+        return await queries.ListAsync(ct);
+    }
 
     public Task<SemesterDetailDto?> GetSemesterAsync(Guid id, CancellationToken ct)
         => queries.GetByIdAsync(id, ct);
 
-    public Task<SemesterDetailDto?> GetActiveSemesterAsync(CancellationToken ct)
-        => queries.GetActiveAsync(ct);
+    public async Task<SemesterDetailDto?> GetActiveSemesterAsync(CancellationToken ct)
+    {
+        await repo.EnsureCurrentStateAsync(ct);
+        return await queries.GetActiveAsync(ct);
+    }
 
     public Task<SemesterPolicyDto?> GetPolicyAsync(Guid id, CancellationToken ct)
         => queries.GetPolicyAsync(id, ct);

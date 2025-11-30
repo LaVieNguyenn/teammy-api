@@ -42,5 +42,18 @@ public sealed record CommentVm(Guid CommentId, Guid TaskId, Guid UserId, string 
 public sealed record MoveTaskRequest(Guid ColumnId, Guid? PrevTaskId, Guid? NextTaskId);
 public sealed record MoveTaskResponse(Guid TaskId, Guid ColumnId, decimal SortOrder);
 
-public sealed record UploadFileResult(Guid FileId, string FileUrl, string? FileType, long? FileSize, Guid? TaskId);
-public sealed record SharedFileVm(Guid FileId, Guid GroupId, Guid UploadedBy, Guid? TaskId, string FileUrl, string? FileType, long? FileSize, string? Description, DateTime CreatedAt);
+public sealed record UploadFileResult(Guid FileId, string FileName, string FileUrl, string? FileType, long? FileSize, Guid? TaskId);
+public sealed record SharedFileVm(
+    Guid FileId,
+    Guid GroupId,
+    Guid UploadedBy,
+    string UploadedByName,
+    string? UploadedByAvatarUrl,
+    Guid? TaskId,
+    string FileName,
+    string FileUrl,
+    string? FileType,
+    long? FileSize,
+    string? Description,
+    DateTime CreatedAt
+);
