@@ -1,11 +1,17 @@
 using Microsoft.EntityFrameworkCore;
 using Teammy.Application.Common.Interfaces;
+using Teammy.Application.Groups.Dtos;
 using Teammy.Infrastructure.Persistence;
 using Teammy.Infrastructure.Persistence.Models;
+
 namespace Teammy.Infrastructure.Persistence.Repositories;
+
 public sealed class GroupRepository(AppDbContext db) : IGroupRepository
 {
-    public async Task<Guid> CreateGroupAsync(Guid semesterId, Guid? topicId, Guid? majorId, string name, string? description, int maxMembers, CancellationToken ct)
+    private Task<group_member?> FindGroupMemberAsync(Guid groupId, Guid userId, CancellationToken ct)
+        => db.group_members.FirstOrDefaultAsync(x => x.group_id == groupId && x.user_id == userId, ct);
+
+    public async Task<Guid> CreateGroupAsync(Guid semesterId, Guid? topicId, Guid? majorId, string name, string? description, int maxMembers, string? skillsJson, CancellationToken ct)
     {
         var g = new group
         {
@@ -19,6 +25,7 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
             status = "recruiting",
             created_at = DateTime.UtcNow,
             updated_at = DateTime.UtcNow,
+            skills = skillsJson
         };
         db.groups.Add(g);
         await db.SaveChangesAsync(ct);
@@ -167,7 +174,7 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
         await tx.CommitAsync(ct);
     }
 
-    public async Task UpdateGroupAsync(Guid groupId, string? name, string? description, int? maxMembers, Guid? majorId, Guid? topicId, Guid? mentorId, CancellationToken ct)
+    public async Task UpdateGroupAsync(Guid groupId, string? name, string? description, int? maxMembers, Guid? majorId, Guid? topicId, Guid? mentorId, string? skillsJson, CancellationToken ct)
     {
         var g = await db.groups.FirstOrDefaultAsync(x => x.group_id == groupId, ct)
             ?? throw new KeyNotFoundException("Group not found");
@@ -178,6 +185,7 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
         if (majorId.HasValue) g.major_id = majorId;
         if (topicId.HasValue) g.topic_id = topicId;
         if (mentorId.HasValue) g.mentor_id = mentorId;
+        if (skillsJson is not null) g.skills = skillsJson;
         g.updated_at = DateTime.UtcNow;
 
         await db.SaveChangesAsync(ct);
@@ -191,4 +199,113 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
         g.updated_at = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
     }
+
+    public async Task<IReadOnlyList<GroupMemberRoleDto>> ListMemberRolesAsync(Guid groupId, Guid memberUserId, CancellationToken ct)
+    {
+        var member = await FindGroupMemberAsync(groupId, memberUserId, ct)
+            ?? throw new KeyNotFoundException("Member not found in group");
+
+        return await (
+            from r in db.group_member_roles.AsNoTracking()
+            join u in db.users.AsNoTracking() on r.assigned_by equals u.user_id into assignedByJoin
+            from assignedBy in assignedByJoin.DefaultIfEmpty()
+            join gm in db.group_members.AsNoTracking() on r.group_member_id equals gm.group_member_id
+            join memberUser in db.users.AsNoTracking() on gm.user_id equals memberUser.user_id
+            where r.group_member_id == member.group_member_id
+            orderby r.role_name
+            select new GroupMemberRoleDto(
+                r.group_member_role_id,
+                r.group_member_id,
+                memberUser.user_id,
+                memberUser.display_name ?? string.Empty,
+                r.role_name,
+                r.assigned_by,
+                assignedBy != null ? assignedBy.display_name : null,
+                r.assigned_at)).ToListAsync(ct);
+    }
+
+    public async Task AddMemberRoleAsync(Guid groupId, Guid memberUserId, Guid assignedByUserId, string roleName, CancellationToken ct)
+    {
+        var name = NormalizeRole(roleName);
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException("roleName is required");
+
+        var member = await FindGroupMemberAsync(groupId, memberUserId, ct)
+            ?? throw new KeyNotFoundException("Member not found in group");
+
+        var entity = new group_member_role
+        {
+            group_member_role_id = Guid.NewGuid(),
+            group_member_id = member.group_member_id,
+            role_name = name,
+            assigned_by = assignedByUserId,
+            assigned_at = DateTime.UtcNow
+        };
+
+        db.group_member_roles.Add(entity);
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task RemoveMemberRoleAsync(Guid groupId, Guid memberUserId, string roleName, CancellationToken ct)
+    {
+        var name = NormalizeRole(roleName);
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException("roleName is required");
+
+        var member = await FindGroupMemberAsync(groupId, memberUserId, ct)
+            ?? throw new KeyNotFoundException("Member not found in group");
+
+        var role = await db.group_member_roles
+            .FirstOrDefaultAsync(r => r.group_member_id == member.group_member_id && r.role_name == name, ct);
+
+        if (role is null)
+            throw new KeyNotFoundException("Role not found for member");
+
+        db.group_member_roles.Remove(role);
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task ReplaceMemberRolesAsync(Guid groupId, Guid memberUserId, Guid assignedByUserId, IReadOnlyCollection<string> roleNames, CancellationToken ct)
+    {
+        var member = await FindGroupMemberAsync(groupId, memberUserId, ct)
+            ?? throw new KeyNotFoundException("Member not found in group");
+
+        var normalized = roleNames?
+            .Select(NormalizeRole)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList() ?? new List<string>();
+
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        var existing = await db.group_member_roles
+            .Where(r => r.group_member_id == member.group_member_id)
+            .ToListAsync(ct);
+
+        var toRemove = existing.Where(r => !normalized.Contains(r.role_name, StringComparer.OrdinalIgnoreCase)).ToList();
+        if (toRemove.Count > 0)
+            db.group_member_roles.RemoveRange(toRemove);
+
+        var existingNames = existing.Select(r => r.role_name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var roleName in normalized)
+        {
+            if (existingNames.Contains(roleName))
+                continue;
+
+            db.group_member_roles.Add(new group_member_role
+            {
+                group_member_role_id = Guid.NewGuid(),
+                group_member_id = member.group_member_id,
+                role_name = roleName,
+                assigned_by = assignedByUserId,
+                assigned_at = DateTime.UtcNow
+            });
+        }
+
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+    }
+
+    private static string NormalizeRole(string roleName)
+        => roleName?.Trim() ?? string.Empty;
 }

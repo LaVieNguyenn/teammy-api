@@ -6,4 +6,5 @@ public sealed class UpdateGroupRequest
     public string? Description { get; set; }
     public int? MaxMembers { get; set; }
     public Guid? MajorId { get; set; }
+    public IReadOnlyList<string>? Skills { get; set; }
 }

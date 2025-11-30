@@ -227,7 +227,7 @@ public sealed class InvitationService(
         if (topic.Mentors.All(m => m.MentorId != inv.InviteeUserId))
             throw new InvalidOperationException("You are not assigned as mentor for this topic");
 
-        await groupRepo.UpdateGroupAsync(inv.GroupId, null, null, null, null, inv.TopicId, inv.InviteeUserId, ct);
+        await groupRepo.UpdateGroupAsync(inv.GroupId, null, null, null, null, inv.TopicId, inv.InviteeUserId, null, ct);
         await groupRepo.SetStatusAsync(inv.GroupId, "active", ct);
         await _topicWrite.SetStatusAsync(inv.TopicId.Value, "closed", ct);
         await postRepo.CloseAllOpenPostsForGroupAsync(inv.GroupId, ct);
