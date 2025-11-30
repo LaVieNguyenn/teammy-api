@@ -207,18 +207,26 @@ public sealed class KanbanRepository(AppDbContext db) : IKanbanRepository
         t.due_date = dueDate;
         t.updated_at = DateTime.UtcNow;
 
-        if (backlogItemId != t.backlog_item_id)
+        var backlogPayloadProvided = backlogItemId.HasValue;
+        if (backlogPayloadProvided)
         {
-            if (backlogItemId is Guid newBacklogId)
+            if (backlogItemId == Guid.Empty)
             {
-                var backlog = await EnsureBacklogAvailableAsync(newBacklogId, t.group_id, taskId, ct);
-                t.backlog_item_id = newBacklogId;
+                if (t.backlog_item_id is Guid existing)
+                {
+                    await ResetBacklogAsync(existing, targetColumn.is_done, ct);
+                    t.backlog_item_id = null;
+                }
+            }
+            else if (backlogItemId != t.backlog_item_id)
+            {
+                var backlog = await EnsureBacklogAvailableAsync(backlogItemId!.Value, t.group_id, taskId, ct);
+                t.backlog_item_id = backlogItemId.Value;
                 ApplyBacklogProgress(backlog, targetColumn.is_done);
             }
-            else
+            else if (columnChanged && t.backlog_item_id is Guid linkedId)
             {
-                await ResetBacklogAsync(t.backlog_item_id, targetColumn.is_done, ct);
-                t.backlog_item_id = null;
+                await UpdateLinkedBacklogAsync(linkedId, targetColumn.is_done, ct);
             }
         }
         else if (columnChanged && t.backlog_item_id is Guid existingBacklogId)
