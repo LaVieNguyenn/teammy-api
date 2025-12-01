@@ -3,6 +3,7 @@ using System.Linq;
 using Teammy.Application.Ai.Dtos;
 using Teammy.Application.Ai.Models;
 using Teammy.Application.Common.Interfaces;
+using Teammy.Application.Posts.Dtos;
 using Teammy.Application.Semesters.Dtos;
 
 namespace Teammy.Application.Ai.Services;
@@ -13,11 +14,81 @@ public sealed class AiMatchingService(
     IGroupRepository groupRepository,
     ISemesterReadOnlyQueries semesterQueries,
     IRecruitmentPostRepository postRepository,
+    IRecruitmentPostReadOnlyQueries recruitmentPostQueries,
     ITopicWriteRepository topicWriteRepository,
-    ITopicReadOnlyQueries topicQueries)
+    ITopicReadOnlyQueries topicQueries,
+    IMajorReadOnlyQueries majorQueries)
 {
     private const int DefaultSuggestionLimit = 5;
     private const int MaxSuggestionLimit = 20;
+    private const int OptionSuggestionLimit = 3;
+
+    public async Task<AiSummaryDto> GetSummaryAsync(Guid? semesterId, CancellationToken ct)
+    {
+        await aiQueries.RefreshStudentsPoolAsync(ct);
+        var semesterCtx = await ResolveSemesterAsync(semesterId, ct);
+
+        var groupsWithoutTopic = await aiQueries.CountGroupsWithoutTopicAsync(semesterCtx.SemesterId, ct);
+        var groupsUnderCapacity = await aiQueries.CountGroupsUnderCapacityAsync(semesterCtx.SemesterId, ct);
+        var studentsWithoutGroup = await aiQueries.CountUnassignedStudentsAsync(semesterCtx.SemesterId, ct);
+
+        return new AiSummaryDto(
+            semesterCtx.SemesterId,
+            semesterCtx.Name,
+            DateTime.UtcNow,
+            groupsWithoutTopic,
+            groupsUnderCapacity,
+            studentsWithoutGroup);
+    }
+
+    public async Task<AiOptionListDto> GetOptionsAsync(AiOptionRequest? request, CancellationToken ct)
+    {
+        request ??= new AiOptionRequest(null, AiOptionSection.All, 1, 20);
+        await aiQueries.RefreshStudentsPoolAsync(ct);
+        var semesterCtx = await ResolveSemesterAsync(request.SemesterId, ct);
+        var (page, pageSize) = NormalizePagination(request.Page, request.PageSize);
+
+        var majorLookup = (await majorQueries.ListAsync(ct)).ToDictionary(x => x.MajorId, x => x.MajorName);
+
+        PaginatedCollection<GroupTopicOptionDto>? topicPage = null;
+        PaginatedCollection<GroupStaffingOptionDto>? staffingPage = null;
+        PaginatedCollection<StudentPlacementOptionDto>? studentPage = null;
+
+        var section = request.Section;
+
+        if (section is AiOptionSection.All or AiOptionSection.GroupsWithoutTopic)
+        {
+            var groups = await aiQueries.ListGroupsWithoutTopicAsync(semesterCtx.SemesterId, ct);
+            var topics = await aiQueries.ListTopicAvailabilityAsync(semesterCtx.SemesterId, null, ct);
+            topicPage = await BuildGroupTopicOptionsPageAsync(groups, topics, page, pageSize, ct);
+        }
+
+        if (section is AiOptionSection.All or AiOptionSection.GroupsNeedingMembers or AiOptionSection.StudentsWithoutGroup)
+        {
+            var groups = await aiQueries.ListGroupsUnderCapacityAsync(semesterCtx.SemesterId, ct);
+            var students = await aiQueries.ListUnassignedStudentsAsync(semesterCtx.SemesterId, null, ct);
+            var relatedGroupIds = groups.Select(g => g.GroupId).Distinct().ToArray();
+            var mixSnapshots = relatedGroupIds.Length == 0
+                ? new Dictionary<Guid, GroupRoleMixSnapshot>()
+                : await aiQueries.GetGroupRoleMixAsync(relatedGroupIds, ct);
+
+            var (groupOptions, studentOptions) = BuildStaffingOptions(groups, students, mixSnapshots, majorLookup);
+
+            if (section is AiOptionSection.All or AiOptionSection.GroupsNeedingMembers)
+                staffingPage = Paginate(groupOptions, page, pageSize);
+
+            if (section is AiOptionSection.All or AiOptionSection.StudentsWithoutGroup)
+                studentPage = Paginate(studentOptions, page, pageSize);
+        }
+
+        return new AiOptionListDto(
+            semesterCtx.SemesterId,
+            semesterCtx.Name,
+            section,
+            topicPage,
+            staffingPage,
+            studentPage);
+    }
 
     public async Task<IReadOnlyList<RecruitmentPostSuggestionDto>> SuggestRecruitmentPostsForStudentAsync(
         Guid studentId,
@@ -69,7 +140,10 @@ public sealed class AiMatchingService(
             .Take(limit)
             .ToList();
 
-        return suggestions;
+        if (suggestions.Count == 0)
+            return suggestions;
+
+        return await HydrateRecruitmentPostSuggestionsAsync(suggestions, studentId, ct);
     }
 
     public async Task<IReadOnlyList<TopicSuggestionDto>> SuggestTopicsForGroupAsync(
@@ -134,7 +208,10 @@ public sealed class AiMatchingService(
             .Take(limitValue)
             .ToList();
 
-        return items;
+        if (items.Count == 0)
+            return items;
+
+        return await HydrateTopicSuggestionsAsync(items, ct);
     }
 
     public async Task<IReadOnlyList<ProfilePostSuggestionDto>> SuggestProfilePostsForGroupAsync(
@@ -193,7 +270,10 @@ public sealed class AiMatchingService(
             .Take(limit)
             .ToList();
 
-        return suggestions;
+        if (suggestions.Count == 0)
+            return suggestions;
+
+        return await HydrateProfilePostSuggestionsAsync(suggestions, ct);
     }
 
     public async Task<AutoAssignTeamsResultDto> AutoAssignTeamsAsync(AutoAssignTeamsRequest? request, CancellationToken ct)
@@ -201,18 +281,88 @@ public sealed class AiMatchingService(
         request ??= new AutoAssignTeamsRequest(null, null);
         await aiQueries.RefreshStudentsPoolAsync(ct);
         var semesterCtx = await ResolveSemesterAsync(null, ct);
-        var semesterId = semesterCtx.SemesterId;
+        var phase = await AssignStudentsToGroupsAsync(semesterCtx.SemesterId, request.MajorId, request.Limit, ct);
+        return new AutoAssignTeamsResultDto(
+            phase.Assignments.Count,
+            phase.Assignments,
+            phase.RemainingStudents.Select(s => s.UserId).ToList(),
+            phase.OpenGroupIds);
+    }
 
-        var students = await aiQueries.ListUnassignedStudentsAsync(semesterId, request.MajorId, ct);
+    public async Task<AutoAssignTopicBatchResultDto> AutoAssignTopicAsync(
+        Guid currentUserId,
+        bool canManageAllGroups,
+        AutoAssignTopicRequest? request,
+        CancellationToken ct)
+    {
+        request ??= new AutoAssignTopicRequest(null, null, null);
+
+        if (request.GroupId.HasValue)
+        {
+            var assignment = await AssignTopicToGroupAsync(request.GroupId.Value, currentUserId, enforceMembership: true, request.LimitPerGroup, throwIfUnavailable: true, ct)
+                ?? throw new InvalidOperationException("Không tìm thấy topic phù hợp.");
+            return new AutoAssignTopicBatchResultDto(1, new[] { assignment }, Array.Empty<Guid>());
+        }
+
+        if (!canManageAllGroups)
+            throw new UnauthorizedAccessException("Chỉ admin hoặc moderator mới được phép auto assign cho toàn bộ nhóm.");
+
+        var semesterId = await groupQueries.GetActiveSemesterIdAsync(ct)
+            ?? throw new InvalidOperationException("Không tìm thấy học kỳ.");
+
+        var phase = await AssignTopicsForEligibleGroupsAsync(semesterId, request.MajorId, currentUserId, request.LimitPerGroup, ct);
+        return new AutoAssignTopicBatchResultDto(phase.Assignments.Count, phase.Assignments, phase.SkippedGroupIds);
+    }
+
+    public async Task<AiAutoResolveResultDto> AutoResolveAsync(
+        Guid currentUserId,
+        AiAutoResolveRequest? request,
+        CancellationToken ct)
+    {
+        request ??= new AiAutoResolveRequest(null, null);
+        await aiQueries.RefreshStudentsPoolAsync(ct);
+        var semesterCtx = await ResolveSemesterAsync(request.SemesterId, ct);
+
+        var studentPhase = await AssignStudentsToGroupsAsync(semesterCtx.SemesterId, request.MajorId, null, ct);
+        var topicPhase = await AssignTopicsForEligibleGroupsAsync(semesterCtx.SemesterId, request.MajorId, currentUserId, null, ct);
+        var majorLookup = (await majorQueries.ListAsync(ct)).ToDictionary(x => x.MajorId, x => x.MajorName);
+        var newGroupsPhase = await CreateNewGroupsForStudentsAsync(studentPhase.RemainingStudents, semesterCtx, currentUserId, request.MajorId, majorLookup, ct);
+
+        var totalAssignments = studentPhase.Assignments.Count + newGroupsPhase.Assignments.Count;
+        var totalTopics = topicPhase.Assignments.Count + newGroupsPhase.TopicAssignments.Count;
+        var combinedAssignments = studentPhase.Assignments.Concat(newGroupsPhase.Assignments).ToList();
+        var combinedTopicAssignments = topicPhase.Assignments.Concat(newGroupsPhase.TopicAssignments).ToList();
+        var skippedTopics = topicPhase.SkippedGroupIds.Concat(newGroupsPhase.TopicFailures).Distinct().ToList();
+
+        return new AiAutoResolveResultDto(
+            semesterCtx.SemesterId,
+            semesterCtx.Name,
+            totalAssignments,
+            totalTopics,
+            newGroupsPhase.Groups.Count,
+            combinedAssignments,
+            combinedTopicAssignments,
+            skippedTopics,
+            newGroupsPhase.Groups,
+            newGroupsPhase.UnresolvedStudentIds);
+    }
+
+    private async Task<StudentAssignmentPhaseResult> AssignStudentsToGroupsAsync(
+        Guid semesterId,
+        Guid? majorId,
+        int? requestLimit,
+        CancellationToken ct)
+    {
+        var students = await aiQueries.ListUnassignedStudentsAsync(semesterId, majorId, ct);
         if (students.Count == 0)
-            return new AutoAssignTeamsResultDto(0, Array.Empty<AutoAssignmentRecordDto>(), Array.Empty<Guid>(), Array.Empty<Guid>());
+            return new StudentAssignmentPhaseResult(Array.Empty<AutoAssignmentRecordDto>(), Array.Empty<StudentProfileSnapshot>(), Array.Empty<Guid>());
 
-        var groups = await aiQueries.ListGroupCapacitiesAsync(semesterId, request.MajorId, ct);
+        var groups = await aiQueries.ListGroupCapacitiesAsync(semesterId, majorId, ct);
         if (groups.Count == 0)
-            return new AutoAssignTeamsResultDto(0, Array.Empty<AutoAssignmentRecordDto>(), students.Select(s => s.UserId).ToList(), Array.Empty<Guid>());
+            return new StudentAssignmentPhaseResult(Array.Empty<AutoAssignmentRecordDto>(), students, Array.Empty<Guid>());
 
         var mixes = await aiQueries.GetGroupRoleMixAsync(groups.Select(g => g.GroupId), ct);
-        var limit = request.Limit.HasValue && request.Limit.Value > 0 ? request.Limit.Value : int.MaxValue;
+        var limit = requestLimit.HasValue && requestLimit.Value > 0 ? requestLimit.Value : int.MaxValue;
 
         var studentsByMajor = students
             .GroupBy(s => s.MajorId)
@@ -230,9 +380,9 @@ public sealed class AiMatchingService(
 
         var assignments = new List<AutoAssignmentRecordDto>();
 
-        foreach (var (majorId, groupStates) in groupsByMajor)
+        foreach (var (majorKey, groupStates) in groupsByMajor)
         {
-            if (!studentsByMajor.TryGetValue(majorId, out var pools))
+            if (!studentsByMajor.TryGetValue(majorKey, out var pools))
                 continue;
 
             foreach (var groupState in groupStates)
@@ -257,10 +407,12 @@ public sealed class AiMatchingService(
             }
         }
 
-        var remainingStudentIds = studentsByMajor.Values
+        var remainingIds = studentsByMajor.Values
             .SelectMany(p => p.RemainingStudentIds)
             .Distinct()
             .ToList();
+        var remainingSet = new HashSet<Guid>(remainingIds);
+        var remainingSnapshots = students.Where(s => remainingSet.Contains(s.UserId)).ToList();
 
         var openGroups = groupsByMajor.Values
             .SelectMany(g => g)
@@ -269,31 +421,17 @@ public sealed class AiMatchingService(
             .Distinct()
             .ToList();
 
-        return new AutoAssignTeamsResultDto(assignments.Count, assignments, remainingStudentIds, openGroups);
+        return new StudentAssignmentPhaseResult(assignments, remainingSnapshots, openGroups);
     }
 
-    public async Task<AutoAssignTopicBatchResultDto> AutoAssignTopicAsync(
-        Guid currentUserId,
-        bool canManageAllGroups,
-        AutoAssignTopicRequest? request,
+    private async Task<TopicAssignmentPhaseResult> AssignTopicsForEligibleGroupsAsync(
+        Guid semesterId,
+        Guid? majorId,
+        Guid actorUserId,
+        int? limitPerGroup,
         CancellationToken ct)
     {
-        request ??= new AutoAssignTopicRequest(null, null, null);
-
-        if (request.GroupId.HasValue)
-        {
-            var assignment = await AssignTopicToGroupAsync(request.GroupId.Value, currentUserId, enforceMembership: true, request.LimitPerGroup, throwIfUnavailable: true, ct)
-                ?? throw new InvalidOperationException("Không tìm thấy topic phù hợp.");
-            return new AutoAssignTopicBatchResultDto(1, new[] { assignment }, Array.Empty<Guid>());
-        }
-
-        if (!canManageAllGroups)
-            throw new UnauthorizedAccessException("Chỉ admin hoặc moderator mới được phép auto assign cho toàn bộ nhóm.");
-
-        var semesterId = await groupQueries.GetActiveSemesterIdAsync(ct)
-            ?? throw new InvalidOperationException("Không tìm thấy học kỳ.");
-
-        var groups = await groupQueries.ListGroupsAsync(null, request.MajorId, null, ct);
+        var groups = await groupQueries.ListGroupsAsync(null, majorId, null, ct);
         var targets = groups
             .Where(g => g.Topic is null
                         && g.Semester.SemesterId == semesterId
@@ -303,7 +441,7 @@ public sealed class AiMatchingService(
             .ToList();
 
         if (targets.Count == 0)
-            return new AutoAssignTopicBatchResultDto(0, Array.Empty<AutoAssignTopicResultDto>(), Array.Empty<Guid>());
+            return new TopicAssignmentPhaseResult(Array.Empty<AutoAssignTopicResultDto>(), Array.Empty<Guid>());
 
         var assignments = new List<AutoAssignTopicResultDto>();
         var skipped = new List<Guid>();
@@ -312,7 +450,7 @@ public sealed class AiMatchingService(
         {
             try
             {
-                var result = await AssignTopicToGroupAsync(groupId, currentUserId, enforceMembership: false, request.LimitPerGroup, throwIfUnavailable: false, ct);
+                var result = await AssignTopicToGroupAsync(groupId, actorUserId, enforceMembership: false, limitPerGroup, throwIfUnavailable: false, ct);
                 if (result is not null)
                     assignments.Add(result);
                 else
@@ -324,7 +462,436 @@ public sealed class AiMatchingService(
             }
         }
 
-        return new AutoAssignTopicBatchResultDto(assignments.Count, assignments, skipped);
+        return new TopicAssignmentPhaseResult(assignments, skipped);
+    }
+
+    private async Task<PaginatedCollection<GroupTopicOptionDto>> BuildGroupTopicOptionsPageAsync(
+        IReadOnlyList<GroupOverviewSnapshot> groups,
+        IReadOnlyList<TopicAvailabilitySnapshot> topics,
+        int page,
+        int pageSize,
+        CancellationToken ct)
+    {
+        var total = groups.Count;
+        if (total == 0)
+            return new PaginatedCollection<GroupTopicOptionDto>(0, page, pageSize, Array.Empty<GroupTopicOptionDto>());
+
+        var skip = (page - 1) * pageSize;
+        var orderedGroups = groups.OrderBy(g => g.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        var pageGroups = orderedGroups.Skip(skip).Take(pageSize).ToList();
+
+        var topicList = topics.ToList();
+        var items = new List<GroupTopicOptionDto>(pageGroups.Count);
+
+        foreach (var group in pageGroups)
+        {
+            var groupProfile = await GetGroupSkillProfileAsync(group.GroupId, ct);
+            var relevantTopics = group.MajorId.HasValue
+                ? topicList.Where(t => !t.MajorId.HasValue || t.MajorId.Value == group.MajorId.Value)
+                : topicList;
+
+            var suggestionItems = relevantTopics
+                .Select(topic =>
+                {
+                    var suggestion = BuildTopicSuggestion(topic, groupProfile);
+                    if (suggestion is null)
+                        return null;
+
+                    var reason = BuildTopicReason(topic, suggestion, group);
+                    return new TopicSuggestionDetailDto(
+                        topic.TopicId,
+                        topic.Title,
+                        topic.Description,
+                        suggestion.Score,
+                        suggestion.MatchingSkills,
+                        reason);
+                })
+                .Where(dto => dto is not null)
+                .Select(dto => dto!)
+                .OrderByDescending(dto => dto.Score)
+                .Take(OptionSuggestionLimit)
+                .ToList();
+
+            items.Add(new GroupTopicOptionDto(
+                group.GroupId,
+                group.Name,
+                group.Description,
+                group.MajorId,
+                group.MajorName,
+                group.MaxMembers,
+                group.CurrentMembers,
+                group.RemainingSlots,
+                suggestionItems));
+        }
+
+        return new PaginatedCollection<GroupTopicOptionDto>(total, page, pageSize, items);
+    }
+
+    private async Task<AiSkillProfile> GetGroupSkillProfileAsync(Guid groupId, CancellationToken ct)
+    {
+        var members = await aiQueries.ListGroupMemberSkillsAsync(groupId, ct);
+        if (members.Count == 0)
+            return AiSkillProfile.Empty;
+
+        var aggregated = members
+            .Select(m => AiSkillProfile.FromJson(m.SkillsJson))
+            .Where(p => p.HasTags || p.PrimaryRole != AiPrimaryRole.Unknown)
+            .ToList();
+
+        return aggregated.Count == 0 ? AiSkillProfile.Empty : AiSkillProfile.Combine(aggregated);
+    }
+
+    private (IReadOnlyList<GroupStaffingOptionDto> Groups, IReadOnlyList<StudentPlacementOptionDto> Students) BuildStaffingOptions(
+        IReadOnlyList<GroupOverviewSnapshot> groups,
+        IReadOnlyList<StudentProfileSnapshot> students,
+        IReadOnlyDictionary<Guid, GroupRoleMixSnapshot> mixes,
+        IReadOnlyDictionary<Guid, string> majors)
+    {
+        if (groups.Count == 0 && students.Count == 0)
+            return (Array.Empty<GroupStaffingOptionDto>(), Array.Empty<StudentPlacementOptionDto>());
+
+        var candidateStates = students
+            .Select(s => new StudentCandidate(s, BuildSkillProfile(s), GetMajorName(s.MajorId, majors)))
+            .ToDictionary(c => c.Snapshot.UserId, c => c);
+
+        var availablePool = candidateStates.Values.ToList();
+        var placements = new Dictionary<Guid, GroupPlacementSuggestionDto>();
+        var groupOptions = new List<GroupStaffingOptionDto>(groups.Count);
+
+        foreach (var group in groups.OrderByDescending(g => g.RemainingSlots).ThenBy(g => g.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            var mix = mixes.TryGetValue(group.GroupId, out var snapshot)
+                ? snapshot
+                : new GroupRoleMixSnapshot(group.GroupId, 0, 0, 0);
+
+            var mutableMix = mix;
+            var slots = group.RemainingSlots;
+            var suggestions = new List<GroupCandidateSuggestionDto>();
+
+            while (slots > 0 && availablePool.Count > 0)
+            {
+                var (index, score) = FindBestCandidate(availablePool, group, mutableMix);
+                if (index < 0)
+                    break;
+
+                var candidate = availablePool[index];
+                availablePool.RemoveAt(index);
+
+                var reason = BuildCandidateReason(group, mutableMix, candidate.Profile, candidate.Snapshot, score);
+                suggestions.Add(new GroupCandidateSuggestionDto(
+                    candidate.Snapshot.UserId,
+                    candidate.Snapshot.DisplayName,
+                    candidate.Snapshot.MajorId,
+                    candidate.MajorName,
+                    AiRoleHelper.ToDisplayString(candidate.Profile.PrimaryRole),
+                    candidate.Profile.Tags.Take(5).ToList(),
+                    score,
+                    reason));
+
+                placements[candidate.Snapshot.UserId] = new GroupPlacementSuggestionDto(
+                    group.GroupId,
+                    group.Name,
+                    group.MajorId,
+                    group.MajorName,
+                    reason);
+
+                mutableMix = ApplyRoleToMix(mutableMix, candidate.Profile.PrimaryRole);
+                slots--;
+            }
+
+            groupOptions.Add(new GroupStaffingOptionDto(
+                group.GroupId,
+                group.Name,
+                group.Description,
+                group.MajorId,
+                group.MajorName,
+                group.MaxMembers,
+                group.CurrentMembers,
+                group.RemainingSlots,
+                suggestions));
+        }
+
+        var studentOptions = students
+            .Select(student =>
+            {
+                var candidate = candidateStates[student.UserId];
+                placements.TryGetValue(student.UserId, out var placement);
+                var tags = candidate.Profile.Tags.Take(5).ToList();
+
+                return new StudentPlacementOptionDto(
+                    student.UserId,
+                    student.DisplayName,
+                    student.MajorId,
+                    candidate.MajorName,
+                    AiRoleHelper.ToDisplayString(candidate.Profile.PrimaryRole),
+                    tags,
+                    placement,
+                    placement is null);
+            })
+            .ToList();
+
+        return (groupOptions, studentOptions);
+    }
+
+    private async Task<NewGroupCreationResult> CreateNewGroupsForStudentsAsync(
+        IReadOnlyList<StudentProfileSnapshot> remainingStudents,
+        SemesterContext semesterCtx,
+        Guid actorUserId,
+        Guid? preferredMajorId,
+        IReadOnlyDictionary<Guid, string> majorLookup,
+        CancellationToken ct)
+    {
+        if (remainingStudents.Count == 0)
+            return NewGroupCreationResult.Empty;
+
+        var ordered = remainingStudents
+            .OrderBy(s => s.MajorId)
+            .ThenBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var minSize = Math.Max(semesterCtx.Policy.DesiredGroupSizeMin, 1);
+        var maxSize = Math.Max(minSize, semesterCtx.Policy.DesiredGroupSizeMax);
+
+        var groups = new List<AutoResolveNewGroupDto>();
+        var assignments = new List<AutoAssignmentRecordDto>();
+        var topicAssignments = new List<AutoAssignTopicResultDto>();
+        var topicFailures = new List<Guid>();
+        var unresolved = new List<Guid>();
+        var counter = 1;
+
+        while (ordered.Count > 0)
+        {
+            var take = Math.Min(maxSize, ordered.Count);
+            if (ordered.Count < minSize && groups.Count > 0)
+                take = ordered.Count;
+
+            var batch = ordered.Take(take).ToList();
+            ordered.RemoveRange(0, take);
+
+            var groupName = $"AI Auto Group {counter:00}";
+            counter++;
+            var majorId = DetermineGroupMajor(batch, preferredMajorId);
+            var description = $"Nhóm được tạo tự động vào {DateTime.UtcNow:dd/MM/yyyy}.";
+            var groupId = await groupRepository.CreateGroupAsync(
+                semesterCtx.SemesterId,
+                null,
+                majorId,
+                groupName,
+                description,
+                batch.Count,
+                null,
+                ct);
+
+            for (var i = 0; i < batch.Count; i++)
+            {
+                var status = i == 0 ? "leader" : "member";
+                await groupRepository.AddMembershipAsync(groupId, batch[i].UserId, semesterCtx.SemesterId, status, ct);
+                await postRepository.DeleteProfilePostsForUserAsync(batch[i].UserId, semesterCtx.SemesterId, ct);
+                assignments.Add(new AutoAssignmentRecordDto(
+                    batch[i].UserId,
+                    groupId,
+                    groupName,
+                    AiRoleHelper.ToDisplayString(AiRoleHelper.Parse(batch[i].PrimaryRole))));
+            }
+
+            AutoAssignTopicResultDto? topicResult = null;
+            try
+            {
+                topicResult = await AssignTopicToGroupAsync(groupId, actorUserId, enforceMembership: false, OptionSuggestionLimit, throwIfUnavailable: false, ct);
+            }
+            catch
+            {
+                // swallow and mark as failure below
+            }
+
+            if (topicResult is not null)
+                topicAssignments.Add(topicResult);
+            else
+                topicFailures.Add(groupId);
+
+            groups.Add(new AutoResolveNewGroupDto(
+                groupId,
+                groupName,
+                majorId,
+                GetMajorName(majorId, majorLookup),
+                batch.Count,
+                topicResult?.TopicId,
+                topicResult?.TopicTitle,
+                batch.Select(s => s.UserId).ToList()));
+        }
+
+        return new NewGroupCreationResult(groups, assignments, topicAssignments, topicFailures, unresolved);
+    }
+
+    private static (int Index, int Score) FindBestCandidate(
+        List<StudentCandidate> pool,
+        GroupOverviewSnapshot group,
+        GroupRoleMixSnapshot mix)
+    {
+        var bestIndex = -1;
+        var bestScore = int.MinValue;
+
+        for (var i = 0; i < pool.Count; i++)
+        {
+            var candidate = pool[i];
+            var score = ScoreCandidateForGroup(candidate.Profile, candidate.Snapshot.MajorId, group, mix);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestIndex = i;
+            }
+        }
+
+        return (bestIndex, bestScore);
+    }
+
+    private static int ScoreCandidateForGroup(
+        AiSkillProfile profile,
+        Guid studentMajorId,
+        GroupOverviewSnapshot group,
+        GroupRoleMixSnapshot mix)
+    {
+        var roleAdjustment = CalculateRoleNeedAdjustment(profile.PrimaryRole, mix);
+        var majorBoost = group.MajorId.HasValue && group.MajorId.Value == studentMajorId ? 15 : 5;
+        var skillBoost = profile.Tags.Take(5).Count() * 3;
+        return roleAdjustment + majorBoost + skillBoost;
+    }
+
+    private static string BuildCandidateReason(
+        GroupOverviewSnapshot group,
+        GroupRoleMixSnapshot mix,
+        AiSkillProfile profile,
+        StudentProfileSnapshot snapshot,
+        int score)
+    {
+        var reasons = new List<string>();
+        if (group.MajorId.HasValue && group.MajorId.Value == snapshot.MajorId)
+            reasons.Add("Cùng chuyên ngành");
+
+        var roleReason = DescribeRoleNeed(profile.PrimaryRole, mix);
+        if (!string.IsNullOrWhiteSpace(roleReason))
+            reasons.Add(roleReason);
+
+        if (profile.HasTags)
+            reasons.Add("Kỹ năng: " + string.Join(", ", profile.Tags.Take(3)));
+
+        reasons.Add($"Điểm AI {score}");
+        return string.Join(" | ", reasons);
+    }
+
+    private static string? DescribeRoleNeed(AiPrimaryRole role, GroupRoleMixSnapshot mix)
+    {
+        var frontendHeavy = mix.FrontendCount >= 2
+                            && mix.FrontendCount >= mix.BackendCount + 1
+                            && mix.FrontendCount >= mix.OtherCount + 1;
+
+        var backendNeeded = mix.BackendCount == 0
+                            || (mix.FrontendCount >= 2 && mix.BackendCount + 1 <= mix.FrontendCount - 1);
+        var mobileNeeded = mix.OtherCount == 0 && mix.FrontendCount >= 2;
+
+        if (backendNeeded && role == AiPrimaryRole.Backend)
+            return "Nhóm đang thiếu Backend";
+        if (mix.FrontendCount == 0 && role == AiPrimaryRole.Frontend)
+            return "Nhóm đang thiếu Frontend";
+        if (mobileNeeded && role == AiPrimaryRole.Other)
+            return "Cần thêm Mobile/Generalist";
+        if (frontendHeavy && role == AiPrimaryRole.Backend)
+            return "Cân bằng Frontend/Backend";
+        return null;
+    }
+
+    private static GroupRoleMixSnapshot ApplyRoleToMix(GroupRoleMixSnapshot mix, AiPrimaryRole role)
+        => role switch
+        {
+            AiPrimaryRole.Frontend => mix with { FrontendCount = mix.FrontendCount + 1 },
+            AiPrimaryRole.Backend => mix with { BackendCount = mix.BackendCount + 1 },
+            AiPrimaryRole.Other => mix with { OtherCount = mix.OtherCount + 1 },
+            _ => mix
+        };
+
+    private static string BuildTopicReason(
+        TopicAvailabilitySnapshot topic,
+        TopicSuggestionDto suggestion,
+        GroupOverviewSnapshot group)
+    {
+        var reasons = new List<string>();
+        if (group.MajorId.HasValue && topic.MajorId.HasValue && group.MajorId.Value == topic.MajorId.Value)
+            reasons.Add("Cùng chuyên ngành");
+        if (suggestion.MatchingSkills is { Count: > 0 })
+            reasons.Add("Khớp kỹ năng: " + string.Join(", ", suggestion.MatchingSkills));
+        if (topic.CanTakeMore)
+            reasons.Add("Topic còn trống");
+        if (reasons.Count == 0)
+            reasons.Add("Điểm AI " + suggestion.Score);
+        return string.Join(" | ", reasons);
+    }
+
+    private static PaginatedCollection<T> Paginate<T>(IReadOnlyList<T> source, int page, int pageSize)
+    {
+        var total = source.Count;
+        if (total == 0)
+            return new PaginatedCollection<T>(0, page, pageSize, Array.Empty<T>());
+
+        var skip = (page - 1) * pageSize;
+        var items = source.Skip(skip).Take(pageSize).ToList();
+        return new PaginatedCollection<T>(total, page, pageSize, items);
+    }
+
+    private static (int Page, int PageSize) NormalizePagination(int page, int pageSize)
+    {
+        var normalizedPage = page <= 0 ? 1 : page;
+        var normalizedSize = pageSize <= 0 ? 20 : Math.Min(pageSize, 50);
+        return (normalizedPage, normalizedSize);
+    }
+
+    private static string? GetMajorName(Guid? majorId, IReadOnlyDictionary<Guid, string> lookup)
+    {
+        if (!majorId.HasValue)
+            return null;
+        return lookup.TryGetValue(majorId.Value, out var name) ? name : null;
+    }
+
+    private static Guid? DetermineGroupMajor(
+        IReadOnlyCollection<StudentProfileSnapshot> batch,
+        Guid? preferredMajorId)
+    {
+        if (preferredMajorId.HasValue)
+            return preferredMajorId;
+
+        return batch
+            .GroupBy(s => s.MajorId)
+            .OrderByDescending(g => g.Count())
+            .Select(g => (Guid?)g.Key)
+            .FirstOrDefault();
+    }
+
+    private sealed record StudentCandidate(
+        StudentProfileSnapshot Snapshot,
+        AiSkillProfile Profile,
+        string? MajorName);
+
+    private sealed record StudentAssignmentPhaseResult(
+        IReadOnlyList<AutoAssignmentRecordDto> Assignments,
+        IReadOnlyList<StudentProfileSnapshot> RemainingStudents,
+        IReadOnlyList<Guid> OpenGroupIds);
+
+    private sealed record TopicAssignmentPhaseResult(
+        IReadOnlyList<AutoAssignTopicResultDto> Assignments,
+        IReadOnlyList<Guid> SkippedGroupIds);
+
+    private sealed record NewGroupCreationResult(
+        IReadOnlyList<AutoResolveNewGroupDto> Groups,
+        IReadOnlyList<AutoAssignmentRecordDto> Assignments,
+        IReadOnlyList<AutoAssignTopicResultDto> TopicAssignments,
+        IReadOnlyList<Guid> TopicFailures,
+        IReadOnlyList<Guid> UnresolvedStudentIds)
+    {
+        public static NewGroupCreationResult Empty { get; } = new(
+            Array.Empty<AutoResolveNewGroupDto>(),
+            Array.Empty<AutoAssignmentRecordDto>(),
+            Array.Empty<AutoAssignTopicResultDto>(),
+            Array.Empty<Guid>(),
+            Array.Empty<Guid>());
     }
 
     private async Task<AutoAssignTopicResultDto?> AssignTopicToGroupAsync(
@@ -382,6 +949,63 @@ public sealed class AiMatchingService(
         await postRepository.CloseAllOpenPostsForGroupAsync(groupId, ct);
 
         return new AutoAssignTopicResultDto(groupId, chosen.TopicId, chosen.Title, chosen.Score);
+    }
+
+    private async Task<IReadOnlyList<RecruitmentPostSuggestionDto>> HydrateRecruitmentPostSuggestionsAsync(
+        IReadOnlyList<RecruitmentPostSuggestionDto> suggestions,
+        Guid currentUserId,
+        CancellationToken ct)
+    {
+        if (suggestions.Count == 0)
+            return suggestions;
+
+        var expand = ExpandOptions.Semester | ExpandOptions.Group | ExpandOptions.Major;
+        var enriched = new List<RecruitmentPostSuggestionDto>(suggestions.Count);
+
+        foreach (var suggestion in suggestions)
+        {
+            var detail = await recruitmentPostQueries.GetAsync(suggestion.PostId, expand, currentUserId, ct);
+            enriched.Add(detail is null ? suggestion : suggestion with { Detail = detail });
+        }
+
+        return enriched;
+    }
+
+    private async Task<IReadOnlyList<ProfilePostSuggestionDto>> HydrateProfilePostSuggestionsAsync(
+        IReadOnlyList<ProfilePostSuggestionDto> suggestions,
+        CancellationToken ct)
+    {
+        if (suggestions.Count == 0)
+            return suggestions;
+
+        var expand = ExpandOptions.Semester | ExpandOptions.Major | ExpandOptions.User;
+        var enriched = new List<ProfilePostSuggestionDto>(suggestions.Count);
+
+        foreach (var suggestion in suggestions)
+        {
+            var detail = await recruitmentPostQueries.GetProfilePostAsync(suggestion.PostId, expand, ct);
+            enriched.Add(detail is null ? suggestion : suggestion with { Detail = detail });
+        }
+
+        return enriched;
+    }
+
+    private async Task<IReadOnlyList<TopicSuggestionDto>> HydrateTopicSuggestionsAsync(
+        IReadOnlyList<TopicSuggestionDto> suggestions,
+        CancellationToken ct)
+    {
+        if (suggestions.Count == 0)
+            return suggestions;
+
+        var enriched = new List<TopicSuggestionDto>(suggestions.Count);
+
+        foreach (var suggestion in suggestions)
+        {
+            var detail = await topicQueries.GetByIdAsync(suggestion.TopicId, ct);
+            enriched.Add(detail is null ? suggestion : suggestion with { Detail = detail });
+        }
+
+        return enriched;
     }
 
     private static AiSkillProfile BuildSkillProfile(StudentProfileSnapshot student)
@@ -569,7 +1193,7 @@ public sealed class AiMatchingService(
         return AiPrimaryRole.Other;
     }
 
-    private async Task<(Guid SemesterId, SemesterPolicyDto Policy)> ResolveSemesterAsync(Guid? semesterId, CancellationToken ct)
+    private async Task<SemesterContext> ResolveSemesterAsync(Guid? semesterId, CancellationToken ct)
     {
         SemesterDetailDto? detail = semesterId.HasValue
             ? await semesterQueries.GetByIdAsync(semesterId.Value, ct)
@@ -580,8 +1204,12 @@ public sealed class AiMatchingService(
         if (detail.Policy is null)
             throw new InvalidOperationException("Học kỳ chưa cấu hình policy.");
 
-        return (detail.SemesterId, detail.Policy);
+        var season = string.IsNullOrWhiteSpace(detail.Season) ? "Semester" : detail.Season;
+        var label = detail.Year > 0 ? $"{season} {detail.Year}" : season;
+        return new SemesterContext(detail.SemesterId, detail.Policy, label);
     }
+
+    private sealed record SemesterContext(Guid SemesterId, SemesterPolicyDto Policy, string Name);
 
     private static void EnsureWindow(DateOnly today, DateOnly start, DateOnly end, string errorMessage)
     {

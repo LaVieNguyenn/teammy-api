@@ -1,3 +1,6 @@
+using Teammy.Application.Posts.Dtos;
+using Teammy.Application.Topics.Dtos;
+
 namespace Teammy.Application.Ai.Dtos;
 
 public sealed record RecruitmentPostSuggestionDto(
@@ -14,7 +17,10 @@ public sealed record RecruitmentPostSuggestionDto(
     string? PositionNeeded,
     IReadOnlyList<string>? RequiredSkills,
     IReadOnlyList<string> MatchingSkills
-);
+)
+{
+    public RecruitmentPostDetailDto? Detail { get; init; }
+}
 
 public sealed record ProfilePostSuggestionDto(
     Guid PostId,
@@ -28,7 +34,10 @@ public sealed record ProfilePostSuggestionDto(
     string? SkillsText,
     string? PrimaryRole,
     IReadOnlyList<string> MatchingSkills
-);
+)
+{
+    public ProfilePostDetailDto? Detail { get; init; }
+}
 
 public sealed record TopicSuggestionDto(
     Guid TopicId,
@@ -37,7 +46,10 @@ public sealed record TopicSuggestionDto(
     int Score,
     bool CanTakeMore,
     IReadOnlyList<string> MatchingSkills
-);
+)
+{
+    public TopicDetailDto? Detail { get; init; }
+}
 
 public sealed record AutoAssignTopicResultDto(
     Guid GroupId,

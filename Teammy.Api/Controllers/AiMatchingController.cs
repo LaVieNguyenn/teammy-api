@@ -18,6 +18,20 @@ public sealed class AiMatchingController : ControllerBase
         _service = service;
     }
 
+    [HttpGet("summary")]
+    [Authorize(Roles = "admin,moderator")]
+    public async Task<ActionResult<AiResponse<AiSummaryDto>>> GetSummary([FromQuery] Guid? semesterId, CancellationToken ct)
+    {
+        return await HandleAiRequestAsync(() => _service.GetSummaryAsync(semesterId, ct));
+    }
+
+    [HttpGet("options")]
+    [Authorize(Roles = "admin,moderator")]
+    public async Task<ActionResult<AiResponse<AiOptionListDto>>> GetOptions([FromQuery] AiOptionRequest? request, CancellationToken ct)
+    {
+        return await HandleAiRequestAsync(() => _service.GetOptionsAsync(request, ct));
+    }
+
     [HttpPost("recruitment-post-suggestions")]
     [Authorize]
     public async Task<ActionResult<AiResponse<IReadOnlyList<RecruitmentPostSuggestionDto>>>> SuggestRecruitmentPosts(
@@ -76,6 +90,16 @@ public sealed class AiMatchingController : ControllerBase
 
         return await HandleAiRequestAsync(() =>
             _service.AutoAssignTopicAsync(GetCurrentUserId(), isAdmin, request, ct));
+    }
+
+    [HttpPost("auto-resolve")]
+    [Authorize(Roles = "admin,moderator")]
+    public async Task<ActionResult<AiResponse<AiAutoResolveResultDto>>> AutoResolve(
+        [FromBody] AiAutoResolveRequest request,
+        CancellationToken ct)
+    {
+        return await HandleAiRequestAsync(() =>
+            _service.AutoResolveAsync(GetCurrentUserId(), request, ct));
     }
 
     private async Task<ActionResult<AiResponse<T>>> HandleAiRequestAsync<T>(Func<Task<T>> action)
