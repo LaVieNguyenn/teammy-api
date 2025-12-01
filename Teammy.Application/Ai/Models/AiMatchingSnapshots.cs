@@ -73,3 +73,18 @@ public sealed record GroupMemberSkillSnapshot(
     Guid GroupId,
     string? SkillsJson
 );
+
+public sealed record GroupOverviewSnapshot(
+    Guid GroupId,
+    Guid SemesterId,
+    Guid? MajorId,
+    string? MajorName,
+    string Name,
+    string? Description,
+    int MaxMembers,
+    int CurrentMembers,
+    int RemainingSlots,
+    Guid? TopicId,
+    Guid? MentorId,
+    string Status
+);

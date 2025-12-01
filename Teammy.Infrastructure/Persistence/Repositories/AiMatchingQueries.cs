@@ -220,6 +220,76 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
             .ToList();
     }
 
+    public Task<int> CountGroupsWithoutTopicAsync(Guid semesterId, CancellationToken ct)
+        => _db.groups.AsNoTracking().CountAsync(x => x.semester_id == semesterId && x.topic_id == null, ct);
+
+    public Task<int> CountGroupsUnderCapacityAsync(Guid semesterId, CancellationToken ct)
+        => _db.mv_group_capacities.AsNoTracking().CountAsync(x => x.semester_id == semesterId && x.remaining_slots > 0, ct);
+
+    public Task<int> CountUnassignedStudentsAsync(Guid semesterId, CancellationToken ct)
+        => _db.mv_students_pools.AsNoTracking().CountAsync(x => x.semester_id == semesterId, ct);
+
+    public async Task<IReadOnlyList<GroupOverviewSnapshot>> ListGroupsWithoutTopicAsync(Guid semesterId, CancellationToken ct)
+    {
+        var rows = await (
+                from g in _db.groups.AsNoTracking()
+                where g.semester_id == semesterId && g.topic_id == null
+                join major in _db.majors.AsNoTracking() on g.major_id equals major.major_id into majorJoin
+                from major in majorJoin.DefaultIfEmpty()
+                join gm in _db.group_members.AsNoTracking()
+                    .Where(x => x.status == "leader" || x.status == "member" || x.status == "pending")
+                    on g.group_id equals gm.group_id into gmJoin
+                let activeCount = gmJoin.Count()
+                let remaining = g.max_members - activeCount
+                select new GroupOverviewSnapshot(
+                    g.group_id,
+                    g.semester_id,
+                    g.major_id,
+                    major != null ? major.major_name : null,
+                    g.name,
+                    g.description,
+                    g.max_members,
+                    activeCount,
+                    remaining > 0 ? remaining : 0,
+                    g.topic_id,
+                    g.mentor_id,
+                    g.status))
+            .ToListAsync(ct);
+
+        return rows;
+    }
+
+    public async Task<IReadOnlyList<GroupOverviewSnapshot>> ListGroupsUnderCapacityAsync(Guid semesterId, CancellationToken ct)
+    {
+        var rows = await (
+                from g in _db.groups.AsNoTracking()
+                where g.semester_id == semesterId
+                join major in _db.majors.AsNoTracking() on g.major_id equals major.major_id into majorJoin
+                from major in majorJoin.DefaultIfEmpty()
+                join gm in _db.group_members.AsNoTracking()
+                    .Where(x => x.status == "leader" || x.status == "member" || x.status == "pending")
+                    on g.group_id equals gm.group_id into gmJoin
+                let activeCount = gmJoin.Count()
+                let remaining = g.max_members - activeCount
+                where remaining > 0
+                select new GroupOverviewSnapshot(
+                    g.group_id,
+                    g.semester_id,
+                    g.major_id,
+                    major != null ? major.major_name : null,
+                    g.name,
+                    g.description,
+                    g.max_members,
+                    activeCount,
+                    remaining,
+                    g.topic_id,
+                    g.mentor_id,
+                    g.status))
+            .ToListAsync(ct);
+
+        return rows;
+    }
+
     public Task RefreshStudentsPoolAsync(CancellationToken ct)
         => _db.Database.ExecuteSqlRawAsync("REFRESH MATERIALIZED VIEW teammy.mv_students_pool", ct);
 
