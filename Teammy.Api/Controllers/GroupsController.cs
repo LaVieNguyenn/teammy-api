@@ -96,6 +96,7 @@ public sealed class GroupsController : ControllerBase
             }
         }
         var mentor = await _groupQueries.GetMentorAsync(id, ct);
+        var detail = await _service.GetGroupAsync(id, ct);
         return Ok(new
         {
             id = g.Id,
@@ -104,6 +105,7 @@ public sealed class GroupsController : ControllerBase
             status = g.Status,
             maxMembers = g.MaxMembers,
             currentMembers = g.CurrentMembers,
+            skills = detail?.Skills,
             semester = semesterObj,
             major = majorObj,
             topic = topicObj,
@@ -176,6 +178,7 @@ public sealed class GroupsController : ControllerBase
                 maxMembers = g.MaxMembers,
                 currentMembers = g.CurrentMembers,
                 role = g.Role,
+                skills = detail?.Skills,
                 semester = semesterObj,
                 major = majorObj,
                 topic = topicObj,
@@ -197,9 +200,11 @@ public sealed class GroupsController : ControllerBase
     }
 
     public sealed record TransferLeaderRequest(Guid NewLeaderUserId);
-    public sealed record UpdateGroupRequestBody(string? Name, string? Description, int? MaxMembers, Guid? MajorId);
+    public sealed record UpdateGroupRequestBody(string? Name, string? Description, int? MaxMembers, Guid? MajorId, IReadOnlyList<string>? Skills);
     public sealed record InviteUserRequest(Guid UserId);
     public sealed record InviteMentorRequest(Guid TopicId, Guid MentorUserId, string? Message);
+    public sealed record AssignRoleRequest(string RoleName);
+    public sealed record ReplaceRolesRequest(IReadOnlyList<string> Roles);
 
     [HttpPost("{id:guid}/leader/transfer")]
     [Authorize]
@@ -238,7 +243,8 @@ public sealed class GroupsController : ControllerBase
             Name = body.Name,
             Description = body.Description,
             MaxMembers = body.MaxMembers,
-            MajorId = body.MajorId
+            MajorId = body.MajorId,
+            Skills = body.Skills
         };
             await _service.UpdateGroupAsync(id, GetUserId(), req, ct);
             return NoContent();
@@ -306,6 +312,64 @@ public sealed class GroupsController : ControllerBase
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (InvalidOperationException ex) { return Conflict(ex.Message); }
         catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    [HttpGet("{groupId:guid}/members/{userId:guid}/roles")]
+    [Authorize]
+    public async Task<ActionResult<IReadOnlyList<Teammy.Application.Groups.Dtos.GroupMemberRoleDto>>> GetMemberRoles([FromRoute] Guid groupId, [FromRoute] Guid userId, CancellationToken ct)
+    {
+        try
+        {
+            var roles = await _service.ListMemberRolesAsync(groupId, GetUserId(), userId, ct);
+            return Ok(roles);
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
+    }
+
+    [HttpPost("{groupId:guid}/members/{userId:guid}/roles")]
+    [Authorize]
+    public async Task<ActionResult> AddMemberRole([FromRoute] Guid groupId, [FromRoute] Guid userId, [FromBody] AssignRoleRequest req, CancellationToken ct)
+    {
+        if (req is null || string.IsNullOrWhiteSpace(req.RoleName))
+            return BadRequest("roleName is required");
+        try
+        {
+            await _service.AddMemberRoleAsync(groupId, GetUserId(), userId, req.RoleName, ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+    }
+
+    [HttpDelete("{groupId:guid}/members/{userId:guid}/roles/{roleName}")]
+    [Authorize]
+    public async Task<ActionResult> RemoveMemberRole([FromRoute] Guid groupId, [FromRoute] Guid userId, [FromRoute] string roleName, CancellationToken ct)
+    {
+        try
+        {
+            await _service.RemoveMemberRoleAsync(groupId, GetUserId(), userId, roleName, ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+    }
+
+    [HttpPut("{groupId:guid}/members/{userId:guid}/roles")]
+    [Authorize]
+    public async Task<ActionResult> ReplaceMemberRoles([FromRoute] Guid groupId, [FromRoute] Guid userId, [FromBody] ReplaceRolesRequest req, CancellationToken ct)
+    {
+        if (req?.Roles is null)
+            return BadRequest("roles are required");
+        try
+        {
+            await _service.ReplaceMemberRolesAsync(groupId, GetUserId(), userId, req.Roles, ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
     }
 
     // Unified pending list (leader-only)

@@ -1,3 +1,5 @@
+using System.Linq;
+using System.Text.Json;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Groups.Dtos;
 
@@ -36,7 +38,8 @@ public sealed class GroupService(
         if (req.TopicId.HasValue)
             throw new InvalidOperationException("Topic will be assigned after mentor confirmation");
 
-        var groupId = await repo.CreateGroupAsync(semesterId, null, majorId, req.Name, req.Description, req.MaxMembers, ct);
+        var skillsJson = req.Skills is null ? null : SerializeSkills(req.Skills);
+        var groupId = await repo.CreateGroupAsync(semesterId, null, majorId, req.Name, req.Description, req.MaxMembers, skillsJson, ct);
         await repo.AddMembershipAsync(groupId, creatorUserId, semesterId, "leader", ct);
         await _postRepo.DeleteProfilePostsForUserAsync(creatorUserId, semesterId, ct);
         return groupId;
@@ -130,7 +133,8 @@ public sealed class GroupService(
                 throw new InvalidOperationException($"MaxMembers cannot be less than current active members ({activeCount})");
         }
 
-        await repo.UpdateGroupAsync(groupId, req.Name, req.Description, req.MaxMembers, req.MajorId, null, null, ct);
+        string? skillsJson = req.Skills is null ? null : SerializeSkills(req.Skills);
+        await repo.UpdateGroupAsync(groupId, req.Name, req.Description, req.MaxMembers, req.MajorId, null, null, skillsJson, ct);
     }
 
     // Leader remove a member 
@@ -151,5 +155,52 @@ public sealed class GroupService(
 
         var ok = await repo.LeaveGroupAsync(groupId, targetUserId, ct);
         if (!ok) throw new KeyNotFoundException("Member not found");
+    }
+
+    public async Task<IReadOnlyList<GroupMemberRoleDto>> ListMemberRolesAsync(Guid groupId, Guid currentUserId, Guid memberUserId, CancellationToken ct)
+    {
+        var isLeader = await queries.IsLeaderAsync(groupId, currentUserId, ct);
+        if (!isLeader) throw new UnauthorizedAccessException("Leader only");
+        return await repo.ListMemberRolesAsync(groupId, memberUserId, ct);
+    }
+
+    public async Task AddMemberRoleAsync(Guid groupId, Guid currentUserId, Guid memberUserId, string roleName, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(roleName))
+            throw new ArgumentException("roleName is required");
+
+        var isLeader = await queries.IsLeaderAsync(groupId, currentUserId, ct);
+        if (!isLeader) throw new UnauthorizedAccessException("Leader only");
+
+        await repo.AddMemberRoleAsync(groupId, memberUserId, currentUserId, roleName, ct);
+    }
+
+    public async Task RemoveMemberRoleAsync(Guid groupId, Guid currentUserId, Guid memberUserId, string roleName, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(roleName))
+            throw new ArgumentException("roleName is required");
+
+        var isLeader = await queries.IsLeaderAsync(groupId, currentUserId, ct);
+        if (!isLeader) throw new UnauthorizedAccessException("Leader only");
+
+        await repo.RemoveMemberRoleAsync(groupId, memberUserId, roleName, ct);
+    }
+
+    public async Task ReplaceMemberRolesAsync(Guid groupId, Guid currentUserId, Guid memberUserId, IReadOnlyCollection<string> roles, CancellationToken ct)
+    {
+        var isLeader = await queries.IsLeaderAsync(groupId, currentUserId, ct);
+        if (!isLeader) throw new UnauthorizedAccessException("Leader only");
+
+        await repo.ReplaceMemberRolesAsync(groupId, memberUserId, currentUserId, roles, ct);
+    }
+
+    private static string SerializeSkills(IReadOnlyCollection<string> skills)
+    {
+        var normalized = skills
+            .Select(s => s?.Trim())
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return JsonSerializer.Serialize(normalized);
     }
 }
