@@ -381,7 +381,7 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
             .ToListAsync(ct);
     }
 
-    public async Task<IReadOnlyList<ProfilePostSummaryDto>> ListProfilePostsAsync(string? skills, Guid? majorId, string? status, Teammy.Application.Posts.Dtos.ExpandOptions expand, CancellationToken ct)
+    public async Task<IReadOnlyList<ProfilePostSummaryDto>> ListProfilePostsAsync(string? skills, Guid? majorId, string? status, Teammy.Application.Posts.Dtos.ExpandOptions expand, Guid? currentUserId, CancellationToken ct)
     {
         var q = db.recruitment_posts.AsNoTracking()
             .Where(p => p.post_type == "individual"
@@ -443,12 +443,37 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                     : null,
                 x.p.description,
                 x.p.position_needed,
-                x.p.created_at
+                x.p.created_at,
+                currentUserId.HasValue &&
+                    db.candidates.Any(c =>
+                        c.post_id == x.p.post_id &&
+                        (c.applied_by_user_id == currentUserId.Value ||
+                         (x.p.user_id == currentUserId.Value && c.applicant_group_id != null))),
+                currentUserId.HasValue
+                    ? db.candidates
+                        .Where(c =>
+                            c.post_id == x.p.post_id &&
+                            (c.applied_by_user_id == currentUserId.Value ||
+                             (x.p.user_id == currentUserId.Value && c.applicant_group_id != null)))
+                        .OrderByDescending(c => c.created_at)
+                        .Select(c => (Guid?)c.candidate_id)
+                        .FirstOrDefault()
+                    : null,
+                currentUserId.HasValue
+                    ? db.candidates
+                        .Where(c =>
+                            c.post_id == x.p.post_id &&
+                            (c.applied_by_user_id == currentUserId.Value ||
+                             (x.p.user_id == currentUserId.Value && c.applicant_group_id != null)))
+                        .OrderByDescending(c => c.created_at)
+                        .Select(c => c.status)
+                        .FirstOrDefault()
+                    : null
             ))
             .ToListAsync(ct);
     }
 
-    public Task<ProfilePostDetailDto?> GetProfilePostAsync(Guid id, Teammy.Application.Posts.Dtos.ExpandOptions expand, CancellationToken ct)
+    public Task<ProfilePostDetailDto?> GetProfilePostAsync(Guid id, Teammy.Application.Posts.Dtos.ExpandOptions expand, Guid? currentUserId, CancellationToken ct)
         => db.recruitment_posts.AsNoTracking()
             .Where(p => p.post_id == id
                         && p.post_type == "individual"
@@ -500,7 +525,32 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                     : null,
                 x.p.description,
                 x.p.created_at,
-                x.p.position_needed
+                x.p.position_needed,
+                currentUserId.HasValue &&
+                    db.candidates.Any(c =>
+                        c.post_id == x.p.post_id &&
+                        (c.applied_by_user_id == currentUserId.Value ||
+                         (x.p.user_id == currentUserId.Value && c.applicant_group_id != null))),
+                currentUserId.HasValue
+                    ? db.candidates
+                        .Where(c =>
+                            c.post_id == x.p.post_id &&
+                            (c.applied_by_user_id == currentUserId.Value ||
+                             (x.p.user_id == currentUserId.Value && c.applicant_group_id != null)))
+                        .OrderByDescending(c => c.created_at)
+                        .Select(c => (Guid?)c.candidate_id)
+                        .FirstOrDefault()
+                    : null,
+                currentUserId.HasValue
+                    ? db.candidates
+                        .Where(c =>
+                            c.post_id == x.p.post_id &&
+                            (c.applied_by_user_id == currentUserId.Value ||
+                             (x.p.user_id == currentUserId.Value && c.applicant_group_id != null)))
+                        .OrderByDescending(c => c.created_at)
+                        .Select(c => c.status)
+                        .FirstOrDefault()
+                    : null
             ))
             .FirstOrDefaultAsync(ct);
     private static IReadOnlyList<string>? ParseSkills(string? json)
