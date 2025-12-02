@@ -233,17 +233,25 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
         var member = await FindGroupMemberAsync(groupId, memberUserId, ct)
             ?? throw new KeyNotFoundException("Member not found in group");
 
-        var entity = new group_member_role
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        var existing = await db.group_member_roles
+            .Where(r => r.group_member_id == member.group_member_id)
+            .ToListAsync(ct);
+        if (existing.Count > 0)
+            db.group_member_roles.RemoveRange(existing);
+
+        db.group_member_roles.Add(new group_member_role
         {
             group_member_role_id = Guid.NewGuid(),
             group_member_id = member.group_member_id,
             role_name = name,
             assigned_by = assignedByUserId,
             assigned_at = DateTime.UtcNow
-        };
+        });
 
-        db.group_member_roles.Add(entity);
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
     }
 
     public async Task RemoveMemberRoleAsync(Guid groupId, Guid memberUserId, string roleName, CancellationToken ct)
@@ -276,27 +284,25 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList() ?? new List<string>();
 
+        if (normalized.Count > 1)
+            throw new ArgumentException("Only one role may be assigned to a member.");
+
         await using var tx = await db.Database.BeginTransactionAsync(ct);
 
         var existing = await db.group_member_roles
             .Where(r => r.group_member_id == member.group_member_id)
             .ToListAsync(ct);
 
-        var toRemove = existing.Where(r => !normalized.Contains(r.role_name, StringComparer.OrdinalIgnoreCase)).ToList();
-        if (toRemove.Count > 0)
-            db.group_member_roles.RemoveRange(toRemove);
+        if (existing.Count > 0)
+            db.group_member_roles.RemoveRange(existing);
 
-        var existingNames = existing.Select(r => r.role_name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var roleName in normalized)
+        if (normalized.Count == 1)
         {
-            if (existingNames.Contains(roleName))
-                continue;
-
             db.group_member_roles.Add(new group_member_role
             {
                 group_member_role_id = Guid.NewGuid(),
                 group_member_id = member.group_member_id,
-                role_name = roleName,
+                role_name = normalized[0],
                 assigned_by = assignedByUserId,
                 assigned_at = DateTime.UtcNow
             });

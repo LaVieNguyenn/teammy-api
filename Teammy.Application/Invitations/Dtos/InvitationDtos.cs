@@ -30,3 +30,15 @@ public sealed record InvitationDetailDto(
     Guid?  TopicId,
     string? TopicTitle
 );
+
+public sealed record InvitationRealtimeDto(
+    Guid InvitationId,
+    Guid GroupId,
+    string? GroupName,
+    string Type,
+    string Status,
+    DateTime CreatedAt,
+    Guid InvitedBy,
+    Guid? TopicId,
+    string? TopicTitle
+);

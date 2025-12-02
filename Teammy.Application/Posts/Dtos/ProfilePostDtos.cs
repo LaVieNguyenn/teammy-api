@@ -42,7 +42,10 @@ public sealed record ProfilePostSummaryDto(
     PostMajorDto? Major,
     string? Description,
     string? Skills,
-    DateTime CreatedAt
+    DateTime CreatedAt,
+    bool   HasApplied,
+    Guid?  MyApplicationId,
+    string? MyApplicationStatus
 );
 
 public sealed record ProfilePostDetailDto(
@@ -61,7 +64,10 @@ public sealed record ProfilePostDetailDto(
     PostMajorDto? Major,
     string? Description,
     DateTime CreatedAt,
-    string? Skills
+    string? Skills,
+    bool   HasApplied,
+    Guid?  MyApplicationId,
+    string? MyApplicationStatus
 );
 
 public sealed record ProfilePostInvitationDto(

@@ -989,7 +989,7 @@ public sealed class AiMatchingService(
 
         foreach (var suggestion in suggestions)
         {
-            var detail = await recruitmentPostQueries.GetProfilePostAsync(suggestion.PostId, expand, ct);
+            var detail = await recruitmentPostQueries.GetProfilePostAsync(suggestion.PostId, expand, null, ct);
             enriched.Add(detail is null ? suggestion : suggestion with { Detail = detail });
         }
 
