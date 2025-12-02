@@ -10,13 +10,14 @@ public interface IUserWriteRepository
 
     Task AssignRoleAsync(Guid userId, Guid roleId, CancellationToken ct);
     Task UpdateUserAsync(
-    Guid userId,
-    string displayName,
-    string? studentCode,
-    string? gender,
-    Guid? majorId,
-    bool isActive,
-    CancellationToken ct);
+        Guid userId,
+        string displayName,
+        string? studentCode,
+        string? gender,
+        Guid? majorId,
+        bool isActive,
+        string? portfolioUrl,
+        CancellationToken ct);
 
     Task DeleteUserAsync(Guid userId, CancellationToken ct);
     Task SetSingleRoleAsync(Guid userId, Guid roleId, CancellationToken ct);
@@ -30,6 +31,7 @@ public interface IUserWriteRepository
         Guid? majorId,
         string? skillsJson,
         bool skillsCompleted,
+        string? portfolioUrl,
         CancellationToken ct);
 
     Task UpdateAvatarAsync(Guid userId, string avatarUrl, CancellationToken ct);

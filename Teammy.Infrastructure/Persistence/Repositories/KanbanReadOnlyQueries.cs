@@ -111,7 +111,19 @@ public async Task<IReadOnlyList<SharedFileVm>> GetFilesByGroupAsync(Guid groupId
     var list = await db.shared_files.AsNoTracking()
         .Where(f => f.group_id == groupId)
         .OrderByDescending(f => f.created_at)
-        .Select(f => new SharedFileVm(f.file_id, f.group_id, f.uploaded_by, f.task_id, f.file_url, f.file_type, f.file_size, f.description, f.created_at))
+        .Select(f => new SharedFileVm(
+            f.file_id,
+            f.group_id,
+            f.uploaded_by,
+            f.uploaded_byNavigation.display_name ?? string.Empty,
+            f.uploaded_byNavigation.avatar_url,
+            f.task_id,
+            f.file_name ?? f.file_url,
+            f.file_url,
+            f.file_type,
+            f.file_size,
+            f.description,
+            f.created_at))
         .ToListAsync(ct);
     return list;
 }
@@ -121,7 +133,19 @@ public async Task<IReadOnlyList<SharedFileVm>> GetFilesByTaskAsync(Guid taskId, 
     var list = await db.shared_files.AsNoTracking()
         .Where(f => f.task_id == taskId)
         .OrderByDescending(f => f.created_at)
-        .Select(f => new SharedFileVm(f.file_id, f.group_id, f.uploaded_by, f.task_id, f.file_url, f.file_type, f.file_size, f.description, f.created_at))
+        .Select(f => new SharedFileVm(
+            f.file_id,
+            f.group_id,
+            f.uploaded_by,
+            f.uploaded_byNavigation.display_name ?? string.Empty,
+            f.uploaded_byNavigation.avatar_url,
+            f.task_id,
+            f.file_name ?? f.file_url,
+            f.file_url,
+            f.file_type,
+            f.file_size,
+            f.description,
+            f.created_at))
         .ToListAsync(ct);
     return list;
 }

@@ -207,18 +207,26 @@ public sealed class KanbanRepository(AppDbContext db) : IKanbanRepository
         t.due_date = dueDate;
         t.updated_at = DateTime.UtcNow;
 
-        if (backlogItemId != t.backlog_item_id)
+        var backlogPayloadProvided = backlogItemId.HasValue;
+        if (backlogPayloadProvided)
         {
-            if (backlogItemId is Guid newBacklogId)
+            if (backlogItemId == Guid.Empty)
             {
-                var backlog = await EnsureBacklogAvailableAsync(newBacklogId, t.group_id, taskId, ct);
-                t.backlog_item_id = newBacklogId;
+                if (t.backlog_item_id is Guid existing)
+                {
+                    await ResetBacklogAsync(existing, targetColumn.is_done, ct);
+                    t.backlog_item_id = null;
+                }
+            }
+            else if (backlogItemId != t.backlog_item_id)
+            {
+                var backlog = await EnsureBacklogAvailableAsync(backlogItemId!.Value, t.group_id, taskId, ct);
+                t.backlog_item_id = backlogItemId.Value;
                 ApplyBacklogProgress(backlog, targetColumn.is_done);
             }
-            else
+            else if (columnChanged && t.backlog_item_id is Guid linkedId)
             {
-                await ResetBacklogAsync(t.backlog_item_id, targetColumn.is_done, ct);
-                t.backlog_item_id = null;
+                await UpdateLinkedBacklogAsync(linkedId, targetColumn.is_done, ct);
             }
         }
         else if (columnChanged && t.backlog_item_id is Guid existingBacklogId)
@@ -348,7 +356,7 @@ public sealed class KanbanRepository(AppDbContext db) : IKanbanRepository
     }
 
     // Files
-    public async Task<Guid> AddSharedFileAsync(Guid groupId, Guid uploadedBy, Guid? taskId, string fileUrl, string? fileType, long? fileSize, string? description, CancellationToken ct)
+    public async Task<Guid> AddSharedFileAsync(Guid groupId, Guid uploadedBy, Guid? taskId, string fileName, string fileUrl, string? fileType, long? fileSize, string? description, CancellationToken ct)
     {
         if (taskId.HasValue)
         {
@@ -356,12 +364,17 @@ public sealed class KanbanRepository(AppDbContext db) : IKanbanRepository
             if (!ok) throw new InvalidOperationException("Task not in this group");
         }
 
+        var safeName = string.IsNullOrWhiteSpace(fileName) ? "attachment" : fileName.Trim();
+        if (safeName.Length > 255)
+            safeName = safeName[..255];
+
         var e = new shared_file
         {
             file_id = Guid.NewGuid(),
             group_id = groupId,
             uploaded_by = uploadedBy,
             task_id = taskId,
+            file_name = safeName,
             file_url = fileUrl,
             file_type = fileType,
             file_size = fileSize,

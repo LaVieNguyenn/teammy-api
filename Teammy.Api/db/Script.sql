@@ -25,12 +25,16 @@ CREATE TABLE IF NOT EXISTS teammy.users (
   student_code     VARCHAR(30),
   gender           TEXT,
   major_id         UUID REFERENCES teammy.majors(major_id) ON DELETE SET NULL,
+  portfolio_url    TEXT,
   skills           JSONB,
   skills_completed BOOLEAN NOT NULL DEFAULT FALSE,
   is_active        BOOLEAN NOT NULL DEFAULT TRUE,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE teammy.users
+  ADD COLUMN IF NOT EXISTS portfolio_url TEXT;
 
 CREATE TABLE IF NOT EXISTS teammy.user_roles (
   user_role_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -68,11 +72,15 @@ CREATE TABLE IF NOT EXISTS teammy.topics (
   major_id     UUID REFERENCES teammy.majors(major_id) ON DELETE SET NULL,
   title        TEXT NOT NULL,
   description  TEXT,
+  source       TEXT,
   status       TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed','archived')),
   created_by   UUID NOT NULL REFERENCES teammy.users(user_id),
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (semester_id, title)
 );
+
+ALTER TABLE teammy.topics
+  ADD COLUMN IF NOT EXISTS source TEXT;
 
 CREATE TABLE IF NOT EXISTS teammy.topics_mentor (
   topic_id  UUID NOT NULL REFERENCES teammy.topics(topic_id) ON DELETE CASCADE,
@@ -361,6 +369,7 @@ CREATE TABLE IF NOT EXISTS teammy.shared_files (
   group_id    UUID NOT NULL REFERENCES teammy.groups(group_id) ON DELETE CASCADE,
   uploaded_by UUID NOT NULL REFERENCES teammy.users(user_id),
   task_id     UUID REFERENCES teammy.tasks(task_id) ON DELETE SET NULL,
+  file_name   TEXT,
   file_url    TEXT NOT NULL,
   file_type   TEXT,
   file_size   BIGINT,
@@ -368,6 +377,9 @@ CREATE TABLE IF NOT EXISTS teammy.shared_files (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE teammy.shared_files
+  ADD COLUMN IF NOT EXISTS file_name TEXT;
 
 -- ========== 6b) Backlog & Milestones ==========
 CREATE TABLE IF NOT EXISTS teammy.backlog_items (

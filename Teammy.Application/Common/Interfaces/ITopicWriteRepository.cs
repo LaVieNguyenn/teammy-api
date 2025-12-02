@@ -18,6 +18,7 @@ namespace Teammy.Application.Common.Interfaces
             string? description,
             string status,
             Guid? majorId,
+            string? source,
             Guid createdBy,
             CancellationToken ct);
     }
