@@ -279,7 +279,7 @@ public sealed class AiMatchingService(
         if (suggestions.Count == 0)
             return suggestions;
 
-        return await HydrateProfilePostSuggestionsAsync(suggestions, ct);
+        return await HydrateProfilePostSuggestionsAsync(suggestions, currentUserId, ct);
     }
 
     public async Task<AutoAssignTeamsResultDto> AutoAssignTeamsAsync(AutoAssignTeamsRequest? request, CancellationToken ct)
@@ -979,6 +979,7 @@ public sealed class AiMatchingService(
 
     private async Task<IReadOnlyList<ProfilePostSuggestionDto>> HydrateProfilePostSuggestionsAsync(
         IReadOnlyList<ProfilePostSuggestionDto> suggestions,
+        Guid currentUserId,
         CancellationToken ct)
     {
         if (suggestions.Count == 0)
@@ -989,7 +990,7 @@ public sealed class AiMatchingService(
 
         foreach (var suggestion in suggestions)
         {
-            var detail = await recruitmentPostQueries.GetProfilePostAsync(suggestion.PostId, expand, null, ct);
+            var detail = await recruitmentPostQueries.GetProfilePostAsync(suggestion.PostId, expand, currentUserId, ct);
             enriched.Add(detail is null ? suggestion : suggestion with { Detail = detail });
         }
 
