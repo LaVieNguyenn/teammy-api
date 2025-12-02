@@ -20,6 +20,11 @@ public sealed class ProfilePostsController(ProfilePostService service, IConfigur
         if (!Guid.TryParse(sub, out var userId)) throw new UnauthorizedAccessException("Invalid token");
         return userId;
     }
+    private Guid? TryGetUserId()
+    {
+        var sub = User?.FindFirstValue(ClaimTypes.NameIdentifier) ?? User?.FindFirstValue("sub");
+        return Guid.TryParse(sub, out var id) ? id : null;
+    }
 
     [HttpPost]
     [Authorize]
@@ -48,7 +53,8 @@ public sealed class ProfilePostsController(ProfilePostService service, IConfigur
         {
             exp |= ExpandOptions.Semester | ExpandOptions.Major | ExpandOptions.User;
         }
-        var items = await service.ListAsync(skills, majorId, status, exp, ct);
+        var currentUserId = TryGetUserId();
+        var items = await service.ListAsync(skills, majorId, status, exp, currentUserId, ct);
         if (!objectOnly) return Ok(items);
 
         // Build sequentially to avoid concurrent DbContext usage
@@ -76,6 +82,9 @@ public sealed class ProfilePostsController(ProfilePostService service, IConfigur
                 description = d.Description,
                 position_needed = d.Skills,
                 createdAt = d.CreatedAt,
+                hasApplied = d.HasApplied,
+                myApplicationId = d.MyApplicationId,
+                myApplicationStatus = d.MyApplicationStatus,
                 semester = d.Semester,
                 user = d.User,
                 major = d.Major,
@@ -99,7 +108,8 @@ public sealed class ProfilePostsController(ProfilePostService service, IConfigur
         {
             exp |= ExpandOptions.Semester | ExpandOptions.Major | ExpandOptions.User;
         }
-        var d = await service.GetAsync(id, exp, ct);
+        var currentUserId = TryGetUserId();
+        var d = await service.GetAsync(id, exp, currentUserId, ct);
         if (d is null) return NotFound();
         if (!objectOnly) return Ok(d);
         Guid[]? memberUserIds = null;
@@ -123,6 +133,9 @@ public sealed class ProfilePostsController(ProfilePostService service, IConfigur
             description = d.Description,
             position_needed = d.Skills,
             createdAt = d.CreatedAt,
+            hasApplied = d.HasApplied,
+            myApplicationId = d.MyApplicationId,
+            myApplicationStatus = d.MyApplicationStatus,
             semester = d.Semester,
             user = d.User,
             major = d.Major,
