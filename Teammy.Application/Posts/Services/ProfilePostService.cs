@@ -37,11 +37,11 @@ public sealed class ProfilePostService(
             ct);
     }
 
-    public Task<ProfilePostDetailDto?> GetAsync(Guid id, ExpandOptions expand, CancellationToken ct)
-        => queries.GetProfilePostAsync(id, expand, ct);
+    public Task<ProfilePostDetailDto?> GetAsync(Guid id, ExpandOptions expand, Guid? currentUserId, CancellationToken ct)
+        => queries.GetProfilePostAsync(id, expand, currentUserId, ct);
 
-    public Task<IReadOnlyList<ProfilePostSummaryDto>> ListAsync(string? skills, Guid? majorId, string? status, ExpandOptions expand, CancellationToken ct)
-        => queries.ListProfilePostsAsync(skills, majorId, status, expand, ct);
+    public Task<IReadOnlyList<ProfilePostSummaryDto>> ListAsync(string? skills, Guid? majorId, string? status, ExpandOptions expand, Guid? currentUserId, CancellationToken ct)
+        => queries.ListProfilePostsAsync(skills, majorId, status, expand, currentUserId, ct);
 
    public async Task InviteAsync(Guid profilePostId, Guid currentUserId, CancellationToken ct)
     {
