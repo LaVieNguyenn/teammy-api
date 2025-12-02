@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using Microsoft.EntityFrameworkCore;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Semesters.Dtos;
@@ -9,6 +12,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories;
 public sealed class SemesterRepository : ISemesterRepository
 {
     private readonly AppDbContext _db;
+    private static readonly string[] SeasonSequence = ["SPRING", "SUMMER", "FALL"];
 
     public SemesterRepository(AppDbContext db)
     {
@@ -110,5 +114,195 @@ public sealed class SemesterRepository : ISemesterRepository
         await _db.SaveChangesAsync(ct);
 
         return true;
+    }
+
+    public async Task EnsureCurrentStateAsync(CancellationToken ct)
+    {
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var semesters = await _db.semesters.ToListAsync(ct);
+        var dirty = false;
+
+        var current = FindCurrentSemester(semesters, today);
+        if (current is null)
+        {
+            var guess = GuessSeason(today);
+            current = semesters.FirstOrDefault(s => SameSemester(s, guess.Season, guess.Year));
+            if (current is null)
+            {
+                current = BuildSemester(guess.Season, guess.Year, isActive: false);
+                _db.semesters.Add(current);
+                semesters.Add(current);
+                dirty = true;
+            }
+        }
+
+        if (current is null)
+            return;
+
+        var (season, year, metaChanged) = EnsureMetadata(current, today);
+        dirty |= metaChanged;
+
+        dirty |= EnsureSingleActive(semesters, current);
+        dirty |= EnsureUpcomingSemesters(semesters, season, year);
+
+        if (dirty)
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+    }
+
+    private static semester? FindCurrentSemester(IEnumerable<semester> semesters, DateOnly today)
+        => semesters
+            .Where(s => s.start_date.HasValue && s.end_date.HasValue && s.start_date.Value <= today && s.end_date.Value >= today)
+            .OrderByDescending(s => s.year ?? s.start_date?.Year ?? s.end_date?.Year ?? 0)
+            .ThenByDescending(s => SeasonIndex(s.season))
+            .FirstOrDefault();
+
+    private static (string Season, int Year, bool Changed) EnsureMetadata(semester sem, DateOnly referenceDate)
+    {
+        var changed = false;
+        var season = NormalizeSeason(sem.season);
+        if (string.IsNullOrEmpty(season))
+        {
+            var guess = GuessSeason(referenceDate);
+            season = guess.Season;
+            sem.season = season;
+            if (!sem.year.HasValue)
+                sem.year = guess.Year;
+            changed = true;
+        }
+
+        var year = sem.year ?? sem.start_date?.Year ?? sem.end_date?.Year ?? referenceDate.Year;
+        if (sem.year != year)
+        {
+            sem.year = year;
+            changed = true;
+        }
+
+        if (!sem.start_date.HasValue || !sem.end_date.HasValue)
+        {
+            var (start, end) = DefaultWindow(season, year);
+            if (!sem.start_date.HasValue)
+            {
+                sem.start_date = start;
+                changed = true;
+            }
+            if (!sem.end_date.HasValue)
+            {
+                sem.end_date = end;
+                changed = true;
+            }
+        }
+
+        return (season, year, changed);
+    }
+
+    private bool EnsureSingleActive(IEnumerable<semester> semesters, semester current)
+    {
+        var changed = false;
+        foreach (var sem in semesters)
+        {
+            var shouldBeActive = sem.semester_id == current.semester_id;
+            if (sem.is_active != shouldBeActive)
+            {
+                sem.is_active = shouldBeActive;
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    private bool EnsureUpcomingSemesters(ICollection<semester> semesters, string season, int year)
+    {
+        var changed = false;
+        var sequence = BuildSequence(season, year, 3);
+        foreach (var (nextSeason, nextYear) in sequence.Skip(1))
+        {
+            if (semesters.Any(s => SameSemester(s, nextSeason, nextYear)))
+                continue;
+
+            var entity = BuildSemester(nextSeason, nextYear, isActive: false);
+            _db.semesters.Add(entity);
+            semesters.Add(entity);
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private static IReadOnlyList<(string Season, int Year)> BuildSequence(string startSeason, int startYear, int count)
+    {
+        var items = new List<(string Season, int Year)>(count) { (startSeason, startYear) };
+        var cursorSeason = startSeason;
+        var cursorYear = startYear;
+        while (items.Count < count)
+        {
+            (cursorSeason, cursorYear) = NextSeason(cursorSeason, cursorYear);
+            items.Add((cursorSeason, cursorYear));
+        }
+
+        return items;
+    }
+
+    private static (string Season, int Year) NextSeason(string season, int year)
+        => NormalizeSeason(season) switch
+        {
+            "SPRING" => ("SUMMER", year),
+            "SUMMER" => ("FALL", year),
+            "FALL" => ("SPRING", year + 1),
+            _ => ("SPRING", year)
+        };
+
+    private static (string Season, int Year) GuessSeason(DateOnly today)
+        => today.Month <= 4
+            ? ("SPRING", today.Year)
+            : today.Month <= 8
+                ? ("SUMMER", today.Year)
+                : ("FALL", today.Year);
+
+    private static string NormalizeSeason(string? season)
+        => string.IsNullOrWhiteSpace(season) ? string.Empty : season.Trim().ToUpperInvariant();
+
+    private static bool SameSemester(semester sem, string season, int year)
+    {
+        var normalized = NormalizeSeason(sem.season);
+        if (!string.Equals(normalized, season, StringComparison.Ordinal))
+            return false;
+
+        var semYear = sem.year ?? sem.start_date?.Year ?? sem.end_date?.Year;
+        return semYear == year;
+    }
+
+    private static semester BuildSemester(string season, int year, bool isActive)
+    {
+        var (start, end) = DefaultWindow(season, year);
+        return new semester
+        {
+            semester_id = Guid.NewGuid(),
+            season = season,
+            year = year,
+            start_date = start,
+            end_date = end,
+            is_active = isActive
+        };
+    }
+
+    private static (DateOnly start, DateOnly end) DefaultWindow(string season, int year)
+        => season switch
+        {
+            "SPRING" => (new DateOnly(year, 1, 1), new DateOnly(year, 4, 30)),
+            "SUMMER" => (new DateOnly(year, 5, 1), new DateOnly(year, 8, 31)),
+            "FALL" => (new DateOnly(year, 9, 1), new DateOnly(year, 12, 31)),
+            _ => throw new ArgumentOutOfRangeException(nameof(season), $"Unknown season: {season}")
+        };
+
+    private static int SeasonIndex(string? season)
+    {
+        var normalized = NormalizeSeason(season);
+        for (var i = 0; i < SeasonSequence.Length; i++)
+        {
+            if (SeasonSequence[i] == normalized) return i;
+        }
+        return -1;
     }
 }
