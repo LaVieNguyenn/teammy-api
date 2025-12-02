@@ -7,5 +7,5 @@ public sealed record GroupMemberDto(
     string Role,        // leader | member
     DateTime JoinedAt,
     string? AvatarUrl,
-    IReadOnlyList<string>? AssignedRoles
+    string? AssignedRole
 );
