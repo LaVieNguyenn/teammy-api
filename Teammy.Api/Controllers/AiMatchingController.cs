@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -5,6 +6,8 @@ using Microsoft.AspNetCore.Mvc;
 using Teammy.Application.Ai.Dtos;
 using Teammy.Application.Ai.Services;
 using Teammy.Application.Common.Interfaces;
+using Teammy.Application.Groups.Dtos;
+using Teammy.Application.Posts.Dtos;
 
 namespace Teammy.Api.Controllers;
 
@@ -108,6 +111,105 @@ public sealed class AiMatchingController : ControllerBase
             _service.AutoResolveAsync(GetCurrentUserId(), request, ct));
     }
 
+    private async Task<IReadOnlyList<object>> ShapeRecruitmentPostSuggestionsAsync(
+        IReadOnlyList<RecruitmentPostSuggestionDto> suggestions,
+        CancellationToken ct)
+    {
+        if (suggestions.Count == 0)
+            return Array.Empty<object>();
+
+        var shaped = new List<object>(suggestions.Count);
+        foreach (var suggestion in suggestions)
+        {
+            var postData = suggestion.Detail is not null
+                ? await BuildRecruitmentPostShapeAsync(suggestion.Detail, ct)
+                : BuildFallbackRecruitmentPostShape(suggestion);
+
+            shaped.Add(new
+            {
+                scorePercent = suggestion.Score,
+                matchingSkills = suggestion.MatchingSkills,
+                requiredSkills = suggestion.RequiredSkills,
+                post = postData
+            });
+        }
+
+        return shaped;
+    }
+
+    private async Task<object> BuildRecruitmentPostShapeAsync(RecruitmentPostDetailDto detail, CancellationToken ct)
+    {
+        IReadOnlyList<GroupMemberDto>? membersDetail = null;
+        GroupMemberDto? leaderDetail = null;
+        if (detail.GroupId is Guid gid)
+        {
+            var members = await _groupQueries.ListActiveMembersAsync(gid, ct);
+            leaderDetail = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase));
+            membersDetail = members.Where(m => !string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+
+        var topLevelMajor = detail.Major ?? detail.Group?.Major;
+        var topicObj = detail.Group?.Topic;
+
+        return new
+        {
+            id = detail.Id,
+            type = detail.Type,
+            status = detail.Status,
+            title = detail.Title,
+            description = detail.Description,
+            position_needed = detail.PositionNeeded,
+            skills = detail.Skills,
+            createdAt = detail.CreatedAt,
+            applicationDeadline = detail.ApplicationDeadline,
+            currentMembers = detail.CurrentMembers,
+            applicationsCount = detail.ApplicationsCount,
+            hasApplied = detail.HasApplied,
+            myApplicationId = detail.MyApplicationId,
+            myApplicationStatus = detail.MyApplicationStatus,
+            semester = detail.Semester,
+            mentor = detail.Group?.Mentor,
+            group = detail.Group is null
+                ? null
+                : new
+                {
+                    detail.Group.GroupId,
+                    detail.Group.SemesterId,
+                    detail.Group.MentorId,
+                    detail.Group.Name,
+                    detail.Group.Description,
+                    detail.Group.Status,
+                    detail.Group.MaxMembers,
+                    detail.Group.MajorId,
+                    detail.Group.TopicId,
+                    detail.Group.CreatedAt,
+                    detail.Group.UpdatedAt,
+                    leader = leaderDetail,
+                    members = membersDetail,
+                    mentor = detail.Group.Mentor
+                },
+            major = topLevelMajor,
+            topic = topicObj,
+            topicName = topicObj?.Title
+        };
+    }
+
+    private static object BuildFallbackRecruitmentPostShape(RecruitmentPostSuggestionDto suggestion)
+        => new
+        {
+            id = suggestion.PostId,
+            type = "group_hiring",
+            status = "open",
+            title = suggestion.Title,
+            description = suggestion.Description,
+            position_needed = suggestion.PositionNeeded,
+            skills = suggestion.RequiredSkills,
+            createdAt = suggestion.CreatedAt,
+            applicationDeadline = suggestion.ApplicationDeadline,
+            major = new { majorId = suggestion.MajorId, majorName = suggestion.MajorName },
+            group = suggestion.GroupId is null ? null : new { groupId = suggestion.GroupId, groupName = suggestion.GroupName }
+        };
+
     private async Task<ActionResult<AiResponse<T>>> HandleAiRequestAsync<T>(Func<Task<T>> action)
     {
         try
@@ -133,82 +235,5 @@ public sealed class AiMatchingController : ControllerBase
         if (!Guid.TryParse(sub, out var id))
             throw new UnauthorizedAccessException("Invalid token");
         return id;
-    }
-
-    private async Task<IReadOnlyList<object>> ShapeRecruitmentPostSuggestionsAsync(
-        IReadOnlyList<RecruitmentPostSuggestionDto> suggestions,
-        CancellationToken ct)
-    {
-        if (suggestions.Count == 0)
-            return Array.Empty<object>();
-
-        var shaped = new List<object>(suggestions.Count);
-
-        foreach (var suggestion in suggestions)
-        {
-            var detail = suggestion.Detail;
-            if (detail is null)
-            {
-                // Skip if we failed to hydrate detail for this post.
-                continue;
-            }
-
-            IReadOnlyList<Teammy.Application.Groups.Dtos.GroupMemberDto>? membersDetail = null;
-            Teammy.Application.Groups.Dtos.GroupMemberDto? leaderDetail = null;
-
-            if (detail.GroupId is Guid gid)
-            {
-                var members = await _groupQueries.ListActiveMembersAsync(gid, ct);
-                leaderDetail = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase));
-                membersDetail = members.Where(m => !string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase)).ToList();
-            }
-
-            var topLevelMajor = detail.Major ?? detail.Group?.Major;
-            var topicObj = detail.Group?.Topic;
-
-            shaped.Add(new
-            {
-                id = detail.Id,
-                type = detail.Type,
-                status = detail.Status,
-                title = detail.Title,
-                description = detail.Description,
-                position_needed = detail.PositionNeeded,
-                skills = detail.Skills,
-                createdAt = detail.CreatedAt,
-                applicationDeadline = detail.ApplicationDeadline,
-                currentMembers = detail.CurrentMembers,
-                applicationsCount = detail.ApplicationsCount,
-                hasApplied = detail.HasApplied,
-                myApplicationId = detail.MyApplicationId,
-                myApplicationStatus = detail.MyApplicationStatus,
-                semester = detail.Semester,
-                mentor = detail.Group?.Mentor,
-                group = detail.Group is null
-                    ? null
-                    : new
-                    {
-                        detail.Group.GroupId,
-                        detail.Group.SemesterId,
-                        detail.Group.MentorId,
-                        detail.Group.Name,
-                        detail.Group.Description,
-                        detail.Group.Status,
-                        detail.Group.MaxMembers,
-                        detail.Group.MajorId,
-                        detail.Group.TopicId,
-                        detail.Group.CreatedAt,
-                        detail.Group.UpdatedAt,
-                        leader = leaderDetail,
-                        members = membersDetail,
-                        mentor = detail.Group.Mentor
-                    },
-                major = topLevelMajor,
-                topic = topicObj,
-                topicName = topicObj?.Title
-            });
-        }
-
-        return shaped;
     }
 }
