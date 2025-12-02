@@ -15,11 +15,13 @@ public sealed class InvitationService(
     IUserReadOnlyQueries userQueries,
     IAppUrlProvider urlProvider,
     ITopicReadOnlyQueries topicQueries,
-    ITopicWriteRepository topicWrite
+    ITopicWriteRepository topicWrite,
+    IInvitationNotifier invitationNotifier
 )
 {
     private readonly ITopicReadOnlyQueries _topicQueries = topicQueries;
     private readonly ITopicWriteRepository _topicWrite = topicWrite;
+    private readonly IInvitationNotifier _invitationNotifier = invitationNotifier;
 
     public async Task<(Guid InvitationId, bool EmailSent)> InviteUserAsync(Guid groupId, Guid inviteeUserId, Guid invitedByUserId, string? message, CancellationToken ct)
     {
@@ -66,6 +68,8 @@ public sealed class InvitationService(
                 brandHex: "#F97316");
             emailSent = await emailSender.SendAsync(invitee.InviteeEmail, subject, html, ct, replyToEmail: replyTo, fromDisplayName: fromDisplayName);
         }
+
+        await BroadcastInvitationCreatedAsync(invitee, invitationId, inviteeUserId, groupId, "member", invitedByUserId, null, ct);
 
         return (invitationId, emailSent);
     }
@@ -123,6 +127,7 @@ public sealed class InvitationService(
             invitationId = await repo.CreateAsync(groupId, mentorUserId, invitedByUserId, message, expiresAt, topicId, ct);
         }
 
+        var detailDto = await queries.GetAsync(invitationId, ct);
         var mentor = await userQueries.GetCurrentUserAsync(mentorUserId, ct);
         if (!string.IsNullOrWhiteSpace(mentor?.Email))
         {
@@ -152,6 +157,8 @@ public sealed class InvitationService(
                 fromDisplayName: leader?.DisplayName);
         }
 
+        await BroadcastInvitationCreatedAsync(detailDto, invitationId, mentorUserId, groupId, "mentor", invitedByUserId, topicId, ct);
+
         return invitationId;
     }
 
@@ -177,6 +184,7 @@ public sealed class InvitationService(
         await groupRepo.AddMembershipAsync(inv.GroupId, currentUserId, inv.SemesterId, "member", ct);
         await postRepo.DeleteProfilePostsForUserAsync(currentUserId, inv.SemesterId, ct);
         await repo.UpdateStatusAsync(invitationId, "accepted", DateTime.UtcNow, ct);
+        await BroadcastStatusAsync(inv.InviteeUserId, inv.GroupId, invitationId, "accepted", ct);
 
         await postRepo.RejectPendingApplicationsForUserInGroupAsync(inv.GroupId, currentUserId, ct);
 
@@ -190,6 +198,7 @@ public sealed class InvitationService(
         if (inv.Status != "pending") throw new InvalidOperationException("Invitation already handled");
 
         await repo.UpdateStatusAsync(invitationId, "rejected", DateTime.UtcNow, ct);
+        await BroadcastStatusAsync(inv.InviteeUserId, inv.GroupId, invitationId, "rejected", ct);
     }
 
     // Leader-only cancel an invitation
@@ -201,6 +210,7 @@ public sealed class InvitationService(
         await EnsureInvitationActiveAsync(invitationId, inv, ct);
         if (inv.Status != "pending") throw new InvalidOperationException("Invitation already handled");
         await repo.UpdateStatusAsync(invitationId, "revoked", DateTime.UtcNow, ct);
+        await BroadcastStatusAsync(inv.InviteeUserId, inv.GroupId, invitationId, "revoked", ct);
     }
 
     public async Task<IReadOnlyList<InvitationListItemDto>> ListMyInvitationsAsync(Guid currentUserId, string? status, CancellationToken ct)
@@ -233,6 +243,7 @@ public sealed class InvitationService(
         await postRepo.CloseAllOpenPostsForGroupAsync(inv.GroupId, ct);
         await repo.UpdateStatusAsync(inv.InvitationId, "accepted", DateTime.UtcNow, ct);
         await repo.RevokePendingMentorInvitesAsync(inv.GroupId, inv.InvitationId, ct);
+        await BroadcastStatusAsync(inv.InviteeUserId, inv.GroupId, inv.InvitationId, "accepted", ct);
     }
 
     private async Task EnsureInvitationActiveAsync(Guid invitationId, InvitationDetailDto inv, CancellationToken ct)
@@ -243,4 +254,22 @@ public sealed class InvitationService(
             throw new InvalidOperationException("Invitation expired");
         }
     }
+
+    private async Task BroadcastInvitationCreatedAsync(InvitationDetailDto? detail, Guid invitationId, Guid inviteeUserId, Guid groupId, string type, Guid invitedBy, Guid? topicId, CancellationToken ct)
+    {
+        var dto = detail is not null
+            ? ToRealtimeDto(detail)
+            : new InvitationRealtimeDto(invitationId, groupId, null, type, "pending", DateTime.UtcNow, invitedBy, topicId, null);
+
+        await _invitationNotifier.NotifyInvitationCreatedAsync(detail?.InviteeUserId ?? inviteeUserId, dto, ct);
+        await _invitationNotifier.NotifyGroupPendingAsync(groupId, ct);
+    }
+
+    private Task BroadcastStatusAsync(Guid inviteeUserId, Guid groupId, Guid invitationId, string status, CancellationToken ct)
+        => Task.WhenAll(
+            _invitationNotifier.NotifyInvitationStatusAsync(inviteeUserId, invitationId, status, ct),
+            _invitationNotifier.NotifyGroupPendingAsync(groupId, ct));
+
+    private static InvitationRealtimeDto ToRealtimeDto(InvitationDetailDto detail)
+        => new(detail.InvitationId, detail.GroupId, detail.GroupName, detail.Type, detail.Status, detail.CreatedAt, detail.InvitedBy, detail.TopicId, detail.TopicTitle);
 }

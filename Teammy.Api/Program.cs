@@ -68,6 +68,7 @@ builder.Services.AddScoped<GroupChatService>();
 builder.Services.AddScoped<ChatConversationService>();
 builder.Services.AddScoped<ChatSessionMessageService>();
 builder.Services.AddScoped<IGroupChatNotifier, GroupChatNotifier>();
+builder.Services.AddScoped<IInvitationNotifier, InvitationNotifier>();
 builder.Services.AddSingleton<IAppUrlProvider, Teammy.Api.App.AppUrlProvider>();
 
 // Infrastructure (DbContext, Auth services, Repositories)

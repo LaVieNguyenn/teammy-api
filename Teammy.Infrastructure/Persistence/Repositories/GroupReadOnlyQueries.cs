@@ -213,8 +213,15 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
         var rolesLookup = await db.group_member_roles.AsNoTracking()
             .Where(r => memberIds.Contains(r.group_member_id))
             .GroupBy(r => r.group_member_id)
-            .Select(g => new { GroupMemberId = g.Key, Roles = g.Select(r => r.role_name).ToList() })
-            .ToDictionaryAsync(x => x.GroupMemberId, x => (IReadOnlyList<string>)x.Roles, ct);
+            .Select(g => new
+            {
+                GroupMemberId = g.Key,
+                Role = g
+                    .OrderByDescending(r => r.assigned_at)
+                    .Select(r => r.role_name)
+                    .FirstOrDefault()
+            })
+            .ToDictionaryAsync(x => x.GroupMemberId, x => x.Role, ct);
 
         return members.Select(x => new Teammy.Application.Groups.Dtos.GroupMemberDto(
             x.User.user_id,
@@ -223,7 +230,7 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
             x.Member.status,
             x.Member.joined_at,
             x.User.avatar_url,
-            rolesLookup.TryGetValue(x.Member.group_member_id, out var roles) ? roles : Array.Empty<string>())).ToList();
+            rolesLookup.TryGetValue(x.Member.group_member_id, out var role) ? role : null)).ToList();
     }
 
     public Task<bool> IsActiveMemberAsync(Guid groupId, Guid userId, CancellationToken ct)
