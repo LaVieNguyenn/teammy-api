@@ -41,6 +41,7 @@ public sealed class UserWriteRepository : IUserWriteRepository
             student_code     = studentCode,
             gender           = gender,
             major_id         = majorId,
+            portfolio_url    = null,
             skills           = null,
             skills_completed = false,
             is_active        = true,
@@ -76,6 +77,7 @@ public sealed class UserWriteRepository : IUserWriteRepository
         string? gender,
         Guid? majorId,
         bool isActive,
+        string? portfolioUrl,
         CancellationToken ct)
     {
         var entity = await _db.users.FirstOrDefaultAsync(u => u.user_id == userId, ct);
@@ -87,6 +89,7 @@ public sealed class UserWriteRepository : IUserWriteRepository
         entity.gender       = gender;
         entity.major_id     = majorId;
         entity.is_active    = isActive;
+        entity.portfolio_url = NormalizePortfolio(portfolioUrl);
         entity.updated_at   = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);
@@ -128,6 +131,7 @@ public sealed class UserWriteRepository : IUserWriteRepository
         Guid? majorId,
         string? skillsJson,
         bool skillsCompleted,
+        string? portfolioUrl,
         CancellationToken ct)
     {
         var entity = await _db.users.FirstOrDefaultAsync(u => u.user_id == userId, ct);
@@ -141,6 +145,7 @@ public sealed class UserWriteRepository : IUserWriteRepository
         entity.major_id         = majorId;
         entity.skills           = skillsJson;
         entity.skills_completed = skillsCompleted;
+        entity.portfolio_url    = NormalizePortfolio(portfolioUrl);
         entity.updated_at       = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);
@@ -157,4 +162,7 @@ public sealed class UserWriteRepository : IUserWriteRepository
 
         await _db.SaveChangesAsync(ct);
     }
+
+    private static string? NormalizePortfolio(string? raw)
+        => string.IsNullOrWhiteSpace(raw) ? null : raw.Trim();
 }

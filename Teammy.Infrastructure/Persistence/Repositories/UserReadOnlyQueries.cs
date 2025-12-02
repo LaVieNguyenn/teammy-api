@@ -68,7 +68,8 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 major,
                 skills,
                 user.created_at,
-                user.updated_at
+                user.updated_at,
+                user.portfolio_url
             );
         }
 
@@ -109,7 +110,8 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 row.MajorName,
                 skills,
                 row.User.skills_completed,
-                row.User.avatar_url
+                row.User.avatar_url,
+                row.User.portfolio_url
             );
         }
 
@@ -180,7 +182,8 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                     m.major_name,
                     u.student_code,
                     u.gender,
-                    u.created_at
+                    u.created_at,
+                    u.portfolio_url
                 );
 
             return await q.AsNoTracking().ToListAsync(ct);
@@ -211,7 +214,8 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                     u.gender,
                     u.skills_completed,
                     u.created_at,
-                    u.updated_at
+                    u.updated_at,
+                    u.portfolio_url
                 );
 
             return await q.AsNoTracking().FirstOrDefaultAsync(ct);

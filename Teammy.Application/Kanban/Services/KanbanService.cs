@@ -1,3 +1,4 @@
+using System.IO;
 using Teammy.Application.Kanban.Dtos;
 using Teammy.Application.Kanban.Interfaces;
 using Teammy.Application.Files;
@@ -116,9 +117,10 @@ public sealed class KanbanService(
         if (!await access.IsMemberAsync(groupId, currentUserId, ct))
             throw new UnauthorizedAccessException("Not a group member");
 
-        var (url, type, size) = await storage.SaveAsync(stream, fileName, ct);
-        var id = await repo.AddSharedFileAsync(groupId, currentUserId, taskId, url, type, size, description, ct);
-        return new UploadFileResult(id, url, type, size, taskId);
+        var normalizedName = NormalizeFileName(fileName);
+        var (url, type, size) = await storage.SaveAsync(stream, normalizedName, ct);
+        var id = await repo.AddSharedFileAsync(groupId, currentUserId, taskId, normalizedName, url, type, size, description, ct);
+        return new UploadFileResult(id, normalizedName, url, type, size, taskId);
     }
 
     public async Task<IReadOnlyList<SharedFileVm>> GetFilesByGroupAsync(Guid groupId, Guid currentUserId, CancellationToken ct)
@@ -140,5 +142,14 @@ public sealed class KanbanService(
         if (!await access.IsMemberAsync(groupId, currentUserId, ct))
             throw new UnauthorizedAccessException("Not a group member");
         await repo.DeleteSharedFileAsync(fileId, currentUserId, ct);
+    }
+
+    private static string NormalizeFileName(string raw)
+    {
+        var name = Path.GetFileName(raw) ?? string.Empty;
+        name = name.Trim();
+        if (string.IsNullOrWhiteSpace(name))
+            return $"attachment_{DateTime.UtcNow:yyyyMMddHHmmss}";
+        return name.Length > 255 ? name[..255] : name;
     }
 }

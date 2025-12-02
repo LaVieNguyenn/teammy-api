@@ -65,6 +65,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                     t.major != null ? t.major.major_name : null, // MajorName
                     t.title,                                  // Title
                     t.description,                            // Description
+                    t.source,                                 // Source
                     t.status,                                 // Status
                     t.created_by,                             // CreatedById
                     t.created_byNavigation.display_name,      // CreatedByName
@@ -100,6 +101,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                     t.major != null ? t.major.major_name : null, // MajorName
                     t.title,                                  // Title
                     t.description,                            // Description
+                    t.source,                                 // Source
                     t.status,                                 // Status
                     t.created_by,                             // CreatedById
                     t.created_byNavigation.display_name,      // CreatedByName
