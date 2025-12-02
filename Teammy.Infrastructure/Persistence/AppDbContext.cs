@@ -588,6 +588,7 @@ public partial class AppDbContext : DbContext
             entity.Property(e => e.file_id).HasDefaultValueSql("gen_random_uuid()");
             entity.Property(e => e.created_at).HasDefaultValueSql("now()");
             entity.Property(e => e.updated_at).HasDefaultValueSql("now()");
+            entity.Property(e => e.file_name).HasMaxLength(255);
 
             entity.HasOne(d => d.group).WithMany(p => p.shared_files)
                 .HasForeignKey(d => d.group_id)
@@ -737,6 +738,7 @@ public partial class AppDbContext : DbContext
             entity.Property(e => e.skills).HasColumnType("jsonb");
             entity.Property(e => e.skills_completed).HasDefaultValue(false);
             entity.Property(e => e.student_code).HasMaxLength(30);
+            entity.Property(e => e.portfolio_url).HasColumnType("text");
             entity.Property(e => e.updated_at).HasDefaultValueSql("now()");
 
             entity.HasOne(d => d.major).WithMany(p => p.users)

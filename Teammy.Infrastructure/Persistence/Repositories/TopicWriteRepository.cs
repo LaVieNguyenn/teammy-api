@@ -25,6 +25,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories
         public async Task<Guid> CreateAsync(CreateTopicRequest req, Guid createdBy, CancellationToken ct)
         {
             var status = NormalizeStatus(req.Status);
+            var source = NormalizeSource(req.Source);
 
             var titleTrim = req.Title.Trim();
             var dup = await _db.topics.AsNoTracking()
@@ -42,6 +43,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 major_id    = req.MajorId,
                 title       = titleTrim,
                 description = string.IsNullOrWhiteSpace(req.Description) ? null : req.Description,
+                source      = source,
                 status      = status,
                 created_by  = createdBy,
                 created_at  = DateTime.UtcNow
@@ -75,6 +77,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories
 
             entity.title       = titleTrim;
             entity.description = string.IsNullOrWhiteSpace(req.Description) ? null : req.Description;
+            entity.source      = NormalizeSource(req.Source);
             entity.status      = status;
             entity.major_id    = req.MajorId;
 
@@ -107,11 +110,13 @@ namespace Teammy.Infrastructure.Persistence.Repositories
             string? description,
             string status,
             Guid? majorId,
+            string? source,
             Guid createdBy,
             CancellationToken ct)
         {
             status = NormalizeStatus(status);
             var titleTrim = title.Trim();
+            var normalizedSource = NormalizeSource(source);
 
             var exist = await _db.topics
                 .FirstOrDefaultAsync(t =>
@@ -127,6 +132,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                     major_id    = majorId,
                     title       = titleTrim,
                     description = string.IsNullOrWhiteSpace(description) ? null : description,
+                    source      = normalizedSource,
                     status      = status,
                     created_by  = createdBy,
                     created_at  = DateTime.UtcNow
@@ -139,6 +145,9 @@ namespace Teammy.Infrastructure.Persistence.Repositories
 
             if (!string.IsNullOrWhiteSpace(description))
                 exist.description = description;
+
+            if (normalizedSource is not null)
+                exist.source = normalizedSource;
 
             exist.status = status;
             if (majorId.HasValue)
@@ -155,6 +164,19 @@ namespace Teammy.Infrastructure.Persistence.Repositories
             if (!ValidStatus(s))
                 throw new ArgumentException("Status must be open|closed|archived.");
             return s;
+        }
+
+        private static string? NormalizeSource(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return null;
+
+            var trimmed = raw.Trim();
+            if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+                throw new ArgumentException("Source must be a valid http(s) link.");
+
+            return uri.ToString();
         }
     }
 }

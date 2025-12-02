@@ -119,16 +119,20 @@ public sealed record AiSkillProfile(AiPrimaryRole PrimaryRole, IReadOnlyCollecti
 
     private static AiSkillProfile BuildFromObject(JsonElement root)
     {
-        var role = ExtractRole(root);
+        var roleValue = ExtractRole(root);
         var tags = ExtractTags(root);
-        return new AiSkillProfile(AiRoleHelper.Parse(role), tags);
+        var role = AiRoleHelper.Parse(roleValue);
+        if (role == AiPrimaryRole.Unknown && tags.Count > 0)
+            role = AiRoleHelper.InferFromTags(tags);
+        return new AiSkillProfile(role, tags);
     }
 
     private static AiSkillProfile BuildFromArray(JsonElement array)
     {
         var tags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         AddTags(array, tags);
-        return new AiSkillProfile(AiPrimaryRole.Unknown, tags);
+        var role = tags.Count == 0 ? AiPrimaryRole.Unknown : AiRoleHelper.InferFromTags(tags);
+        return new AiSkillProfile(role, tags);
     }
 
     private static void AddTags(JsonElement root, string propertyName, HashSet<string> tags)
@@ -193,12 +197,5 @@ public sealed record AiSkillProfile(AiPrimaryRole PrimaryRole, IReadOnlyCollecti
     }
 
     private static AiPrimaryRole InferRoleFromTokens(IReadOnlyCollection<string> tags)
-    {
-        var tokenSet = new HashSet<string>(tags, StringComparer.OrdinalIgnoreCase);
-        if (tokenSet.Any(t => t.Contains("front") || t.Contains("ui") || t.Contains("ux") || t.Contains("react") || t.Contains("design")))
-            return AiPrimaryRole.Frontend;
-        if (tokenSet.Any(t => t.Contains("back") || t.Contains("api") || t.Contains("server") || t.Contains("database") || t.Contains("python") || t.Contains("etl")))
-            return AiPrimaryRole.Backend;
-        return AiPrimaryRole.Other;
-    }
+        => AiRoleHelper.InferFromTags(tags);
 }
