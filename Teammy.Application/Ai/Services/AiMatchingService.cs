@@ -22,6 +22,12 @@ public sealed class AiMatchingService(
     private const int DefaultSuggestionLimit = 5;
     private const int MaxSuggestionLimit = 20;
     private const int OptionSuggestionLimit = 3;
+    private const int RecruitmentScoreThreshold = 20;
+    private const int RecruitmentScoreMax = 220;
+    private const int TopicScoreThreshold = 10;
+    private const int TopicScoreMax = 110;
+    private const int ProfileScoreThreshold = 20;
+    private const int ProfileScoreMax = 140;
 
     public async Task<AiSummaryDto> GetSummaryAsync(Guid? semesterId, CancellationToken ct)
     {
@@ -822,7 +828,7 @@ public sealed class AiMatchingService(
         if (topic.CanTakeMore)
             reasons.Add("Topic còn trống");
         if (reasons.Count == 0)
-            reasons.Add("Điểm AI " + suggestion.Score);
+            reasons.Add("Điểm AI " + suggestion.Score + "%");
         return string.Join(" | ", reasons);
     }
 
@@ -1017,6 +1023,16 @@ public sealed class AiMatchingService(
         return parsed;
     }
 
+    private static int NormalizeScoreToPercent(int score, int threshold, int maxScore)
+    {
+        if (maxScore <= threshold)
+            return 100;
+
+        var clamped = Math.Clamp(score, threshold, maxScore);
+        var normalized = (double)(clamped - threshold) / (maxScore - threshold);
+        return (int)Math.Round(normalized * 100, MidpointRounding.AwayFromZero);
+    }
+
     private static RecruitmentPostSuggestionDto? BuildPostSuggestion(
         AiSkillProfile studentProfile,
         Guid studentMajorId,
@@ -1041,7 +1057,7 @@ public sealed class AiMatchingService(
                 .ToList();
         }
 
-        var overlapScore = matchingSkills.Count * 18;
+        var overlapScore = Math.Min(matchingSkills.Count, 5) * 18;
         var roleScore = ScoreRoleMatch(studentProfile.PrimaryRole, requiredProfile.PrimaryRole, post.PositionNeeded);
         var majorBoost = post.MajorId.HasValue && post.MajorId.Value == studentMajorId ? 15 : 5;
         var recencyDays = Math.Clamp((int)(DateTime.UtcNow - post.CreatedAt).TotalDays, 0, 30);
@@ -1049,9 +1065,10 @@ public sealed class AiMatchingService(
         var needAdjustment = CalculateRoleNeedAdjustment(studentProfile.PrimaryRole, mix);
         var totalScore = overlapScore + roleScore + majorBoost + recencyBoost + needAdjustment;
 
-        if (totalScore <= 20)
+        if (totalScore <= RecruitmentScoreThreshold)
             return null;
 
+        var normalizedScore = NormalizeScoreToPercent(totalScore, RecruitmentScoreThreshold, RecruitmentScoreMax);
         return new RecruitmentPostSuggestionDto(
             post.PostId,
             post.Title,
@@ -1062,7 +1079,7 @@ public sealed class AiMatchingService(
             post.MajorName,
             post.CreatedAt,
             post.ApplicationDeadline,
-            totalScore,
+            normalizedScore,
             post.PositionNeeded,
             requiredSkillTags,
             matchingSkills
@@ -1103,7 +1120,7 @@ public sealed class AiMatchingService(
             ? groupProfile.Tags.Where(tag => searchable.Contains(tag)).Distinct(StringComparer.OrdinalIgnoreCase).Take(5).ToList()
             : new List<string>();
 
-        var matchScore = matchingSkills.Count * 12;
+        var matchScore = Math.Min(matchingSkills.Count, 5) * 12;
         if (matchingSkills.Count == 0 && !groupProfile.HasTags)
             matchScore = 8; // fallback so groups without profile still get suggestions
 
@@ -1111,10 +1128,11 @@ public sealed class AiMatchingService(
         var capacityBoost = topic.CanTakeMore ? 10 : 0;
         var totalScore = matchScore + roleScore + capacityBoost;
 
-        if (totalScore <= 10)
+        if (totalScore <= TopicScoreThreshold)
             return null;
 
-        return new TopicSuggestionDto(topic.TopicId, topic.Title, topic.Description, totalScore, topic.CanTakeMore, matchingSkills);
+        var normalizedScore = NormalizeScoreToPercent(totalScore, TopicScoreThreshold, TopicScoreMax);
+        return new TopicSuggestionDto(topic.TopicId, topic.Title, topic.Description, normalizedScore, topic.CanTakeMore, matchingSkills);
     }
 
     private static ProfilePostSuggestionDto? BuildProfilePostSuggestion(
@@ -1146,14 +1164,15 @@ public sealed class AiMatchingService(
             _ => 20
         };
 
-        var overlapScore = matchingSkills.Count * 12;
+        var overlapScore = Math.Min(matchingSkills.Count, 5) * 12;
         var recencyDays = Math.Clamp((int)(DateTime.UtcNow - post.CreatedAt).TotalDays, 0, 30);
         var recencyBoost = Math.Max(5, 30 - recencyDays);
         var totalScore = roleScore + overlapScore + recencyBoost;
 
-        if (totalScore <= 20)
+        if (totalScore <= ProfileScoreThreshold)
             return null;
 
+        var normalizedScore = NormalizeScoreToPercent(totalScore, ProfileScoreThreshold, ProfileScoreMax);
         return new ProfilePostSuggestionDto(
             post.PostId,
             post.OwnerUserId,
@@ -1162,7 +1181,7 @@ public sealed class AiMatchingService(
             post.Description,
             post.MajorId,
             post.CreatedAt,
-            totalScore,
+            normalizedScore,
             post.SkillsText,
             AiRoleHelper.ToDisplayString(role),
             matchingSkills);
