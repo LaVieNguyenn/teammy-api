@@ -69,6 +69,7 @@ builder.Services.AddScoped<ChatConversationService>();
 builder.Services.AddScoped<ChatSessionMessageService>();
 builder.Services.AddScoped<IGroupChatNotifier, GroupChatNotifier>();
 builder.Services.AddScoped<IInvitationNotifier, InvitationNotifier>();
+builder.Services.AddScoped<IAnnouncementNotifier, AnnouncementNotifier>();
 builder.Services.AddSingleton<IAppUrlProvider, Teammy.Api.App.AppUrlProvider>();
 
 // Infrastructure (DbContext, Auth services, Repositories)
@@ -102,4 +103,5 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 app.MapHub<GroupChatHub>("/groupChatHub");
+app.MapHub<NotificationHub>("/notificationHub");
 app.Run();
