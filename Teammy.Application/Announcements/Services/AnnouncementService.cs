@@ -10,7 +10,8 @@ public sealed class AnnouncementService(
     IAnnouncementRepository repository,
     IAnnouncementReadOnlyQueries readQueries,
     IAnnouncementRecipientQueries recipientQueries,
-    IEmailSender emailSender
+    IEmailSender emailSender,
+    IAnnouncementNotifier notifier
 )
 {
     public Task<IReadOnlyList<AnnouncementDto>> ListAsync(Guid currentUserId, AnnouncementFilter filter, CancellationToken ct)
@@ -49,7 +50,14 @@ public sealed class AnnouncementService(
         );
 
         var created = await repository.CreateAsync(command, ct);
-        await SendEmailsAsync(created, ct);
+        var recipients = await ResolveRecipientsAsync(created, ct);
+
+        if (recipients.Count > 0)
+        {
+            await notifier.NotifyCreatedAsync(created, recipients, ct);
+            await SendEmailsAsync(created, recipients, ct);
+        }
+
         return created;
     }
 
@@ -94,18 +102,18 @@ public sealed class AnnouncementService(
         }
     }
 
-    private async Task SendEmailsAsync(AnnouncementDto announcement, CancellationToken ct)
+    private Task<IReadOnlyList<AnnouncementRecipient>> ResolveRecipientsAsync(AnnouncementDto announcement, CancellationToken ct)
     {
-        var recipients = await recipientQueries.ResolveRecipientsAsync(
+        return recipientQueries.ResolveRecipientsAsync(
             announcement.Scope,
             announcement.SemesterId,
             announcement.TargetRole,
             announcement.TargetGroupId,
             ct);
+    }
 
-        if (recipients.Count == 0)
-            return;
-
+    private async Task SendEmailsAsync(AnnouncementDto announcement, IReadOnlyList<AnnouncementRecipient> recipients, CancellationToken ct)
+    {
         var subject = $"[Teammy] {announcement.Title}";
         var htmlBody = BuildHtmlBody(announcement);
 
