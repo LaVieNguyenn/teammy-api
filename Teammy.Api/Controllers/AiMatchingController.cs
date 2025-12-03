@@ -83,10 +83,10 @@ public sealed class AiMatchingController : ControllerBase
     [HttpPost("auto-assign/teams")]
     [Authorize(Roles = "admin,moderator")]
     public async Task<ActionResult<AiResponse<AutoAssignTeamsResultDto>>> AutoAssignTeams(
-        [FromBody] AutoAssignTeamsRequest request,
+        [FromBody] AutoAssignTeamsRequest? request,
         CancellationToken ct)
     {
-        return await HandleAiRequestAsync(() => _service.AutoAssignTeamsAsync(request, ct));
+        return await HandleAiRequestAsync(() => _service.AutoAssignTeamsAsync(GetCurrentUserId(), request, ct));
     }
 
     [HttpPost("auto-assign/topic")]
