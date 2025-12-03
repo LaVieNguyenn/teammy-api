@@ -668,7 +668,7 @@ public sealed class AiMatchingService(
         var counter = 1;
 
         var groupedByMajor = remainingStudents
-            .GroupBy(s => s.MajorId)
+            .GroupBy(s => (Guid?)s.MajorId)
             .OrderBy(g => g.Key.HasValue ? 0 : 1)
             .ThenBy(g => g.Key ?? Guid.Empty)
             .ToList();
