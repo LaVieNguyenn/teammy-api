@@ -75,5 +75,7 @@ public sealed record AutoAssignTeamsResultDto(
     int AssignedCount,
     IReadOnlyList<AutoAssignmentRecordDto> Assignments,
     IReadOnlyList<Guid> UnassignedStudentIds,
-    IReadOnlyList<Guid> GroupsStillOpen
+    IReadOnlyList<Guid> GroupsStillOpen,
+    int NewGroupsCreated,
+    IReadOnlyList<AutoResolveNewGroupDto> NewGroups
 );
