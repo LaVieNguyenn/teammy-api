@@ -294,6 +294,9 @@ public sealed class AiMatchingService(
 
         var combinedAssignments = phase.Assignments.Concat(newGroups.Assignments).ToList();
 
+        if (combinedAssignments.Count > 0)
+            await RefreshAssignmentCachesAsync(ct);
+
         return new AutoAssignTeamsResultDto(
             combinedAssignments.Count,
             combinedAssignments,
@@ -347,6 +350,9 @@ public sealed class AiMatchingService(
         var combinedAssignments = studentPhase.Assignments.Concat(newGroupsPhase.Assignments).ToList();
         var combinedTopicAssignments = topicPhase.Assignments.Concat(newGroupsPhase.TopicAssignments).ToList();
         var skippedTopics = topicPhase.SkippedGroupIds.Concat(newGroupsPhase.TopicFailures).Distinct().ToList();
+
+        if (totalAssignments > 0)
+            await RefreshAssignmentCachesAsync(ct);
 
         return new AiAutoResolveResultDto(
             semesterCtx.SemesterId,
@@ -1075,6 +1081,11 @@ public sealed class AiMatchingService(
 
         return JsonSerializer.Serialize(payload);
     }
+
+    private Task RefreshAssignmentCachesAsync(CancellationToken ct)
+        => Task.WhenAll(
+            aiQueries.RefreshStudentsPoolAsync(ct),
+            aiQueries.RefreshGroupCapacityAsync(ct));
 
     private static AiSkillProfile BuildSkillProfile(StudentProfileSnapshot student)
     {
