@@ -19,5 +19,4 @@ public interface IAiMatchingQueries
     Task<IReadOnlyList<GroupOverviewSnapshot>> ListGroupsWithoutTopicAsync(Guid semesterId, CancellationToken ct);
     Task<IReadOnlyList<GroupOverviewSnapshot>> ListGroupsUnderCapacityAsync(Guid semesterId, CancellationToken ct);
     Task RefreshStudentsPoolAsync(CancellationToken ct);
-    Task RefreshGroupCapacityAsync(CancellationToken ct);
 }

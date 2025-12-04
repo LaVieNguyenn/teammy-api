@@ -45,26 +45,43 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
 
     public async Task<IReadOnlyList<GroupCapacitySnapshot>> ListGroupCapacitiesAsync(Guid semesterId, Guid? majorId, CancellationToken ct)
     {
-        var query = _db.mv_group_capacities
-            .AsNoTracking()
-            .Where(x => x.semester_id == semesterId)
-            .Where(x => x.remaining_slots > 0);
+        var activeStatuses = new[] { "leader", "member", "pending" };
+
+        var query =
+            from g in _db.groups.AsNoTracking()
+            where g.semester_id == semesterId
+            join gm in _db.group_members.AsNoTracking()
+                    .Where(m => activeStatuses.Contains(m.status))
+                on g.group_id equals gm.group_id into gmJoin
+            let currentMembers = gmJoin.Count()
+            let remainingSlots = g.max_members - currentMembers
+            where remainingSlots > 0
+            select new
+            {
+                g.group_id,
+                g.semester_id,
+                g.major_id,
+                g.name,
+                g.description,
+                g.max_members,
+                CurrentMembers = currentMembers,
+                RemainingSlots = remainingSlots
+            };
 
         if (majorId.HasValue)
-            query = query.Where(x => x.major_id == majorId);
+            query = query.Where(x => x.major_id == majorId.Value);
 
         var rows = await query.ToListAsync(ct);
         return rows
-            .Where(r => r.group_id.HasValue && r.max_members.HasValue && r.current_members.HasValue && r.remaining_slots.HasValue)
             .Select(r => new GroupCapacitySnapshot(
-                r.group_id!.Value,
-                r.semester_id ?? semesterId,
+                r.group_id,
+                r.semester_id,
                 r.major_id,
                 r.name ?? string.Empty,
                 r.description,
-                (int)r.max_members!.Value,
-                (int)r.current_members!.Value,
-                (int)r.remaining_slots!.Value))
+                r.max_members,
+                r.CurrentMembers,
+                r.RemainingSlots))
             .ToList();
     }
 
@@ -307,9 +324,6 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
 
     public Task RefreshStudentsPoolAsync(CancellationToken ct)
         => _db.Database.ExecuteSqlRawAsync("REFRESH MATERIALIZED VIEW teammy.mv_students_pool", ct);
-
-    public Task RefreshGroupCapacityAsync(CancellationToken ct)
-        => _db.Database.ExecuteSqlRawAsync("REFRESH MATERIALIZED VIEW teammy.mv_group_capacity", ct);
 
     private static StudentProfileSnapshot MapStudent(mv_students_pool row)
     {
