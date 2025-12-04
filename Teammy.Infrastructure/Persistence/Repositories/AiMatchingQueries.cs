@@ -224,7 +224,22 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
         => _db.groups.AsNoTracking().CountAsync(x => x.semester_id == semesterId && x.topic_id == null, ct);
 
     public Task<int> CountGroupsUnderCapacityAsync(Guid semesterId, CancellationToken ct)
-        => _db.mv_group_capacities.AsNoTracking().CountAsync(x => x.semester_id == semesterId && x.remaining_slots > 0, ct);
+    {
+        var eligibleStatuses = new[] { "leader", "member", "pending" };
+
+        var query =
+            from g in _db.groups.AsNoTracking()
+            where g.semester_id == semesterId
+            join gm in _db.group_members.AsNoTracking()
+                    .Where(x => eligibleStatuses.Contains(x.status))
+                on g.group_id equals gm.group_id into gmJoin
+            let activeCount = gmJoin.Count()
+            let remaining = g.max_members - activeCount
+            where remaining > 0
+            select g.group_id;
+
+        return query.CountAsync(ct);
+    }
 
     public Task<int> CountUnassignedStudentsAsync(Guid semesterId, CancellationToken ct)
         => _db.mv_students_pools.AsNoTracking().CountAsync(x => x.semester_id == semesterId, ct);
