@@ -308,6 +308,9 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
     public Task RefreshStudentsPoolAsync(CancellationToken ct)
         => _db.Database.ExecuteSqlRawAsync("REFRESH MATERIALIZED VIEW teammy.mv_students_pool", ct);
 
+    public Task RefreshGroupCapacityAsync(CancellationToken ct)
+        => _db.Database.ExecuteSqlRawAsync("REFRESH MATERIALIZED VIEW teammy.mv_group_capacity", ct);
+
     private static StudentProfileSnapshot MapStudent(mv_students_pool row)
     {
         if (!row.user_id.HasValue || !row.major_id.HasValue || !row.semester_id.HasValue)
