@@ -678,10 +678,67 @@ public sealed class AiMatchingService(
         var counter = 1;
 
         var groupedByMajor = remainingStudents
-            .GroupBy(s => (Guid?)s.MajorId)
-            .OrderBy(g => g.Key.HasValue ? 0 : 1)
-            .ThenBy(g => g.Key ?? Guid.Empty)
+            .GroupBy(s => s.MajorId)
+            .OrderBy(g => g.Key)
             .ToList();
+
+        async Task CreateGroupFromBatchAsync(List<StudentProfileSnapshot> batch, Guid? enforcedMajorId)
+        {
+            if (batch.Count == 0)
+                return;
+
+            var groupName = await GenerateUniqueAutoGroupNameAsync(semesterCtx.SemesterId, counter, ct);
+            counter++;
+            var majorId = enforcedMajorId ?? DetermineGroupMajor(batch, preferredMajorId);
+            var description = $"Nhóm được tạo tự động vào {DateTime.UtcNow:dd/MM/yyyy}.";
+            var skillsJson = BuildGroupSkillsJson(batch);
+            var groupId = await groupRepository.CreateGroupAsync(
+                semesterCtx.SemesterId,
+                null,
+                majorId,
+                groupName,
+                description,
+                maxSize,
+                skillsJson,
+                ct);
+
+            for (var i = 0; i < batch.Count; i++)
+            {
+                var status = i == 0 ? "leader" : "member";
+                await groupRepository.AddMembershipAsync(groupId, batch[i].UserId, semesterCtx.SemesterId, status, ct);
+                await postRepository.DeleteProfilePostsForUserAsync(batch[i].UserId, semesterCtx.SemesterId, ct);
+                assignments.Add(new AutoAssignmentRecordDto(
+                    batch[i].UserId,
+                    groupId,
+                    groupName,
+                    AiRoleHelper.ToDisplayString(AiRoleHelper.Parse(batch[i].PrimaryRole))));
+            }
+
+            AutoAssignTopicResultDto? topicResult = null;
+            try
+            {
+                topicResult = await AssignTopicToGroupAsync(groupId, actorUserId, enforceMembership: false, OptionSuggestionLimit, throwIfUnavailable: false, ct);
+            }
+            catch
+            {
+                // swallow and mark as failure below
+            }
+
+            if (topicResult is not null)
+                topicAssignments.Add(topicResult);
+            else
+                topicFailures.Add(groupId);
+
+            groups.Add(new AutoResolveNewGroupDto(
+                groupId,
+                groupName,
+                majorId,
+                GetMajorName(majorId, majorLookup),
+                batch.Count,
+                topicResult?.TopicId,
+                topicResult?.TopicTitle,
+                batch.Select(s => s.UserId).ToList()));
+        }
 
         foreach (var majorGroup in groupedByMajor)
         {
@@ -689,13 +746,7 @@ public sealed class AiMatchingService(
                 .OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            if (ordered.Count < minSize)
-            {
-                unresolved.AddRange(ordered.Select(s => s.UserId));
-                continue;
-            }
-
-            while (ordered.Count > 0)
+            while (ordered.Count >= minSize)
             {
                 var take = Math.Min(maxSize, ordered.Count);
                 var remainingAfterTake = ordered.Count - take;
@@ -712,64 +763,11 @@ public sealed class AiMatchingService(
                 var batch = ordered.Take(take).ToList();
                 ordered.RemoveRange(0, take);
 
-                if (ordered.Count > 0 && ordered.Count < minSize)
-                {
-                    unresolved.AddRange(ordered.Select(s => s.UserId));
-                    ordered.Clear();
-                }
-
-                var groupName = await GenerateUniqueAutoGroupNameAsync(semesterCtx.SemesterId, counter, ct);
-                counter++;
-                var majorId = majorGroup.Key ?? DetermineGroupMajor(batch, preferredMajorId);
-                var description = $"Nhóm được tạo tự động vào {DateTime.UtcNow:dd/MM/yyyy}.";
-                var skillsJson = BuildGroupSkillsJson(batch);
-                var groupId = await groupRepository.CreateGroupAsync(
-                    semesterCtx.SemesterId,
-                    null,
-                    majorId,
-                    groupName,
-                    description,
-                    maxSize,
-                    skillsJson,
-                    ct);
-
-                for (var i = 0; i < batch.Count; i++)
-                {
-                    var status = i == 0 ? "leader" : "member";
-                    await groupRepository.AddMembershipAsync(groupId, batch[i].UserId, semesterCtx.SemesterId, status, ct);
-                    await postRepository.DeleteProfilePostsForUserAsync(batch[i].UserId, semesterCtx.SemesterId, ct);
-                    assignments.Add(new AutoAssignmentRecordDto(
-                        batch[i].UserId,
-                        groupId,
-                        groupName,
-                        AiRoleHelper.ToDisplayString(AiRoleHelper.Parse(batch[i].PrimaryRole))));
-                }
-
-                AutoAssignTopicResultDto? topicResult = null;
-                try
-                {
-                    topicResult = await AssignTopicToGroupAsync(groupId, actorUserId, enforceMembership: false, OptionSuggestionLimit, throwIfUnavailable: false, ct);
-                }
-                catch
-                {
-                    // swallow and mark as failure below
-                }
-
-                if (topicResult is not null)
-                    topicAssignments.Add(topicResult);
-                else
-                    topicFailures.Add(groupId);
-
-                groups.Add(new AutoResolveNewGroupDto(
-                    groupId,
-                    groupName,
-                    majorId,
-                    GetMajorName(majorId, majorLookup),
-                    batch.Count,
-                    topicResult?.TopicId,
-                    topicResult?.TopicTitle,
-                    batch.Select(s => s.UserId).ToList()));
+                await CreateGroupFromBatchAsync(batch, majorGroup.Key);
             }
+
+            if (ordered.Count > 0)
+                unresolved.AddRange(ordered.Select(s => s.UserId));
         }
 
         return new NewGroupCreationResult(groups, assignments, topicAssignments, topicFailures, unresolved);
