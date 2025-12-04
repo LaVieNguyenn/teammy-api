@@ -1082,10 +1082,11 @@ public sealed class AiMatchingService(
         return JsonSerializer.Serialize(payload);
     }
 
-    private Task RefreshAssignmentCachesAsync(CancellationToken ct)
-        => Task.WhenAll(
-            aiQueries.RefreshStudentsPoolAsync(ct),
-            aiQueries.RefreshGroupCapacityAsync(ct));
+    private async Task RefreshAssignmentCachesAsync(CancellationToken ct)
+    {
+        await aiQueries.RefreshStudentsPoolAsync(ct);
+        await aiQueries.RefreshGroupCapacityAsync(ct);
+    }
 
     private static AiSkillProfile BuildSkillProfile(StudentProfileSnapshot student)
     {
