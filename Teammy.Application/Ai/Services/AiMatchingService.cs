@@ -685,7 +685,7 @@ public sealed class AiMatchingService(
                 var batch = ordered.Take(take).ToList();
                 ordered.RemoveRange(0, take);
 
-                var groupName = $"AI Auto Group {counter:00}";
+                var groupName = await GenerateUniqueAutoGroupNameAsync(semesterCtx.SemesterId, counter, ct);
                 counter++;
                 var majorId = majorGroup.Key ?? DetermineGroupMajor(batch, preferredMajorId);
                 var description = $"Nhóm được tạo tự động vào {DateTime.UtcNow:dd/MM/yyyy}.";
@@ -881,6 +881,13 @@ public sealed class AiMatchingService(
             .OrderByDescending(g => g.Count())
             .Select(g => (Guid?)g.Key)
             .FirstOrDefault();
+    }
+
+    private Task<string> GenerateUniqueAutoGroupNameAsync(Guid semesterId, int seed, CancellationToken ct)
+    {
+        var suffix = Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+        var name = $"AI Auto Group {seed:00}-{suffix}";
+        return Task.FromResult(name.Length > 64 ? name[..64] : name);
     }
 
     private sealed record StudentCandidate(
