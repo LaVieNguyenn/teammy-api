@@ -39,7 +39,7 @@ public partial class group
 
     public virtual chat_session? chat_session { get; set; }
 
-    public virtual group_member? group_member { get; set; }
+    public virtual ICollection<group_member> group_members { get; set; } = new List<group_member>();
 
     public virtual ICollection<invitation> invitations { get; set; } = new List<invitation>();
 
