@@ -26,15 +26,35 @@ public sealed class SemesterReadOnlyQueries : ISemesterReadOnlyQueries
             .ThenBy(s => s.season)
             .ToListAsync(ct);
 
-        return items.Select(s => new SemesterSummaryDto(
-            s.semester_id,
-            s.season ?? string.Empty,
-            s.year ?? 0,
-            s.start_date ?? default,  
-            s.end_date ?? default,
-            s.is_active,
-            GetPhase(now, s)
-        )).ToList();
+        return items.Select(s =>
+        {
+            SemesterPolicyDto? policy = null;
+            if (s.semester_policy is not null)
+            {
+                var p = s.semester_policy;
+                policy = new SemesterPolicyDto(
+                    p.team_self_select_start,
+                    p.team_self_select_end,
+                    p.team_suggest_start,
+                    p.topic_self_select_start,
+                    p.topic_self_select_end,
+                    p.topic_suggest_start,
+                    p.desired_group_size_min,
+                    p.desired_group_size_max
+                );
+            }
+
+            return new SemesterSummaryDto(
+                s.semester_id,
+                s.season ?? string.Empty,
+                s.year ?? 0,
+                s.start_date ?? default,
+                s.end_date ?? default,
+                s.is_active,
+                GetPhase(now, s),
+                policy
+            );
+        }).ToList();
     }
 
     public async Task<SemesterDetailDto?> GetByIdAsync(Guid semesterId, CancellationToken ct)
@@ -72,6 +92,36 @@ public sealed class SemesterReadOnlyQueries : ISemesterReadOnlyQueries
                 p.desired_group_size_min,
                 p.desired_group_size_max))
             .FirstOrDefaultAsync(ct);
+
+    public async Task<bool> ExistsAsync(string normalizedSeason, int year, Guid? excludeSemesterId, CancellationToken ct)
+    {
+        var season = NormalizeSeason(normalizedSeason);
+        var items = await _db.semesters.AsNoTracking()
+            .Select(s => new
+            {
+                s.semester_id,
+                s.season,
+                s.year,
+                s.start_date,
+                s.end_date
+            })
+            .ToListAsync(ct);
+
+        return items.Any(s =>
+            string.Equals(NormalizeSeason(s.season), season, StringComparison.Ordinal) &&
+            ResolveYear(s.year, s.start_date, s.end_date) == year &&
+            (!excludeSemesterId.HasValue || s.semester_id != excludeSemesterId.Value));
+    }
+
+    public async Task<int> CountByYearAsync(int year, CancellationToken ct)
+    {
+        var items = await _db.semesters.AsNoTracking()
+            .Select(s => new { s.year, s.start_date, s.end_date })
+            .ToListAsync(ct);
+
+        return items.Count(s => ResolveYear(s.year, s.start_date, s.end_date) == year);
+    }
+
     private static SemesterDetailDto MapDetail(DateTime now, semester s)
     {
         SemesterPolicyDto? p = null;
@@ -138,4 +188,14 @@ public sealed class SemesterReadOnlyQueries : ISemesterReadOnlyQueries
     private static DateOnly ToDateOnly(DateTime? dt) =>
         dt.HasValue ? DateOnly.FromDateTime(dt.Value) : default;
 
+    private static string NormalizeSeason(string? season)
+        => string.IsNullOrWhiteSpace(season) ? string.Empty : season.Trim().ToUpperInvariant();
+
+    private static int ResolveYear(int? year, DateOnly? start, DateOnly? end)
+    {
+        if (year.HasValue) return year.Value;
+        if (start.HasValue) return start.Value.Year;
+        if (end.HasValue) return end.Value.Year;
+        return 0;
+    }
 }
