@@ -337,8 +337,8 @@ public partial class AppDbContext : DbContext
             entity.Property(e => e.group_member_id).HasDefaultValueSql("gen_random_uuid()");
             entity.Property(e => e.joined_at).HasDefaultValueSql("now()");
 
-            entity.HasOne(d => d.group).WithOne(p => p.group_member)
-                .HasForeignKey<group_member>(d => d.group_id)
+            entity.HasOne(d => d.group).WithMany(p => p.group_members)
+                .HasForeignKey(d => d.group_id)
                 .HasConstraintName("group_members_group_id_fkey");
 
             entity.HasOne(d => d.semester).WithMany(p => p.group_members)
