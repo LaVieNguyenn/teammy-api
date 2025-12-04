@@ -784,6 +784,8 @@ public sealed class AiMatchingService(
         for (var i = 0; i < pool.Count; i++)
         {
             var candidate = pool[i];
+            if (group.MajorId.HasValue && candidate.Snapshot.MajorId != group.MajorId.Value)
+                continue;
             var score = ScoreCandidateForGroup(candidate.Profile, candidate.Snapshot.MajorId, group, mix);
             if (score > bestScore)
             {
