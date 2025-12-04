@@ -689,6 +689,12 @@ public sealed class AiMatchingService(
                 .OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
+            if (ordered.Count < minSize)
+            {
+                unresolved.AddRange(ordered.Select(s => s.UserId));
+                continue;
+            }
+
             while (ordered.Count > 0)
             {
                 var take = Math.Min(maxSize, ordered.Count);
@@ -705,6 +711,12 @@ public sealed class AiMatchingService(
 
                 var batch = ordered.Take(take).ToList();
                 ordered.RemoveRange(0, take);
+
+                if (ordered.Count > 0 && ordered.Count < minSize)
+                {
+                    unresolved.AddRange(ordered.Select(s => s.UserId));
+                    ordered.Clear();
+                }
 
                 var groupName = await GenerateUniqueAutoGroupNameAsync(semesterCtx.SemesterId, counter, ct);
                 counter++;
