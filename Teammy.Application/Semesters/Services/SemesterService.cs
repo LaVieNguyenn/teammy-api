@@ -124,10 +124,11 @@ public sealed class SemesterService(
     {
         void Check(DateOnly date, string fieldName)
         {
-            if (date < semester.StartDate || date > semester.EndDate)
-                throw new ArgumentException($"{fieldName} must be the semester date range.");
             if (date.Year != semester.Year)
                 throw new ArgumentException($"{fieldName} must be semester year.");
+
+            if (date >= semester.StartDate)
+                throw new ArgumentException($"{fieldName} must be before semester start date.");
         }
 
         Check(req.TeamSelfSelectStart, nameof(req.TeamSelfSelectStart));
