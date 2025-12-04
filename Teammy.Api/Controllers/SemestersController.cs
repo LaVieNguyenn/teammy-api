@@ -29,7 +29,11 @@ public sealed class SemestersController(SemesterService service) : ControllerBas
         }
         catch (ArgumentException ex)
         {
-            return BadRequest(ex.Message);
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
         }
     }
     [HttpPut("{id:guid}")]
@@ -47,7 +51,11 @@ public sealed class SemestersController(SemesterService service) : ControllerBas
         }
         catch (ArgumentException ex)
         {
-            return BadRequest(ex.Message);
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
         }
     }
     [HttpGet]
@@ -101,17 +109,21 @@ public sealed class SemestersController(SemesterService service) : ControllerBas
         }
         catch (ArgumentException ex)
         {
-            return BadRequest(ex.Message);
+            return BadRequest(new { error = ex.Message });
         }
     }
     [HttpPost("{id:guid}/activate")]
-     [Authorize(Roles = "admin")]
-    public async Task<ActionResult> Activate([FromRoute] Guid id, CancellationToken ct)
+    [Authorize(Roles = "admin")]
+    public async Task<ActionResult> Activate(Guid id, CancellationToken ct)
     {
         try
         {
             await service.ActivateAsync(id, ct);
             return NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
         }
         catch (KeyNotFoundException)
         {
