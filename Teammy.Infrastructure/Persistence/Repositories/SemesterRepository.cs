@@ -116,40 +116,7 @@ public sealed class SemesterRepository : ISemesterRepository
         return true;
     }
 
-    public async Task EnsureCurrentStateAsync(CancellationToken ct)
-    {
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        var semesters = await _db.semesters.ToListAsync(ct);
-        var dirty = false;
-
-        var current = FindCurrentSemester(semesters, today);
-        if (current is null)
-        {
-            var guess = GuessSeason(today);
-            current = semesters.FirstOrDefault(s => SameSemester(s, guess.Season, guess.Year));
-            if (current is null)
-            {
-                current = BuildSemester(guess.Season, guess.Year, isActive: false);
-                _db.semesters.Add(current);
-                semesters.Add(current);
-                dirty = true;
-            }
-        }
-
-        if (current is null)
-            return;
-
-        var (season, year, metaChanged) = EnsureMetadata(current, today);
-        dirty |= metaChanged;
-
-        dirty |= EnsureSingleActive(semesters, current);
-        dirty |= EnsureUpcomingSemesters(semesters, season, year);
-
-        if (dirty)
-        {
-            await _db.SaveChangesAsync(ct);
-        }
-    }
+    public Task EnsureCurrentStateAsync(CancellationToken ct) => Task.CompletedTask;
 
     private static semester? FindCurrentSemester(IEnumerable<semester> semesters, DateOnly today)
         => semesters

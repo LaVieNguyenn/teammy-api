@@ -8,4 +8,6 @@ public interface ISemesterReadOnlyQueries
     Task<SemesterDetailDto?> GetByIdAsync(Guid semesterId, CancellationToken ct);
     Task<SemesterDetailDto?> GetActiveAsync(CancellationToken ct);
     Task<SemesterPolicyDto?> GetPolicyAsync(Guid semesterId, CancellationToken ct);
+    Task<bool> ExistsAsync(string normalizedSeason, int year, Guid? excludeSemesterId, CancellationToken ct);
+    Task<int> CountByYearAsync(int year, CancellationToken ct);
 }
