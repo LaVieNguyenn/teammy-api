@@ -9,5 +9,6 @@ public sealed record SemesterSummaryDto(
     DateOnly StartDate,
     DateOnly EndDate,
     bool IsActive,
-    SemesterPhase Phase
+    SemesterPhase Phase,
+    SemesterPolicyDto? Policy
 );
