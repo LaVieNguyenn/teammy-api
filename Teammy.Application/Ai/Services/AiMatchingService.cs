@@ -689,13 +689,14 @@ public sealed class AiMatchingService(
                 counter++;
                 var majorId = majorGroup.Key ?? DetermineGroupMajor(batch, preferredMajorId);
                 var description = $"Nhóm được tạo tự động vào {DateTime.UtcNow:dd/MM/yyyy}.";
+                var targetMaxMembers = Math.Max(semesterCtx.Policy.DesiredGroupSizeMax, semesterCtx.Policy.DesiredGroupSizeMin);
                 var groupId = await groupRepository.CreateGroupAsync(
                     semesterCtx.SemesterId,
                     null,
                     majorId,
                     groupName,
                     description,
-                    batch.Count,
+                    targetMaxMembers,
                     null,
                     ct);
 
