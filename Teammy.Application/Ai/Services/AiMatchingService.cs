@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using Teammy.Application.Ai.Dtos;
 using Teammy.Application.Ai.Models;
 using Teammy.Application.Common.Interfaces;
@@ -658,7 +659,10 @@ public sealed class AiMatchingService(
             return NewGroupCreationResult.Empty;
 
         var minSize = Math.Max(semesterCtx.Policy.DesiredGroupSizeMin, 1);
-        var maxSize = Math.Max(minSize, semesterCtx.Policy.DesiredGroupSizeMax);
+        var policyMax = semesterCtx.Policy.DesiredGroupSizeMax;
+        if (policyMax <= 0)
+            policyMax = minSize;
+        var maxSize = Math.Max(minSize, policyMax);
 
         var groups = new List<AutoResolveNewGroupDto>();
         var assignments = new List<AutoAssignmentRecordDto>();
@@ -681,7 +685,18 @@ public sealed class AiMatchingService(
 
             while (ordered.Count > 0)
             {
-                var take = ordered.Count < minSize ? ordered.Count : Math.Min(maxSize, ordered.Count);
+                var take = Math.Min(maxSize, ordered.Count);
+                var remainingAfterTake = ordered.Count - take;
+                if (remainingAfterTake > 0 && remainingAfterTake < minSize)
+                {
+                    var transferable = Math.Min(take - minSize, minSize - remainingAfterTake);
+                    if (transferable > 0)
+                    {
+                        take -= transferable;
+                        remainingAfterTake += transferable;
+                    }
+                }
+
                 var batch = ordered.Take(take).ToList();
                 ordered.RemoveRange(0, take);
 
@@ -689,15 +704,15 @@ public sealed class AiMatchingService(
                 counter++;
                 var majorId = majorGroup.Key ?? DetermineGroupMajor(batch, preferredMajorId);
                 var description = $"Nhóm được tạo tự động vào {DateTime.UtcNow:dd/MM/yyyy}.";
-                var targetMaxMembers = Math.Max(semesterCtx.Policy.DesiredGroupSizeMax, semesterCtx.Policy.DesiredGroupSizeMin);
+                var skillsJson = BuildGroupSkillsJson(batch);
                 var groupId = await groupRepository.CreateGroupAsync(
                     semesterCtx.SemesterId,
                     null,
                     majorId,
                     groupName,
                     description,
-                    targetMaxMembers,
-                    null,
+                    maxSize,
+                    skillsJson,
                     ct);
 
                 for (var i = 0; i < batch.Count; i++)
@@ -1033,6 +1048,32 @@ public sealed class AiMatchingService(
         }
 
         return enriched;
+    }
+
+    private static string? BuildGroupSkillsJson(IReadOnlyCollection<StudentProfileSnapshot> batch)
+    {
+        if (batch.Count == 0)
+            return null;
+
+        var profiles = batch
+            .Select(BuildSkillProfile)
+            .Where(p => p.HasTags || p.PrimaryRole != AiPrimaryRole.Unknown)
+            .ToList();
+
+        if (profiles.Count == 0)
+            return null;
+
+        var combined = AiSkillProfile.Combine(profiles);
+        if (!combined.HasTags && combined.PrimaryRole == AiPrimaryRole.Unknown)
+            return null;
+
+        var payload = new
+        {
+            primaryRole = AiRoleHelper.ToDisplayString(combined.PrimaryRole),
+            skillTags = combined.Tags
+        };
+
+        return JsonSerializer.Serialize(payload);
     }
 
     private static AiSkillProfile BuildSkillProfile(StudentProfileSnapshot student)
