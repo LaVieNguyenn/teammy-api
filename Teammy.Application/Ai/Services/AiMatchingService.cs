@@ -33,7 +33,6 @@ public sealed class AiMatchingService(
     public async Task<AiSummaryDto> GetSummaryAsync(Guid? semesterId, CancellationToken ct)
     {
         await aiQueries.RefreshStudentsPoolAsync(ct);
-        await aiQueries.RefreshGroupCapacityAsync(ct);
         var semesterCtx = await ResolveSemesterAsync(semesterId, ct);
 
         var groupsWithoutTopic = await aiQueries.CountGroupsWithoutTopicAsync(semesterCtx.SemesterId, ct);
@@ -53,7 +52,6 @@ public sealed class AiMatchingService(
     {
         request ??= new AiOptionRequest(null, AiOptionSection.All, 1, 20);
         await aiQueries.RefreshStudentsPoolAsync(ct);
-        await aiQueries.RefreshGroupCapacityAsync(ct);
         var semesterCtx = await ResolveSemesterAsync(request.SemesterId, ct);
         var (page, pageSize) = NormalizePagination(request.Page, request.PageSize);
 
@@ -289,7 +287,6 @@ public sealed class AiMatchingService(
     {
         request ??= new AutoAssignTeamsRequest(null, null);
         await aiQueries.RefreshStudentsPoolAsync(ct);
-        await aiQueries.RefreshGroupCapacityAsync(ct);
         var semesterCtx = await ResolveSemesterAsync(null, ct);
         var phase = await AssignStudentsToGroupsAsync(semesterCtx.SemesterId, request.MajorId, request.Limit, ct);
         var majorLookup = (await majorQueries.ListAsync(ct)).ToDictionary(x => x.MajorId, x => x.MajorName);
@@ -341,7 +338,6 @@ public sealed class AiMatchingService(
     {
         request ??= new AiAutoResolveRequest(null, null);
         await aiQueries.RefreshStudentsPoolAsync(ct);
-        await aiQueries.RefreshGroupCapacityAsync(ct);
         var semesterCtx = await ResolveSemesterAsync(request.SemesterId, ct);
 
         var studentPhase = await AssignStudentsToGroupsAsync(semesterCtx.SemesterId, request.MajorId, null, ct);
@@ -1098,11 +1094,8 @@ public sealed class AiMatchingService(
         return JsonSerializer.Serialize(payload);
     }
 
-    private async Task RefreshAssignmentCachesAsync(CancellationToken ct)
-    {
-        await aiQueries.RefreshStudentsPoolAsync(ct);
-        await aiQueries.RefreshGroupCapacityAsync(ct);
-    }
+    private Task RefreshAssignmentCachesAsync(CancellationToken ct)
+        => aiQueries.RefreshStudentsPoolAsync(ct);
 
     private static AiSkillProfile BuildSkillProfile(StudentProfileSnapshot student)
     {
