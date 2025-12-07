@@ -71,11 +71,23 @@ public sealed record AutoAssignmentRecordDto(
     string SuggestedRole
 );
 
+public sealed record StudentAssignmentIssueDto(
+    Guid StudentId,
+    string Reason
+);
+
+public sealed record GroupAssignmentIssueDto(
+    Guid GroupId,
+    string Reason
+);
+
 public sealed record AutoAssignTeamsResultDto(
     int AssignedCount,
     IReadOnlyList<AutoAssignmentRecordDto> Assignments,
     IReadOnlyList<Guid> UnassignedStudentIds,
+    IReadOnlyList<StudentAssignmentIssueDto> UnassignedStudents,
     IReadOnlyList<Guid> GroupsStillOpen,
+    IReadOnlyList<GroupAssignmentIssueDto> GroupIssues,
     int NewGroupsCreated,
     IReadOnlyList<AutoResolveNewGroupDto> NewGroups
 );

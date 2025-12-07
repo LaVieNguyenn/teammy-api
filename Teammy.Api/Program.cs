@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using System.Linq;
 using System.Text;
+using Microsoft.Extensions.Configuration.Json;
 using Teammy.Application.Auth.Queries;
 using Teammy.Application.Auth.Services;
 using Teammy.Api.Hubs;
@@ -13,6 +15,10 @@ using Teammy.Application.Common.Interfaces;
 using Teammy.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Render's free tier limits inotify watchers; disable config file hot reload to avoid hitting the limit.
+foreach (var jsonSource in builder.Configuration.Sources.OfType<JsonConfigurationSource>())
+    jsonSource.ReloadOnChange = false;
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();

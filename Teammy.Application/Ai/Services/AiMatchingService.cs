@@ -300,8 +300,10 @@ public sealed class AiMatchingService(
         return new AutoAssignTeamsResultDto(
             combinedAssignments.Count,
             combinedAssignments,
-            newGroups.UnresolvedStudentIds,
+            newGroups.UnresolvedStudents.Select(x => x.StudentId).ToList(),
+            newGroups.UnresolvedStudents,
             phase.OpenGroupIds,
+            phase.GroupIssues,
             newGroups.Groups.Count,
             newGroups.Groups);
     }
@@ -363,8 +365,10 @@ public sealed class AiMatchingService(
             combinedAssignments,
             combinedTopicAssignments,
             skippedTopics,
+            studentPhase.GroupIssues,
             newGroupsPhase.Groups,
-            newGroupsPhase.UnresolvedStudentIds);
+            newGroupsPhase.UnresolvedStudents.Select(x => x.StudentId).ToList(),
+            newGroupsPhase.UnresolvedStudents);
     }
 
     private async Task<StudentAssignmentPhaseResult> AssignStudentsToGroupsAsync(
@@ -375,14 +379,16 @@ public sealed class AiMatchingService(
     {
         var students = await aiQueries.ListUnassignedStudentsAsync(semesterId, majorId, ct);
         if (students.Count == 0)
-            return new StudentAssignmentPhaseResult(Array.Empty<AutoAssignmentRecordDto>(), Array.Empty<StudentProfileSnapshot>(), Array.Empty<Guid>());
+            return new StudentAssignmentPhaseResult(Array.Empty<AutoAssignmentRecordDto>(), Array.Empty<StudentProfileSnapshot>(), Array.Empty<Guid>(), Array.Empty<GroupAssignmentIssueDto>());
 
         var groups = await aiQueries.ListGroupCapacitiesAsync(semesterId, majorId, ct);
         if (groups.Count == 0)
-            return new StudentAssignmentPhaseResult(Array.Empty<AutoAssignmentRecordDto>(), students, Array.Empty<Guid>());
+            return new StudentAssignmentPhaseResult(Array.Empty<AutoAssignmentRecordDto>(), students, Array.Empty<Guid>(), Array.Empty<GroupAssignmentIssueDto>());
 
         var mixes = await aiQueries.GetGroupRoleMixAsync(groups.Select(g => g.GroupId), ct);
-        var limit = requestLimit.HasValue && requestLimit.Value > 0 ? requestLimit.Value : int.MaxValue;
+        var limitConfigured = requestLimit.HasValue && requestLimit.Value > 0;
+        var limitRemaining = limitConfigured ? requestLimit!.Value : int.MaxValue;
+        var limitHit = false;
 
         var studentsByMajor = students
             .GroupBy(s => s.MajorId)
@@ -407,7 +413,7 @@ public sealed class AiMatchingService(
 
             foreach (var groupState in groupStates)
             {
-                while (groupState.RemainingSlots > 0 && limit > 0)
+                while (groupState.RemainingSlots > 0 && limitRemaining > 0)
                 {
                     var candidate = pools.DequeueForGroup(groupState);
                     if (candidate is null)
@@ -422,7 +428,9 @@ public sealed class AiMatchingService(
                         AiRoleHelper.ToDisplayString(candidate.Role)));
 
                     groupState.Apply(candidate.Role);
-                    limit--;
+                    limitRemaining--;
+                    if (limitConfigured && limitRemaining == 0)
+                        limitHit = true;
                 }
             }
         }
@@ -434,14 +442,28 @@ public sealed class AiMatchingService(
         var remainingSet = new HashSet<Guid>(remainingIds);
         var remainingSnapshots = students.Where(s => remainingSet.Contains(s.UserId)).ToList();
 
-        var openGroups = groupsByMajor.Values
+        var openStates = groupsByMajor.Values
             .SelectMany(g => g)
             .Where(state => state.RemainingSlots > 0)
+            .ToList();
+
+        var openGroups = openStates
             .Select(state => state.GroupId)
             .Distinct()
             .ToList();
 
-        return new StudentAssignmentPhaseResult(assignments, remainingSnapshots, openGroups);
+        var groupIssues = new List<GroupAssignmentIssueDto>(openStates.Count);
+        foreach (var state in openStates)
+        {
+            RolePools? pools = null;
+            if (state.MajorId.HasValue)
+                studentsByMajor.TryGetValue(state.MajorId.Value, out pools);
+
+            var reason = BuildGroupIssueReason(state, pools, limitConfigured, limitHit, requestLimit);
+            groupIssues.Add(new GroupAssignmentIssueDto(state.GroupId, reason));
+        }
+
+        return new StudentAssignmentPhaseResult(assignments, remainingSnapshots, openGroups, groupIssues);
     }
 
     private async Task<TopicAssignmentPhaseResult> AssignTopicsForEligibleGroupsAsync(
@@ -674,7 +696,7 @@ public sealed class AiMatchingService(
         var assignments = new List<AutoAssignmentRecordDto>();
         var topicAssignments = new List<AutoAssignTopicResultDto>();
         var topicFailures = new List<Guid>();
-        var unresolved = new List<Guid>();
+        var unresolved = new List<StudentAssignmentIssueDto>();
         var counter = 1;
 
         var groupedByMajor = remainingStudents
@@ -740,6 +762,17 @@ public sealed class AiMatchingService(
                 batch.Select(s => s.UserId).ToList()));
         }
 
+        void MarkUnresolved(IEnumerable<StudentProfileSnapshot> students, Guid? majorId, string context)
+        {
+            var list = students.ToList();
+            if (list.Count == 0)
+                return;
+
+            var majorName = GetMajorName(majorId, majorLookup) ?? "Chưa xác định";
+            var reason = $"{context}. Cần tối thiểu {minSize} thành viên nhưng chỉ còn {list.Count} sinh viên chuyên ngành {majorName}.";
+            unresolved.AddRange(list.Select(s => new StudentAssignmentIssueDto(s.UserId, reason)));
+        }
+
         foreach (var majorGroup in groupedByMajor)
         {
             var ordered = majorGroup
@@ -767,7 +800,7 @@ public sealed class AiMatchingService(
             }
 
             if (ordered.Count > 0)
-                unresolved.AddRange(ordered.Select(s => s.UserId));
+                MarkUnresolved(ordered, majorGroup.Key, "Không đủ sinh viên để tạo nhóm tự động");
         }
 
         return new NewGroupCreationResult(groups, assignments, topicAssignments, topicFailures, unresolved);
@@ -829,6 +862,36 @@ public sealed class AiMatchingService(
 
         reasons.Add($"Điểm AI {score}");
         return string.Join(" | ", reasons);
+    }
+
+    private static string BuildGroupIssueReason(
+        GroupAssignmentState state,
+        RolePools? pools,
+        bool limitConfigured,
+        bool limitHit,
+        int? originalLimit)
+    {
+        var remainingCandidates = pools?.RemainingCount ?? 0;
+        var hasRemainingCandidates = remainingCandidates > 0;
+
+        if (limitConfigured && limitHit && hasRemainingCandidates)
+        {
+            if (originalLimit.HasValue && originalLimit.Value > 0)
+                return $"Đã đạt giới hạn {originalLimit.Value} lượt auto assign trong lần chạy này, nhóm vẫn thiếu {state.RemainingSlots} thành viên.";
+            return "Đã đạt giới hạn auto assign trong lần chạy này nên chưa lấp đủ thành viên.";
+        }
+
+        if (!hasRemainingCandidates)
+            return $"Không còn sinh viên chưa có nhóm trong chuyên ngành này. Nhóm vẫn thiếu {state.RemainingSlots} thành viên.";
+
+        if (!state.HasBackend && !(pools?.HasBackendCandidates ?? false))
+            return "Không còn sinh viên Backend phù hợp để bổ sung cho nhóm.";
+        if (!state.HasFrontend && !(pools?.HasFrontendCandidates ?? false))
+            return "Không còn sinh viên Frontend phù hợp để bổ sung cho nhóm.";
+        if (!(pools?.HasOtherCandidates ?? false))
+            return "Không còn sinh viên phù hợp với vai trò hỗ trợ/khác để bổ sung cho nhóm.";
+
+        return "Các sinh viên còn lại không đáp ứng vai trò mà nhóm đang cần.";
     }
 
     private static string? DescribeRoleNeed(AiPrimaryRole role, GroupRoleMixSnapshot mix)
@@ -932,7 +995,8 @@ public sealed class AiMatchingService(
     private sealed record StudentAssignmentPhaseResult(
         IReadOnlyList<AutoAssignmentRecordDto> Assignments,
         IReadOnlyList<StudentProfileSnapshot> RemainingStudents,
-        IReadOnlyList<Guid> OpenGroupIds);
+        IReadOnlyList<Guid> OpenGroupIds,
+        IReadOnlyList<GroupAssignmentIssueDto> GroupIssues);
 
     private sealed record TopicAssignmentPhaseResult(
         IReadOnlyList<AutoAssignTopicResultDto> Assignments,
@@ -943,14 +1007,14 @@ public sealed class AiMatchingService(
         IReadOnlyList<AutoAssignmentRecordDto> Assignments,
         IReadOnlyList<AutoAssignTopicResultDto> TopicAssignments,
         IReadOnlyList<Guid> TopicFailures,
-        IReadOnlyList<Guid> UnresolvedStudentIds)
+        IReadOnlyList<StudentAssignmentIssueDto> UnresolvedStudents)
     {
         public static NewGroupCreationResult Empty { get; } = new(
             Array.Empty<AutoResolveNewGroupDto>(),
             Array.Empty<AutoAssignmentRecordDto>(),
             Array.Empty<AutoAssignTopicResultDto>(),
             Array.Empty<Guid>(),
-            Array.Empty<Guid>());
+            Array.Empty<StudentAssignmentIssueDto>());
     }
 
     private async Task<AutoAssignTopicResultDto?> AssignTopicToGroupAsync(
@@ -1359,6 +1423,11 @@ public sealed class AiMatchingService(
                 }
             }
         }
+
+        public int RemainingCount => _frontend.Count + _backend.Count + _others.Count;
+        public bool HasFrontendCandidates => _frontend.Count > 0;
+        public bool HasBackendCandidates => _backend.Count > 0;
+        public bool HasOtherCandidates => _others.Count > 0;
 
         public CandidateSelection? DequeueForGroup(GroupAssignmentState group)
         {
