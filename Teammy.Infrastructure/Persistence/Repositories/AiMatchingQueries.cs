@@ -55,7 +55,6 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
                 on g.group_id equals gm.group_id into gmJoin
             let currentMembers = gmJoin.Count()
             let remainingSlots = g.max_members - currentMembers
-            where remainingSlots > 0
             select new
             {
                 g.group_id,
@@ -81,7 +80,7 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
                 r.description,
                 r.max_members,
                 r.CurrentMembers,
-                r.RemainingSlots))
+                r.RemainingSlots < 0 ? 0 : r.RemainingSlots))
             .ToList();
     }
 
