@@ -105,8 +105,10 @@ public sealed record AiAutoResolveResultDto(
     IReadOnlyList<AutoAssignmentRecordDto> StudentAssignments,
     IReadOnlyList<AutoAssignTopicResultDto> TopicAssignments,
     IReadOnlyList<Guid> TopicSkippedGroupIds,
+    IReadOnlyList<GroupAssignmentIssueDto> GroupAssignmentIssues,
     IReadOnlyList<AutoResolveNewGroupDto> NewGroups,
-    IReadOnlyList<Guid> UnresolvedStudentIds
+    IReadOnlyList<Guid> UnresolvedStudentIds,
+    IReadOnlyList<StudentAssignmentIssueDto> UnresolvedStudents
 );
 
 public sealed record AutoResolveNewGroupDto(
