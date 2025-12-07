@@ -285,10 +285,10 @@ public sealed class AiMatchingService(
 
     public async Task<AutoAssignTeamsResultDto> AutoAssignTeamsAsync(Guid currentUserId, AutoAssignTeamsRequest? request, CancellationToken ct)
     {
-        request ??= new AutoAssignTeamsRequest(null, null);
+        request ??= new AutoAssignTeamsRequest(null, null, null);
         await aiQueries.RefreshStudentsPoolAsync(ct);
-        var semesterCtx = await ResolveSemesterAsync(null, ct);
-        var phase = await AssignStudentsToGroupsAsync(semesterCtx.SemesterId, request.MajorId, request.Limit, ct);
+        var semesterCtx = await ResolveSemesterAsync(request.SemesterId, ct);
+        var phase = await AssignStudentsToGroupsAsync(semesterCtx, request.MajorId, request.Limit, ct);
         var majorLookup = (await majorQueries.ListAsync(ct)).ToDictionary(x => x.MajorId, x => x.MajorName);
         var newGroups = await CreateNewGroupsForStudentsAsync(phase.RemainingStudents, semesterCtx, currentUserId, request.MajorId, majorLookup, ct);
 
@@ -342,7 +342,7 @@ public sealed class AiMatchingService(
         await aiQueries.RefreshStudentsPoolAsync(ct);
         var semesterCtx = await ResolveSemesterAsync(request.SemesterId, ct);
 
-        var studentPhase = await AssignStudentsToGroupsAsync(semesterCtx.SemesterId, request.MajorId, null, ct);
+        var studentPhase = await AssignStudentsToGroupsAsync(semesterCtx, request.MajorId, null, ct);
         var topicPhase = await AssignTopicsForEligibleGroupsAsync(semesterCtx.SemesterId, request.MajorId, currentUserId, null, ct);
         var majorLookup = (await majorQueries.ListAsync(ct)).ToDictionary(x => x.MajorId, x => x.MajorName);
         var newGroupsPhase = await CreateNewGroupsForStudentsAsync(studentPhase.RemainingStudents, semesterCtx, currentUserId, request.MajorId, majorLookup, ct);
@@ -372,16 +372,16 @@ public sealed class AiMatchingService(
     }
 
     private async Task<StudentAssignmentPhaseResult> AssignStudentsToGroupsAsync(
-        Guid semesterId,
+        SemesterContext semesterCtx,
         Guid? majorId,
         int? requestLimit,
         CancellationToken ct)
     {
-        var students = await aiQueries.ListUnassignedStudentsAsync(semesterId, majorId, ct);
+        var students = await aiQueries.ListUnassignedStudentsAsync(semesterCtx.SemesterId, majorId, ct);
         if (students.Count == 0)
             return new StudentAssignmentPhaseResult(Array.Empty<AutoAssignmentRecordDto>(), Array.Empty<StudentProfileSnapshot>(), Array.Empty<Guid>(), Array.Empty<GroupAssignmentIssueDto>());
 
-        var groups = await aiQueries.ListGroupCapacitiesAsync(semesterId, majorId, ct);
+        var groups = await aiQueries.ListGroupCapacitiesAsync(semesterCtx.SemesterId, majorId, ct);
         if (groups.Count == 0)
             return new StudentAssignmentPhaseResult(Array.Empty<AutoAssignmentRecordDto>(), students, Array.Empty<Guid>(), Array.Empty<GroupAssignmentIssueDto>());
 
@@ -389,6 +389,9 @@ public sealed class AiMatchingService(
         var limitConfigured = requestLimit.HasValue && requestLimit.Value > 0;
         var limitRemaining = limitConfigured ? requestLimit!.Value : int.MaxValue;
         var limitHit = false;
+        var policyMaxSize = Math.Max(semesterCtx.Policy.DesiredGroupSizeMax, semesterCtx.Policy.DesiredGroupSizeMin);
+        if (policyMaxSize <= 0)
+            policyMaxSize = Math.Max(semesterCtx.Policy.DesiredGroupSizeMin, 1);
 
         var studentsByMajor = students
             .GroupBy(s => s.MajorId)
@@ -413,8 +416,23 @@ public sealed class AiMatchingService(
 
             foreach (var groupState in groupStates)
             {
-                while (groupState.RemainingSlots > 0 && limitRemaining > 0)
+                while (limitRemaining > 0)
                 {
+                    if (groupState.RemainingSlots == 0)
+                    {
+                        var available = pools.RemainingCount;
+                        if (available == 0)
+                            break;
+
+                        var slotsNeeded = Math.Min(limitRemaining, available);
+                        if (slotsNeeded <= 0)
+                            break;
+
+                        var policyCap = Math.Max(policyMaxSize, groupState.MaxMembers);
+                        if (!groupState.TryExpand(policyCap, slotsNeeded))
+                            break;
+                    }
+
                     var candidate = pools.DequeueForGroup(groupState);
                     if (candidate is null)
                         break;
@@ -459,8 +477,18 @@ public sealed class AiMatchingService(
             if (state.MajorId.HasValue)
                 studentsByMajor.TryGetValue(state.MajorId.Value, out pools);
 
-            var reason = BuildGroupIssueReason(state, pools, limitConfigured, limitHit, requestLimit);
+            var reason = BuildGroupIssueReason(state, pools, limitConfigured, limitHit, requestLimit, Math.Max(policyMaxSize, state.MaxMembers));
             groupIssues.Add(new GroupAssignmentIssueDto(state.GroupId, reason));
+        }
+
+        var expandedStates = groupsByMajor.Values
+            .SelectMany(g => g)
+            .Where(state => state.AddedCapacity > 0)
+            .ToList();
+
+        foreach (var state in expandedStates)
+        {
+            await groupRepository.UpdateGroupAsync(state.GroupId, null, null, state.MaxMembers, null, null, null, null, ct);
         }
 
         return new StudentAssignmentPhaseResult(assignments, remainingSnapshots, openGroups, groupIssues);
@@ -869,7 +897,8 @@ public sealed class AiMatchingService(
         RolePools? pools,
         bool limitConfigured,
         bool limitHit,
-        int? originalLimit)
+        int? originalLimit,
+        int policyMax)
     {
         var remainingCandidates = pools?.RemainingCount ?? 0;
         var hasRemainingCandidates = remainingCandidates > 0;
@@ -880,6 +909,9 @@ public sealed class AiMatchingService(
                 return $"Đã đạt giới hạn {originalLimit.Value} lượt auto assign trong lần chạy này, nhóm vẫn thiếu {state.RemainingSlots} thành viên.";
             return "Đã đạt giới hạn auto assign trong lần chạy này nên chưa lấp đủ thành viên.";
         }
+
+            if (hasRemainingCandidates && state.MaxMembers >= policyMax && policyMax > 0)
+                return $"Nhóm đã chạm giới hạn tối đa {policyMax} thành viên theo policy nên không thể nhận thêm thành viên.";
 
         if (!hasRemainingCandidates)
             return $"Không còn sinh viên chưa có nhóm trong chuyên ngành này. Nhóm vẫn thiếu {state.RemainingSlots} thành viên.";
@@ -1431,16 +1463,18 @@ public sealed class AiMatchingService(
 
         public CandidateSelection? DequeueForGroup(GroupAssignmentState group)
         {
-            if (!group.HasFrontend)
-            {
-                var pick = Dequeue(AiPrimaryRole.Frontend);
-                return pick;
-            }
+            AiPrimaryRole? priorityRole = null;
 
-            if (!group.HasBackend)
+            if (!group.HasFrontend)
+                priorityRole = AiPrimaryRole.Frontend;
+            else if (!group.HasBackend)
+                priorityRole = AiPrimaryRole.Backend;
+
+            if (priorityRole.HasValue)
             {
-                var pick = Dequeue(AiPrimaryRole.Backend);
-                return pick;
+                var pick = Dequeue(priorityRole.Value);
+                if (pick is not null)
+                    return pick;
             }
 
             return DequeueLargest();
@@ -1483,6 +1517,7 @@ public sealed class AiMatchingService(
             MajorId = source.MajorId;
             Name = source.Name;
             RemainingSlots = source.RemainingSlots;
+            MaxMembers = source.MaxMembers;
             _mix = mix;
         }
 
@@ -1491,8 +1526,28 @@ public sealed class AiMatchingService(
         public Guid? MajorId { get; }
         public string Name { get; }
         public int RemainingSlots { get; private set; }
+        public int MaxMembers { get; private set; }
+        public int AddedCapacity { get; private set; }
         public bool HasFrontend => _mix.FrontendCount > 0;
         public bool HasBackend => _mix.BackendCount > 0;
+
+        public bool TryExpand(int policyMax, int desiredSlots)
+        {
+            if (desiredSlots <= 0)
+                return false;
+
+            if (policyMax <= MaxMembers)
+                return false;
+
+            var slots = Math.Min(policyMax - MaxMembers, desiredSlots);
+            if (slots <= 0)
+                return false;
+
+            MaxMembers += slots;
+            RemainingSlots += slots;
+            AddedCapacity += slots;
+            return true;
+        }
 
         public void Apply(AiPrimaryRole role)
         {
