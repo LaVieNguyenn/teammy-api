@@ -807,22 +807,15 @@ public sealed class AiMatchingService(
                 .OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            while (ordered.Count >= minSize)
+            var partitions = PlanNewGroupSizes(ordered.Count, minSize, maxSize);
+            foreach (var take in partitions)
             {
-                var take = Math.Min(maxSize, ordered.Count);
-                var remainingAfterTake = ordered.Count - take;
-                if (remainingAfterTake > 0 && remainingAfterTake < minSize)
-                {
-                    var transferable = Math.Min(take - minSize, minSize - remainingAfterTake);
-                    if (transferable > 0)
-                    {
-                        take -= transferable;
-                        remainingAfterTake += transferable;
-                    }
-                }
+                if (ordered.Count == 0)
+                    break;
 
-                var batch = ordered.Take(take).ToList();
-                ordered.RemoveRange(0, take);
+                var size = Math.Min(take, ordered.Count);
+                var batch = ordered.Take(size).ToList();
+                ordered.RemoveRange(0, size);
 
                 await CreateGroupFromBatchAsync(batch, majorGroup.Key);
             }
@@ -1010,6 +1003,59 @@ public sealed class AiMatchingService(
             .OrderByDescending(g => g.Count())
             .Select(g => (Guid?)g.Key)
             .FirstOrDefault();
+    }
+
+    private static IReadOnlyList<int> PlanNewGroupSizes(int totalStudents, int minSize, int maxSize)
+    {
+        if (totalStudents <= 0)
+            return Array.Empty<int>();
+
+        var normalizedMin = Math.Max(1, minSize);
+        var normalizedMax = Math.Max(normalizedMin, maxSize);
+
+        var minGroupCount = Math.Max(1, (int)Math.Ceiling(totalStudents / (double)normalizedMax));
+        var rawMaxGroupCount = (int)Math.Floor(totalStudents / (double)normalizedMin);
+        var respectsMinConstraint = rawMaxGroupCount >= minGroupCount && rawMaxGroupCount > 0;
+        var groupCount = Math.Max(1, minGroupCount);
+
+        var baseSize = totalStudents / groupCount;
+        var remainder = totalStudents % groupCount;
+        var plan = new List<int>(groupCount);
+
+        for (var i = 0; i < groupCount; i++)
+        {
+            var size = baseSize + (i < remainder ? 1 : 0);
+            if (size <= 0)
+                size = 1;
+            plan.Add(size);
+        }
+
+        if (respectsMinConstraint)
+        {
+            for (var i = plan.Count - 1; i >= 0; i--)
+            {
+                if (plan[i] >= normalizedMin)
+                    continue;
+
+                var deficit = normalizedMin - plan[i];
+                for (var donor = 0; donor < plan.Count && deficit > 0; donor++)
+                {
+                    if (donor == i)
+                        continue;
+
+                    var transferable = plan[donor] - normalizedMin;
+                    if (transferable <= 0)
+                        continue;
+
+                    var delta = Math.Min(deficit, transferable);
+                    plan[donor] -= delta;
+                    plan[i] += delta;
+                    deficit -= delta;
+                }
+            }
+        }
+
+        return plan;
     }
 
     private Task<string> GenerateUniqueAutoGroupNameAsync(Guid semesterId, int seed, CancellationToken ct)
@@ -1505,6 +1551,15 @@ public sealed class AiMatchingService(
                 .Concat(_backend.Select(s => s.UserId))
                 .Concat(_others.Select(s => s.UserId));
     }
+            var dtoIndex = groups.Count - 1;
+            currentBuildStates?.Add(new NewGroupBuildState(
+                groupId,
+                groupName,
+                majorId,
+                GetMajorName(majorId, majorLookup),
+                batch.Select(s => s.UserId).ToList(),
+                maxSize,
+                dtoIndex));
 
     private sealed class GroupAssignmentState
     {
@@ -1521,11 +1576,14 @@ public sealed class AiMatchingService(
             _mix = mix;
         }
 
-        public Guid GroupId { get; }
+                await CreateGroupFromBatchAsync(ordered.Take(take).ToList(), majorGroup.Key);
         public Guid SemesterId { get; }
         public Guid? MajorId { get; }
-        public string Name { get; }
-        public int RemainingSlots { get; private set; }
+            if (createdStates.Count > 0 && ordered.Count > 0)
+                await FillRemainderIntoNewGroupsAsync(ordered, createdStates, semesterCtx, assignments, groups, ct);
+
+            if (ordered.Count > 0)
+                MarkUnresolved(ordered, majorGroup.Key, "Không đủ sinh viên để tạo nhóm tự động", majorLookup);
         public int MaxMembers { get; private set; }
         public int AddedCapacity { get; private set; }
         public bool HasFrontend => _mix.FrontendCount > 0;
