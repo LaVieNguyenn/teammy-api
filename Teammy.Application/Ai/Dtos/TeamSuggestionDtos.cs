@@ -61,7 +61,13 @@ public sealed record AutoAssignTopicResultDto(
 public sealed record AutoAssignTopicBatchResultDto(
     int AssignedCount,
     IReadOnlyList<AutoAssignTopicResultDto> Assignments,
-    IReadOnlyList<Guid> SkippedGroupIds
+    IReadOnlyList<Guid> SkippedGroupIds,
+    IReadOnlyList<TopicAssignmentIssueDto> Issues
+);
+
+public sealed record TopicAssignmentIssueDto(
+    Guid GroupId,
+    string Reason
 );
 
 public sealed record AutoAssignmentRecordDto(
