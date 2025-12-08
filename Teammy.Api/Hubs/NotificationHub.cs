@@ -6,5 +6,10 @@ namespace Teammy.Api.Hubs;
 [Authorize]
 public sealed class NotificationHub : Hub
 {
-    // Clients connect only to receive server-pushed notifications.
+    public Task JoinAdminFeed()
+    {
+        if (Context.User?.IsInRole("admin") != true)
+            throw new HubException("not_admin");
+        return Groups.AddToGroupAsync(Context.ConnectionId, ActivityLogNotifier.AdminGroupName);
+    }
 }

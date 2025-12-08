@@ -473,7 +473,28 @@ CREATE TABLE IF NOT EXISTS teammy.messages (
 CREATE INDEX IF NOT EXISTS ix_messages_session_created
   ON teammy.messages(chat_session_id, created_at DESC);
 
--- ========== 8) Announcements & Reports ==========
+-- ========== 8) Activity Logs ==========
+CREATE TABLE IF NOT EXISTS teammy.activity_logs (
+  activity_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  group_id       UUID REFERENCES teammy.groups(group_id) ON DELETE CASCADE,
+  entity_type    TEXT NOT NULL,
+  entity_id      UUID,
+  action         TEXT NOT NULL,
+  actor_id       UUID NOT NULL REFERENCES teammy.users(user_id) ON DELETE CASCADE,
+  target_user_id UUID REFERENCES teammy.users(user_id) ON DELETE CASCADE,
+  message        TEXT,
+  metadata       JSONB,
+  status         TEXT NOT NULL DEFAULT 'success',
+  platform       TEXT,
+  severity       TEXT NOT NULL DEFAULT 'info',
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_activity_logs_group
+  ON teammy.activity_logs(group_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_activity_logs_actor
+  ON teammy.activity_logs(actor_id, created_at DESC);
+
+-- ========== 9) Announcements & Reports ==========
 CREATE TABLE IF NOT EXISTS teammy.announcements (
   announcement_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   semester_id     UUID REFERENCES teammy.semesters(semester_id) ON DELETE SET NULL,
@@ -503,7 +524,7 @@ CREATE TABLE IF NOT EXISTS teammy.user_reports (
 CREATE INDEX IF NOT EXISTS ix_reports_status ON teammy.user_reports(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS ix_reports_target ON teammy.user_reports(target_type, target_id);
 
--- ========== 9) Skill dictionary (optional) ==========
+-- ========== 10) Skill dictionary (optional) ==========
 CREATE TABLE IF NOT EXISTS teammy.skill_dictionary (
   token CITEXT PRIMARY KEY,
   role  TEXT NOT NULL,
@@ -515,7 +536,7 @@ CREATE TABLE IF NOT EXISTS teammy.skill_aliases (
   token CITEXT NOT NULL REFERENCES teammy.skill_dictionary(token)
 );
 
--- ========== 10) Views / Materialized Views (Fixed) ==========
+-- ========== 11) Views / Materialized Views (Fixed) ==========
 
 -- Groups without topic (ADD description to fix g.description error)
 CREATE OR REPLACE VIEW teammy.vw_groups_without_topic AS

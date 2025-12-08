@@ -1,5 +1,7 @@
 using System.Linq;
 using System.Text.Json;
+using Teammy.Application.Activity.Dtos;
+using Teammy.Application.Activity.Services;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Groups.Dtos;
 
@@ -9,10 +11,12 @@ public sealed class GroupService(
     IGroupRepository repo,
     IGroupReadOnlyQueries queries,
     IUserReadOnlyQueries userQueries,
-    IRecruitmentPostRepository postRepo)
+    IRecruitmentPostRepository postRepo,
+    ActivityLogService activityLogService)
 {
     private readonly IUserReadOnlyQueries _userQueries = userQueries;
     private readonly IRecruitmentPostRepository _postRepo = postRepo;
+    private readonly ActivityLogService _activityLog = activityLogService;
 
     public async Task<Guid> CreateGroupAsync(Guid creatorUserId, CreateGroupRequest req, CancellationToken ct)
     {
@@ -42,6 +46,13 @@ public sealed class GroupService(
         var groupId = await repo.CreateGroupAsync(semesterId, null, majorId, req.Name, req.Description, req.MaxMembers, skillsJson, ct);
         await repo.AddMembershipAsync(groupId, creatorUserId, semesterId, "leader", ct);
         await _postRepo.DeleteProfilePostsForUserAsync(creatorUserId, semesterId, ct);
+        await LogAsync(new ActivityLogCreateRequest(creatorUserId, "group", "GROUP_CREATED")
+        {
+            GroupId = groupId,
+            EntityId = groupId,
+            Message = $"{creator.DisplayName ?? creator.Email ?? "Leader"} created group {req.Name}",
+            Metadata = new { req.Name, req.MaxMembers }
+        }, ct);
         return groupId;
     }
 
@@ -68,6 +79,14 @@ public sealed class GroupService(
         var ok = await repo.LeaveGroupAsync(groupId, userId, ct);
         if (!ok)
             throw new InvalidOperationException("Not a member of this group");
+
+        await LogAsync(new ActivityLogCreateRequest(userId, "group", "GROUP_MEMBER_LEFT")
+        {
+            GroupId = groupId,
+            EntityId = groupId,
+            TargetUserId = userId,
+            Message = $"User {userId} left group"
+        }, ct);
     }
 
 
@@ -86,6 +105,14 @@ public sealed class GroupService(
             throw new InvalidOperationException("User already has active/pending membership in this semester");
 
         await repo.AddMembershipAsync(groupId, inviteeUserId, detail.SemesterId, "pending", ct);
+        await LogAsync(new ActivityLogCreateRequest(currentUserId, "group", "GROUP_MEMBER_INVITED")
+        {
+            GroupId = groupId,
+            EntityId = groupId,
+            TargetUserId = inviteeUserId,
+            Message = $"Leader invited user {inviteeUserId}",
+            Metadata = new { inviteeUserId }
+        }, ct);
     }
 
     public Task<IReadOnlyList<MyGroupDto>> ListMyGroupsAsync(Guid currentUserId, Guid? semesterId, CancellationToken ct)
@@ -106,6 +133,13 @@ public sealed class GroupService(
         var isLeader = await queries.IsLeaderAsync(groupId, currentUserId, ct);
         if (!isLeader) throw new UnauthorizedAccessException("Leader only");
         await repo.TransferLeadershipAsync(groupId, currentUserId, newLeaderUserId, ct);
+        await LogAsync(new ActivityLogCreateRequest(currentUserId, "group", "GROUP_LEADER_CHANGED")
+        {
+            GroupId = groupId,
+            EntityId = groupId,
+            TargetUserId = newLeaderUserId,
+            Metadata = new { previousLeaderId = currentUserId, newLeaderId = newLeaderUserId }
+        }, ct);
     }
 
     public Task<UserGroupCheckDto> CheckUserGroupAsync(Guid targetUserId, Guid? semesterId, bool includePending, CancellationToken ct)
@@ -155,6 +189,13 @@ public sealed class GroupService(
 
         var ok = await repo.LeaveGroupAsync(groupId, targetUserId, ct);
         if (!ok) throw new KeyNotFoundException("Member not found");
+        await LogAsync(new ActivityLogCreateRequest(leaderUserId, "group", "GROUP_MEMBER_REMOVED")
+        {
+            GroupId = groupId,
+            EntityId = groupId,
+            TargetUserId = targetUserId,
+            Message = $"Leader removed user {targetUserId}"
+        }, ct);
     }
 
     public async Task<IReadOnlyList<GroupMemberRoleDto>> ListMemberRolesAsync(Guid groupId, Guid currentUserId, Guid memberUserId, CancellationToken ct)
@@ -193,6 +234,9 @@ public sealed class GroupService(
 
         await repo.ReplaceMemberRolesAsync(groupId, memberUserId, currentUserId, roles, ct);
     }
+
+    private Task LogAsync(ActivityLogCreateRequest request, CancellationToken ct)
+        => _activityLog.LogAsync(request, ct);
 
     private static string SerializeSkills(IReadOnlyCollection<string> skills)
     {
