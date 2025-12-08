@@ -318,9 +318,8 @@ public sealed class AiMatchingService(
 
         if (request.GroupId.HasValue)
         {
-            var assignment = await AssignTopicToGroupAsync(request.GroupId.Value, currentUserId, enforceMembership: true, request.LimitPerGroup, throwIfUnavailable: true, ct)
-                ?? throw new InvalidOperationException("Không tìm thấy topic phù hợp.");
-            return new AutoAssignTopicBatchResultDto(1, new[] { assignment }, Array.Empty<Guid>());
+            var attempt = await AssignTopicToGroupAsync(request.GroupId.Value, currentUserId, enforceMembership: true, request.LimitPerGroup, throwIfUnavailable: true, ct);
+            return new AutoAssignTopicBatchResultDto(1, new[] { attempt.Assignment! }, Array.Empty<Guid>(), Array.Empty<TopicAssignmentIssueDto>());
         }
 
         if (!canManageAllGroups)
@@ -330,7 +329,7 @@ public sealed class AiMatchingService(
             ?? throw new InvalidOperationException("Không tìm thấy học kỳ.");
 
         var phase = await AssignTopicsForEligibleGroupsAsync(semesterId, request.MajorId, currentUserId, request.LimitPerGroup, ct);
-        return new AutoAssignTopicBatchResultDto(phase.Assignments.Count, phase.Assignments, phase.SkippedGroupIds);
+        return new AutoAssignTopicBatchResultDto(phase.Assignments.Count, phase.Assignments, phase.SkippedGroupIds, phase.Issues);
     }
 
     public async Task<AiAutoResolveResultDto> AutoResolveAsync(
@@ -521,28 +520,36 @@ public sealed class AiMatchingService(
             .ToList();
 
         if (targets.Count == 0)
-            return new TopicAssignmentPhaseResult(Array.Empty<AutoAssignTopicResultDto>(), Array.Empty<Guid>());
+            return new TopicAssignmentPhaseResult(Array.Empty<AutoAssignTopicResultDto>(), Array.Empty<Guid>(), Array.Empty<TopicAssignmentIssueDto>());
 
         var assignments = new List<AutoAssignTopicResultDto>();
         var skipped = new List<Guid>();
+        var issues = new List<TopicAssignmentIssueDto>();
 
         foreach (var groupId in targets)
         {
             try
             {
-                var result = await AssignTopicToGroupAsync(groupId, actorUserId, enforceMembership: false, limitPerGroup, throwIfUnavailable: false, ct);
-                if (result is not null)
-                    assignments.Add(result);
+                var attempt = await AssignTopicToGroupAsync(groupId, actorUserId, enforceMembership: false, limitPerGroup, throwIfUnavailable: false, ct);
+                if (attempt.Assignment is not null)
+                {
+                    assignments.Add(attempt.Assignment);
+                }
                 else
+                {
                     skipped.Add(groupId);
+                    if (!string.IsNullOrWhiteSpace(attempt.FailureReason))
+                        issues.Add(new TopicAssignmentIssueDto(groupId, attempt.FailureReason!));
+                }
             }
-            catch
+            catch (Exception ex)
             {
                 skipped.Add(groupId);
+                issues.Add(new TopicAssignmentIssueDto(groupId, ex.Message));
             }
         }
 
-        return new TopicAssignmentPhaseResult(assignments, skipped);
+        return new TopicAssignmentPhaseResult(assignments, skipped, issues);
     }
 
     private async Task<PaginatedCollection<GroupTopicOptionDto>> BuildGroupTopicOptionsPageAsync(
@@ -775,29 +782,30 @@ public sealed class AiMatchingService(
                     AiRoleHelper.ToDisplayString(AiRoleHelper.Parse(batch[i].PrimaryRole))));
             }
 
-            AutoAssignTopicResultDto? topicResult = null;
+            TopicAssignmentAttemptResult topicAttempt;
             try
             {
-                topicResult = await AssignTopicToGroupAsync(groupId, actorUserId, enforceMembership: false, OptionSuggestionLimit, throwIfUnavailable: false, ct);
+                topicAttempt = await AssignTopicToGroupAsync(groupId, actorUserId, enforceMembership: false, OptionSuggestionLimit, throwIfUnavailable: false, ct);
             }
-            catch
+            catch (Exception ex)
             {
-                // swallow and mark as failure below
+                topicAttempt = TopicAssignmentAttemptResult.Fail(ex.Message);
             }
 
-            if (topicResult is not null)
-                topicAssignments.Add(topicResult);
+            if (topicAttempt.Assignment is not null)
+                topicAssignments.Add(topicAttempt.Assignment);
             else
                 topicFailures.Add(groupId);
 
+            var topicAssignment = topicAttempt.Assignment;
             groups.Add(new AutoResolveNewGroupDto(
                 groupId,
                 groupName,
                 majorId,
                 GetMajorName(majorId, majorLookup),
                 batch.Count,
-                topicResult?.TopicId,
-                topicResult?.TopicTitle,
+                topicAssignment?.TopicId,
+                topicAssignment?.TopicTitle,
                 batch.Select(s => s.UserId).ToList()));
         }
 
@@ -1036,7 +1044,21 @@ public sealed class AiMatchingService(
 
     private sealed record TopicAssignmentPhaseResult(
         IReadOnlyList<AutoAssignTopicResultDto> Assignments,
-        IReadOnlyList<Guid> SkippedGroupIds);
+        IReadOnlyList<Guid> SkippedGroupIds,
+        IReadOnlyList<TopicAssignmentIssueDto> Issues);
+
+    private sealed record TopicAssignmentAttemptResult(
+        AutoAssignTopicResultDto? Assignment,
+        string? FailureReason)
+    {
+        public bool HasAssignment => Assignment is not null;
+
+        public static TopicAssignmentAttemptResult FromSuccess(AutoAssignTopicResultDto result)
+            => new(result, null);
+
+        public static TopicAssignmentAttemptResult Fail(string reason)
+            => new(null, reason);
+    }
 
     private sealed record NewGroupCreationResult(
         IReadOnlyList<AutoResolveNewGroupDto> Groups,
@@ -1053,7 +1075,7 @@ public sealed class AiMatchingService(
             Array.Empty<StudentAssignmentIssueDto>());
     }
 
-    private async Task<AutoAssignTopicResultDto?> AssignTopicToGroupAsync(
+    private async Task<TopicAssignmentAttemptResult> AssignTopicToGroupAsync(
         Guid groupId,
         Guid actorUserId,
         bool enforceMembership,
@@ -1065,27 +1087,15 @@ public sealed class AiMatchingService(
             ?? throw new KeyNotFoundException("Không tìm thấy nhóm.");
 
         if (detail.TopicId.HasValue)
-        {
-            if (throwIfUnavailable)
-                throw new InvalidOperationException("Nhóm đã có topic.");
-            return null;
-        }
+            return FailTopicAssignment("Nhóm đã có topic.", throwIfUnavailable);
 
         var (maxMembers, activeCount) = await groupQueries.GetGroupCapacityAsync(groupId, ct);
         if (activeCount < maxMembers)
-        {
-            if (throwIfUnavailable)
-                throw new InvalidOperationException("Nhóm chưa đủ thành viên để chọn topic.");
-            return null;
-        }
+            return FailTopicAssignment("Nhóm chưa đủ thành viên để chọn topic.", throwIfUnavailable);
 
         var suggestions = await SuggestTopicsInternalAsync(groupId, actorUserId, enforceMembership, limit, ct);
         if (suggestions.Count == 0)
-        {
-            if (throwIfUnavailable)
-                throw new InvalidOperationException("Không tìm thấy topic phù hợp.");
-            return null;
-        }
+            return FailTopicAssignment("Không tìm thấy topic phù hợp.", throwIfUnavailable);
 
         var chosen = suggestions.First();
         var mentorId = await topicQueries.GetDefaultMentorIdAsync(chosen.TopicId, ct);
@@ -1096,18 +1106,21 @@ public sealed class AiMatchingService(
         }
 
         if (!mentorId.HasValue)
-        {
-            if (throwIfUnavailable)
-                throw new InvalidOperationException("Topic chưa cấu hình mentor.");
-            return null;
-        }
+            return FailTopicAssignment("Topic chưa cấu hình mentor.", throwIfUnavailable);
 
         await groupRepository.UpdateGroupAsync(groupId, null, null, null, null, chosen.TopicId, mentorId, null, ct);
         await groupRepository.SetStatusAsync(groupId, "active", ct);
         await topicWriteRepository.SetStatusAsync(chosen.TopicId, "closed", ct);
         await postRepository.CloseAllOpenPostsForGroupAsync(groupId, ct);
 
-        return new AutoAssignTopicResultDto(groupId, chosen.TopicId, chosen.Title, chosen.Score);
+        return TopicAssignmentAttemptResult.FromSuccess(new AutoAssignTopicResultDto(groupId, chosen.TopicId, chosen.Title, chosen.Score));
+    }
+
+    private static TopicAssignmentAttemptResult FailTopicAssignment(string message, bool throwIfUnavailable)
+    {
+        if (throwIfUnavailable)
+            throw new InvalidOperationException(message);
+        return TopicAssignmentAttemptResult.Fail(message);
     }
 
     private async Task<IReadOnlyList<RecruitmentPostSuggestionDto>> HydrateRecruitmentPostSuggestionsAsync(
