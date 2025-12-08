@@ -87,12 +87,9 @@ public sealed class ProfilePostService(
         if (existing.HasValue)
         {
             var (applicationId, status) = existing.Value;
-
             if (string.Equals(status, "pending", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException($"already_invited:{applicationId}");
-
-            await repo.ReactivateApplicationAsync(applicationId, null, ct);
-            return;
+                throw new InvalidOperationException($"already invited:{applicationId}");
+            throw new InvalidOperationException("Invitation already rejected");
         }
         await repo.CreateApplicationAsync(
             profilePostId,
@@ -102,7 +99,6 @@ public sealed class ProfilePostService(
             message: null,
             ct);
     }
-
     public Task<IReadOnlyList<ProfilePostInvitationDto>> ListInvitationsAsync(Guid currentUserId, string? status, CancellationToken ct)
         => queries.ListProfileInvitationsAsync(currentUserId, status, ct);
 
@@ -131,11 +127,10 @@ public sealed class ProfilePostService(
             if (!userMajor.HasValue || userMajor.Value != invitation.GroupMajorId.Value)
                 throw new InvalidOperationException("major_mismatch");
         }
-
         await groupRepo.AddMembershipAsync(invitation.GroupId, currentUserId, invitation.SemesterId, "member", ct);
-        await repo.DeleteProfilePostsForUserAsync(currentUserId, invitation.SemesterId, ct);
         await repo.UpdateApplicationStatusAsync(candidateId, "accepted", ct);
         await repo.RejectPendingProfileInvitationsAsync(currentUserId, invitation.SemesterId, candidateId, ct);
+        await repo.DeleteProfilePostsForUserAsync(currentUserId, invitation.SemesterId, ct);
     }
 
     public async Task RejectInvitationAsync(Guid postId, Guid candidateId, Guid currentUserId, CancellationToken ct)

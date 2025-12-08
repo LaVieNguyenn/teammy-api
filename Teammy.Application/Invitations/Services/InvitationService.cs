@@ -1,3 +1,5 @@
+using Teammy.Application.Activity.Dtos;
+using Teammy.Application.Activity.Services;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Invitations.Dtos;
 using Teammy.Application.Posts.Dtos;
@@ -16,12 +18,14 @@ public sealed class InvitationService(
     IAppUrlProvider urlProvider,
     ITopicReadOnlyQueries topicQueries,
     ITopicWriteRepository topicWrite,
-    IInvitationNotifier invitationNotifier
+    IInvitationNotifier invitationNotifier,
+    ActivityLogService activityLogService
 )
 {
     private readonly ITopicReadOnlyQueries _topicQueries = topicQueries;
     private readonly ITopicWriteRepository _topicWrite = topicWrite;
     private readonly IInvitationNotifier _invitationNotifier = invitationNotifier;
+    private readonly ActivityLogService _activityLog = activityLogService;
 
     public async Task<(Guid InvitationId, bool EmailSent)> InviteUserAsync(Guid groupId, Guid inviteeUserId, Guid invitedByUserId, string? message, CancellationToken ct)
     {
@@ -70,6 +74,14 @@ public sealed class InvitationService(
         }
 
         await BroadcastInvitationCreatedAsync(invitee, invitationId, inviteeUserId, groupId, "member", invitedByUserId, null, ct);
+        await _activityLog.LogAsync(new ActivityLogCreateRequest(invitedByUserId, "group", "GROUP_MEMBER_INVITED")
+        {
+            GroupId = groupId,
+            EntityId = groupId,
+            TargetUserId = inviteeUserId,
+            Message = $"Leader invited user {inviteeUserId}",
+            Metadata = new { invitationId }
+        }, ct);
 
         return (invitationId, emailSent);
     }
@@ -183,6 +195,14 @@ public sealed class InvitationService(
 
         await groupRepo.AddMembershipAsync(inv.GroupId, currentUserId, inv.SemesterId, "member", ct);
         await postRepo.DeleteProfilePostsForUserAsync(currentUserId, inv.SemesterId, ct);
+        await _activityLog.LogAsync(new ActivityLogCreateRequest(currentUserId, "group", "GROUP_MEMBER_JOINED")
+        {
+            GroupId = inv.GroupId,
+            EntityId = inv.GroupId,
+            TargetUserId = currentUserId,
+            Message = $"User {currentUserId} joined group via invitation",
+            Metadata = new { invitationId }
+        }, ct);
         await repo.UpdateStatusAsync(invitationId, "accepted", DateTime.UtcNow, ct);
         await BroadcastStatusAsync(inv.InviteeUserId, inv.GroupId, invitationId, "accepted", ct);
 

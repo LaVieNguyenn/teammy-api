@@ -38,6 +38,7 @@ public static class DependencyInjection
         else
             services.AddSingleton<IEmailSender, SmtpEmailSender>();
 
+        services.AddScoped<IActivityLogRepository, ActivityLogRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IUserReadOnlyQueries, UserReadOnlyQueries>();
         services.AddScoped<IUserWriteRepository, UserWriteRepository>();

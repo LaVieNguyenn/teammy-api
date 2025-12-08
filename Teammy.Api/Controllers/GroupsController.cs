@@ -10,7 +10,6 @@ using Teammy.Application.Posts.Dtos;
 using Teammy.Application.Posts.Services;
 
 namespace Teammy.Api.Controllers;
-
 [ApiController]
 [Route("api/groups")]
 public sealed class GroupsController : ControllerBase
@@ -30,14 +29,12 @@ public sealed class GroupsController : ControllerBase
         _topics = topics;
         _chatService = chatService;
     }
-
     private Guid GetUserId()
     {
         var sub = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
         if (!Guid.TryParse(sub, out var userId)) throw new UnauthorizedAccessException("Invalid token");
         return userId;
     }
-
     [HttpPost]
     [Authorize]
     public async Task<ActionResult> Create([FromBody] CreateGroupRequest req, CancellationToken ct)
@@ -50,7 +47,6 @@ public sealed class GroupsController : ControllerBase
         catch (InvalidOperationException ex) { return Conflict(ex.Message); }
         catch (ArgumentException ex) { return BadRequest(ex.Message); }
     }
-
     [HttpGet]
     [AllowAnonymous]
     public Task<IReadOnlyList<GroupSummaryDto>> List([FromQuery] string? status, [FromQuery] Guid? majorId, [FromQuery] Guid? topicId, CancellationToken ct)
@@ -126,7 +122,6 @@ public sealed class GroupsController : ControllerBase
         }
         catch (InvalidOperationException ex) { return Conflict(ex.Message); }
     }
-
     [HttpGet("my")]
     [Authorize]
     public async Task<ActionResult> My([FromQuery] Guid? semesterId, CancellationToken ct)
@@ -155,7 +150,6 @@ public sealed class GroupsController : ControllerBase
                     majorObj = new PostMajorDto(majorId, majorName);
                 }
             }
-
             PostTopicDto? topicObj = null;
             if (detail?.TopicId is Guid tid)
             {
@@ -187,10 +181,8 @@ public sealed class GroupsController : ControllerBase
                 members = nonLeaderMembers
             });
         }
-
         return Ok(shaped);
     }
-
     [HttpGet("{id:guid}/members")]
     [AllowAnonymous]
     public async Task<ActionResult<IReadOnlyList<Teammy.Application.Groups.Dtos.GroupMemberDto>>> Members([FromRoute] Guid id, CancellationToken ct)
@@ -198,7 +190,6 @@ public sealed class GroupsController : ControllerBase
         var members = await _service.ListActiveMembersAsync(id, ct);
         return Ok(members);
     }
-
     public sealed record TransferLeaderRequest(Guid NewLeaderUserId);
     public sealed record UpdateGroupRequestBody(string? Name, string? Description, int? MaxMembers, Guid? MajorId, IReadOnlyList<string>? Skills);
     public sealed record InviteUserRequest(Guid UserId);
@@ -371,8 +362,6 @@ public sealed class GroupsController : ControllerBase
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
     }
-
-    // Unified pending list (leader-only)
     [HttpGet("{id:guid}/pending")]
     [Authorize]
     public async Task<ActionResult<IReadOnlyList<GroupPendingItemDto>>> UnifiedPending([FromRoute] Guid id, CancellationToken ct)
