@@ -460,15 +460,24 @@ public sealed class AiMatchingService(
         var remainingSet = new HashSet<Guid>(remainingIds);
         var remainingSnapshots = students.Where(s => remainingSet.Contains(s.UserId)).ToList();
 
-        var openStates = groupsByMajor.Values
-            .SelectMany(g => g)
-            .Where(state => state.RemainingSlots > 0)
-            .ToList();
+        var states = groupsByMajor.Values.SelectMany(g => g).ToList();
 
-        var openGroups = openStates
-            .Select(state => state.GroupId)
-            .Distinct()
-            .ToList();
+        foreach (var state in states)
+        {
+            if (state.RemainingSlots == 0)
+                continue;
+
+            RolePools? pools = null;
+            if (state.MajorId.HasValue)
+                studentsByMajor.TryGetValue(state.MajorId.Value, out pools);
+
+            var hasCandidates = (pools?.RemainingCount ?? 0) > 0;
+            if (!hasCandidates)
+                state.ShrinkToCurrent();
+        }
+
+        var openStates = states.Where(s => s.RemainingSlots > 0).ToList();
+        var openGroups = openStates.Select(state => state.GroupId).Distinct().ToList();
 
         var groupIssues = new List<GroupAssignmentIssueDto>(openStates.Count);
         foreach (var state in openStates)
@@ -481,12 +490,11 @@ public sealed class AiMatchingService(
             groupIssues.Add(new GroupAssignmentIssueDto(state.GroupId, reason));
         }
 
-        var expandedStates = groupsByMajor.Values
-            .SelectMany(g => g)
-            .Where(state => state.AddedCapacity > 0)
+        var capacityChanges = states
+            .Where(state => state.CapacityDirty)
             .ToList();
 
-        foreach (var state in expandedStates)
+        foreach (var state in capacityChanges)
         {
             await groupRepository.UpdateGroupAsync(state.GroupId, null, null, state.MaxMembers, null, null, null, null, ct);
         }
@@ -742,13 +750,14 @@ public sealed class AiMatchingService(
             var majorId = enforcedMajorId ?? DetermineGroupMajor(batch, preferredMajorId);
             var description = $"Nhóm được tạo tự động vào {DateTime.UtcNow:dd/MM/yyyy}.";
             var skillsJson = BuildGroupSkillsJson(batch);
+            var maxMembers = batch.Count;
             var groupId = await groupRepository.CreateGroupAsync(
                 semesterCtx.SemesterId,
                 null,
                 majorId,
                 groupName,
                 description,
-                maxSize,
+                maxMembers,
                 skillsJson,
                 ct);
 
@@ -1511,6 +1520,7 @@ public sealed class AiMatchingService(
             Name = source.Name;
             RemainingSlots = source.RemainingSlots;
             MaxMembers = source.MaxMembers;
+            CurrentMembers = source.CurrentMembers;
             _mix = mix;
         }
 
@@ -1520,7 +1530,9 @@ public sealed class AiMatchingService(
         public string Name { get; }
         public int RemainingSlots { get; private set; }
         public int MaxMembers { get; private set; }
+        public int CurrentMembers { get; private set; }
         public int AddedCapacity { get; private set; }
+        public bool CapacityDirty { get; private set; }
         public bool HasFrontend => _mix.FrontendCount > 0;
         public bool HasBackend => _mix.BackendCount > 0;
 
@@ -1539,6 +1551,7 @@ public sealed class AiMatchingService(
             MaxMembers += slots;
             RemainingSlots += slots;
             AddedCapacity += slots;
+            CapacityDirty = true;
             return true;
         }
 
@@ -1546,6 +1559,7 @@ public sealed class AiMatchingService(
         {
             if (RemainingSlots > 0)
                 RemainingSlots--;
+            CurrentMembers++;
 
             _mix = role switch
             {
@@ -1554,6 +1568,17 @@ public sealed class AiMatchingService(
                 AiPrimaryRole.Other => _mix with { OtherCount = _mix.OtherCount + 1 },
                 _ => _mix
             };
+        }
+
+        public void ShrinkToCurrent()
+        {
+            var targetMax = Math.Max(1, CurrentMembers);
+            if (targetMax >= MaxMembers)
+                return;
+
+            MaxMembers = targetMax;
+            RemainingSlots = Math.Max(0, MaxMembers - CurrentMembers);
+            CapacityDirty = true;
         }
     }
 
