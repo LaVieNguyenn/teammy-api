@@ -389,9 +389,9 @@ public sealed class AiMatchingService(
         var limitConfigured = requestLimit.HasValue && requestLimit.Value > 0;
         var limitRemaining = limitConfigured ? requestLimit!.Value : int.MaxValue;
         var limitHit = false;
-        var policyMaxSize = Math.Max(semesterCtx.Policy.DesiredGroupSizeMax, semesterCtx.Policy.DesiredGroupSizeMin);
-        if (policyMaxSize <= 0)
-            policyMaxSize = Math.Max(semesterCtx.Policy.DesiredGroupSizeMin, 1);
+        var policyMinSize = Math.Max(semesterCtx.Policy.DesiredGroupSizeMin, 1);
+        var rawPolicyMax = semesterCtx.Policy.DesiredGroupSizeMax;
+        var policyMaxSize = rawPolicyMax <= 0 ? policyMinSize : Math.Max(rawPolicyMax, policyMinSize);
 
         var studentsByMajor = students
             .GroupBy(s => s.MajorId)
@@ -461,6 +461,8 @@ public sealed class AiMatchingService(
         var remainingSnapshots = students.Where(s => remainingSet.Contains(s.UserId)).ToList();
 
         var states = groupsByMajor.Values.SelectMany(g => g).ToList();
+        foreach (var state in states)
+            state.EnsurePolicyRange(policyMinSize, policyMaxSize);
 
         foreach (var state in states)
         {
@@ -473,7 +475,7 @@ public sealed class AiMatchingService(
 
             var hasCandidates = (pools?.RemainingCount ?? 0) > 0;
             if (!hasCandidates)
-                state.ShrinkToCurrent();
+                state.ShrinkToRange(policyMinSize, policyMaxSize);
         }
 
         var openStates = states.Where(s => s.RemainingSlots > 0).ToList();
@@ -750,7 +752,7 @@ public sealed class AiMatchingService(
             var majorId = enforcedMajorId ?? DetermineGroupMajor(batch, preferredMajorId);
             var description = $"Nhóm được tạo tự động vào {DateTime.UtcNow:dd/MM/yyyy}.";
             var skillsJson = BuildGroupSkillsJson(batch);
-            var maxMembers = batch.Count;
+            var maxMembers = Math.Clamp(batch.Count, minSize, maxSize);
             var groupId = await groupRepository.CreateGroupAsync(
                 semesterCtx.SemesterId,
                 null,
@@ -1555,6 +1557,26 @@ public sealed class AiMatchingService(
             return true;
         }
 
+        public void EnsurePolicyRange(int policyMin, int policyMax)
+        {
+            var minBound = Math.Max(1, policyMin);
+            var maxBound = Math.Max(minBound, policyMax);
+            var clamped = MaxMembers;
+
+            if (clamped < minBound)
+                clamped = minBound;
+
+            if (clamped > maxBound && maxBound >= CurrentMembers)
+                clamped = maxBound;
+
+            if (clamped == MaxMembers)
+                return;
+
+            MaxMembers = clamped;
+            RemainingSlots = Math.Max(0, MaxMembers - CurrentMembers);
+            CapacityDirty = true;
+        }
+
         public void Apply(AiPrimaryRole role)
         {
             if (RemainingSlots > 0)
@@ -1570,9 +1592,14 @@ public sealed class AiMatchingService(
             };
         }
 
-        public void ShrinkToCurrent()
+        public void ShrinkToRange(int policyMin, int policyMax)
         {
-            var targetMax = Math.Max(1, CurrentMembers);
+            var minBound = Math.Max(1, policyMin);
+            var maxBound = Math.Max(minBound, policyMax);
+            var targetMax = CurrentMembers < minBound ? minBound : CurrentMembers;
+            if (targetMax > maxBound)
+                targetMax = CurrentMembers;
+
             if (targetMax >= MaxMembers)
                 return;
 
