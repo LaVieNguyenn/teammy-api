@@ -234,4 +234,18 @@ public sealed class UsersController : ControllerBase
         var roles = await _roles.GetAllRoleNamesAsync(ct);
         return Ok(roles);
     }
+
+    [HttpGet("admin/major-stats")]
+    [Authorize(Roles = "admin,moderator")]
+    public async Task<ActionResult<IReadOnlyList<AdminMajorStatsDto>>> GetMajorStats(
+        [FromQuery] Guid? semesterId,
+        CancellationToken ct)
+    {
+        var semId = semesterId ?? await _groups.GetActiveSemesterIdAsync(ct);
+        if (!semId.HasValue)
+            return Conflict("No active semester");
+
+        var stats = await _users.GetMajorStatsAsync(semId.Value, ct);
+        return Ok(stats);
+    }
 }

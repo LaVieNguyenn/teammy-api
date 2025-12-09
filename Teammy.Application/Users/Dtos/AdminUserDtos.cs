@@ -35,3 +35,11 @@ public sealed record AdminUserDetailDto(
     DateTime UpdatedAt,
     string? PortfolioUrl
 );
+
+public sealed record AdminMajorStatsDto(
+    Guid MajorId,
+    string MajorName,
+    int GroupCount,
+    int StudentCount,
+    int StudentsWithoutGroup
+);

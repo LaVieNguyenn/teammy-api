@@ -220,5 +220,71 @@ namespace Teammy.Infrastructure.Persistence.Repositories
 
             return await q.AsNoTracking().FirstOrDefaultAsync(ct);
         }
+
+        public async Task<IReadOnlyList<AdminMajorStatsDto>> GetMajorStatsAsync(Guid semesterId, CancellationToken ct)
+        {
+            var activeStatuses = new[] { "member", "leader" };
+
+            var majors = await _db.majors.AsNoTracking()
+                .OrderBy(m => m.major_name)
+                .Select(m => new { m.major_id, Name = m.major_name ?? "Unknown" })
+                .ToListAsync(ct);
+
+            if (majors.Count == 0)
+                return Array.Empty<AdminMajorStatsDto>();
+
+            var groupsByMajor = await (
+                from g in _db.groups.AsNoTracking()
+                where g.semester_id == semesterId && g.major_id != null
+                group g by g.major_id!.Value into gg
+                select new
+                {
+                    MajorId = gg.Key,
+                    Count = gg.Count()
+                }).ToDictionaryAsync(x => x.MajorId, x => x.Count, ct);
+
+            var studentBase =
+                from u in _db.users.AsNoTracking()
+                join ur in _db.user_roles.AsNoTracking() on u.user_id equals ur.user_id
+                join r in _db.roles.AsNoTracking() on ur.role_id equals r.role_id
+                where r.name == "student" && u.major_id != null
+                select new { u.user_id, MajorId = u.major_id!.Value };
+
+            var studentsByMajor = await (
+                from s in studentBase
+                group s by s.MajorId into sg
+                select new
+                {
+                    MajorId = sg.Key,
+                    Count = sg.Select(x => x.user_id).Distinct().Count()
+                }).ToDictionaryAsync(x => x.MajorId, x => x.Count, ct);
+
+            var members = _db.group_members
+                .AsNoTracking()
+                .Where(m => m.semester_id == semesterId && activeStatuses.Contains(m.status));
+
+            var studentsWithoutGroup = await (
+                from s in studentBase
+                join gm in members on s.user_id equals gm.user_id into gmj
+                from gm in gmj.DefaultIfEmpty()
+                where gm == null
+                group s by s.MajorId into sg
+                select new
+                {
+                    MajorId = sg.Key,
+                    Count = sg.Select(x => x.user_id).Distinct().Count()
+                }).ToDictionaryAsync(x => x.MajorId, x => x.Count, ct);
+
+            var result = majors
+                .Select(m => new AdminMajorStatsDto(
+                    m.major_id,
+                    m.Name,
+                    groupsByMajor.TryGetValue(m.major_id, out var gCount) ? gCount : 0,
+                    studentsByMajor.TryGetValue(m.major_id, out var sCount) ? sCount : 0,
+                    studentsWithoutGroup.TryGetValue(m.major_id, out var swgCount) ? swgCount : 0))
+                .ToList();
+
+            return result;
+        }
     }
 }
