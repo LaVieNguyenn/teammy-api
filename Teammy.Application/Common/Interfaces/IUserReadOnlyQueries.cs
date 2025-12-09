@@ -23,5 +23,7 @@ namespace Teammy.Application.Common.Interfaces
 
         Task<AdminUserDetailDto?> GetAdminDetailAsync(Guid userId, CancellationToken ct);
 
+    Task<IReadOnlyList<AdminMajorStatsDto>> GetMajorStatsAsync(Guid semesterId, CancellationToken ct);
+
     }
 }

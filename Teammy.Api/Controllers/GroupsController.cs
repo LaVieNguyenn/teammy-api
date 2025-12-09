@@ -362,6 +362,7 @@ public sealed class GroupsController : ControllerBase
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
     }
+    // Unified pending list (leader-only)
     [HttpGet("{id:guid}/pending")]
     [Authorize]
     public async Task<ActionResult<IReadOnlyList<GroupPendingItemDto>>> UnifiedPending([FromRoute] Guid id, CancellationToken ct)

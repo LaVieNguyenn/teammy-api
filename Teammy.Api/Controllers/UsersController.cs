@@ -186,7 +186,6 @@ public sealed class UsersController : ControllerBase
         return CreatedAtAction(nameof(GetById), new { userId }, dto);
     }
 
-    
     [HttpPut("admin/{userId:guid}")]
     [Authorize(Roles = "admin")]
     public async Task<IActionResult> Update(
@@ -218,7 +217,6 @@ public sealed class UsersController : ControllerBase
         return NoContent();
     }
 
- 
     [HttpDelete("admin/{userId:guid}")]
     [Authorize(Roles = "admin")]
     public async Task<IActionResult> Delete(Guid userId, CancellationToken ct)
@@ -233,5 +231,19 @@ public sealed class UsersController : ControllerBase
     {
         var roles = await _roles.GetAllRoleNamesAsync(ct);
         return Ok(roles);
+    }
+
+    [HttpGet("admin/major-stats")]
+    [Authorize(Roles = "admin,moderator")]
+    public async Task<ActionResult<IReadOnlyList<AdminMajorStatsDto>>> GetMajorStats(
+        [FromQuery] Guid? semesterId,
+        CancellationToken ct)
+    {
+        var semId = semesterId ?? await _groups.GetActiveSemesterIdAsync(ct);
+        if (!semId.HasValue)
+            return Conflict("No active semester");
+
+        var stats = await _users.GetMajorStatsAsync(semId.Value, ct);
+        return Ok(stats);
     }
 }

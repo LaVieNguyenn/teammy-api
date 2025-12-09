@@ -197,7 +197,6 @@ public sealed class GroupService(
             Message = $"Leader removed user {targetUserId}"
         }, ct);
     }
-
     public async Task<IReadOnlyList<GroupMemberRoleDto>> ListMemberRolesAsync(Guid groupId, Guid currentUserId, Guid memberUserId, CancellationToken ct)
     {
         var isLeader = await queries.IsLeaderAsync(groupId, currentUserId, ct);
