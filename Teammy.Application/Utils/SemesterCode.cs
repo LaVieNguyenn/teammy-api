@@ -1,3 +1,4 @@
+using System;
 using System.Text.RegularExpressions;
 
 namespace Teammy.Application.Common.Utils;
@@ -12,10 +13,22 @@ public static class SemesterCode
         var s = raw.Trim().ToUpperInvariant();
         s = Regex.Replace(s, @"[\s_\-]+", "");
 
-        s = s.Replace("AUTUMN", "FALL");
-        s = s.Replace("FA", "FALL");
-        s = s.Replace("SP", "SPRING");
-        s = s.Replace("SU", "SUMMER");
+        if (s.StartsWith("AUTUMN", StringComparison.Ordinal))
+        {
+            s = "FALL" + s["AUTUMN".Length..];
+        }
+        else if (StartsWithAbbreviation(s, "FA"))
+        {
+            s = "FALL" + s[2..];
+        }
+        else if (StartsWithAbbreviation(s, "SP"))
+        {
+            s = "SPRING" + s[2..];
+        }
+        else if (StartsWithAbbreviation(s, "SU"))
+        {
+            s = "SUMMER" + s[2..];
+        }
 
         var m4 = Regex.Match(s, @"^(SPRING|SUMMER|FALL)(20\d{2})$");
         if (m4.Success) return (m4.Groups[1].Value, int.Parse(m4.Groups[2].Value));
@@ -25,4 +38,9 @@ public static class SemesterCode
 
         throw new ArgumentException($"Cannot parse semester code: '{raw}'");
     }
+
+    private static bool StartsWithAbbreviation(string value, string prefix)
+        => value.StartsWith(prefix, StringComparison.Ordinal)
+           && value.Length > prefix.Length
+           && char.IsDigit(value[prefix.Length]);
 }

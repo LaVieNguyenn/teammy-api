@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Teammy.Application.Topics.Dtos;
@@ -19,6 +20,10 @@ namespace Teammy.Application.Common.Interfaces
             string status,
             Guid? majorId,
             string? source,
+            string? sourceFileName,
+            string? sourceFileType,
+            long? sourceFileSize,
+            IReadOnlyList<string>? skills,
             Guid createdBy,
             CancellationToken ct);
     }

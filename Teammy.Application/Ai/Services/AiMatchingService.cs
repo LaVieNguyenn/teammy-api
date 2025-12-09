@@ -1311,16 +1311,42 @@ public sealed class AiMatchingService(
 
     private static TopicSuggestionDto? BuildTopicSuggestion(TopicAvailabilitySnapshot topic, AiSkillProfile groupProfile)
     {
+        var topicProfile = AiSkillProfile.FromJson(topic.SkillsJson);
         var searchable = $"{topic.Title} {topic.Description}".ToLowerInvariant();
-        var matchingSkills = groupProfile.HasTags
-            ? groupProfile.Tags.Where(tag => searchable.Contains(tag)).Distinct(StringComparer.OrdinalIgnoreCase).Take(5).ToList()
-            : new List<string>();
+        var inferredRole = InferRoleFromText(searchable);
 
-        var matchScore = Math.Min(matchingSkills.Count, 5) * 12;
-        if (matchingSkills.Count == 0 && !groupProfile.HasTags)
-            matchScore = 8; // fallback so groups without profile still get suggestions
+        List<string> matchingSkills;
+        int matchScore;
 
-        var roleScore = ScoreRoleMatch(groupProfile.PrimaryRole, InferRoleFromText(searchable), searchable);
+        if (topicProfile.HasTags)
+        {
+            if (groupProfile.HasTags)
+            {
+                matchingSkills = groupProfile.FindMatches(topicProfile).Take(5).ToList();
+                matchScore = Math.Min(matchingSkills.Count, 5) * 18;
+            }
+            else
+            {
+                matchingSkills = topicProfile.Tags.Take(5).ToList();
+                matchScore = Math.Min(matchingSkills.Count, 5) * 10;
+            }
+        }
+        else
+        {
+            matchingSkills = groupProfile.HasTags
+                ? groupProfile.Tags
+                    .Where(tag => searchable.Contains(tag))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(5)
+                    .ToList()
+                : new List<string>();
+
+            matchScore = Math.Min(matchingSkills.Count, 5) * 12;
+            if (matchingSkills.Count == 0 && !groupProfile.HasTags)
+                matchScore = 8;
+        }
+
+        var roleScore = ScoreRoleMatch(groupProfile.PrimaryRole, topicProfile.PrimaryRole == AiPrimaryRole.Unknown ? inferredRole : topicProfile.PrimaryRole, searchable);
         var capacityBoost = topic.CanTakeMore ? 10 : 0;
         var totalScore = matchScore + roleScore + capacityBoost;
 

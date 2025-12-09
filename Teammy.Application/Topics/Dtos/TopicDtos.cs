@@ -9,6 +9,13 @@ namespace Teammy.Application.Topics.Dtos
         string MentorEmail
     );
 
+    public sealed record TopicRegistrationFileDto(
+        string? FileUrl,
+        string? FileName,
+        string? ContentType,
+        long?   FileSize
+    );
+
     // Dùng cho GetAll
     public sealed record TopicListItemDto(
         Guid   TopicId,
@@ -26,6 +33,7 @@ namespace Teammy.Application.Topics.Dtos
         string Title,
         string? Description,
         string? Source,
+        TopicRegistrationFileDto? RegistrationFile,
         string Status,       // 'open' | 'closed' | 'archived'
 
         // Created by
@@ -35,6 +43,8 @@ namespace Teammy.Application.Topics.Dtos
 
         // Nhiều mentor
         IReadOnlyList<TopicMentorDto> Mentors,
+
+        IReadOnlyList<string> Skills,
 
         DateTime CreatedAt
     );
@@ -56,6 +66,7 @@ namespace Teammy.Application.Topics.Dtos
         string Title,
         string? Description,
         string? Source,
+        TopicRegistrationFileDto? RegistrationFile,
         string Status,
 
         // Created by
@@ -65,6 +76,8 @@ namespace Teammy.Application.Topics.Dtos
 
         // Nhiều mentor
         IReadOnlyList<TopicMentorDto> Mentors,
+
+        IReadOnlyList<string> Skills,
 
         DateTime CreatedAt
     );
@@ -76,7 +89,8 @@ namespace Teammy.Application.Topics.Dtos
         string? Description,
         string? Source,
         string Status,               // open/closed/archived
-        List<string> MentorEmails    
+        List<string> MentorEmails,
+        List<string>? Skills    
     );
 
     // Request update topic
@@ -86,7 +100,8 @@ namespace Teammy.Application.Topics.Dtos
         string? Description,
         string? Source,
         string Status,               // open/closed/archived
-        List<string> MentorEmails    
+        List<string> MentorEmails,
+        List<string>? Skills    
     );
 
     public sealed record TopicImportResult(

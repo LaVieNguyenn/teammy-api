@@ -17,6 +17,16 @@ public partial class vw_topics_available
 
     public string? status { get; set; }
 
+    public string? skills { get; set; }
+
+    public string? source { get; set; }
+
+    public string? source_file_name { get; set; }
+
+    public string? source_file_type { get; set; }
+
+    public long? source_file_size { get; set; }
+
     public long? used_by_groups { get; set; }
 
     public bool? can_take_more { get; set; }

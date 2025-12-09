@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System;
 using System.IdentityModel.Tokens.Jwt;
+using System.IO;
 using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
@@ -94,23 +95,27 @@ namespace Teammy.Api.Controllers
 
         // GET /api/topics/template
         [HttpGet("template")]
-        [Authorize(Roles = "moderator")]
+        //[Authorize(Roles = "moderator")]
         public async Task<IActionResult> GetTemplate(CancellationToken ct)
         {
             var bytes = await _service.BuildTemplateAsync(ct);
             return File(bytes,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                "TeammyTopicsTemplate.xlsx");
+                "application/zip",
+                "TopicRegistrationPackage.zip");
         }
 
         // POST /api/topics/import
         [HttpPost("import")]
-        [Authorize(Roles = "moderator")]
+        //[Authorize(Roles = "moderator")]
         [Consumes("multipart/form-data")]
         public async Task<IActionResult> Import(IFormFile file, CancellationToken ct)
         {
             if (file is null || file.Length == 0)
                 return BadRequest("File is required.");
+
+            var extension = Path.GetExtension(file.FileName);
+            if (!string.Equals(extension, ".zip", StringComparison.OrdinalIgnoreCase))
+                return BadRequest("Please upload a .zip package that contains Topics.xlsx and the registration files.");
 
             await using var s = file.OpenReadStream();
             var result = await _service.ImportAsync(GetUserId(), s, ct);
@@ -118,7 +123,7 @@ namespace Teammy.Api.Controllers
         }
 
         [HttpPost("import/validate")]
-        [Authorize(Roles = "moderator")]
+        //[Authorize(Roles = "moderator")]
         public async Task<IActionResult> ValidateImport(
             [FromBody] TopicImportValidationRequest request,
             CancellationToken ct)

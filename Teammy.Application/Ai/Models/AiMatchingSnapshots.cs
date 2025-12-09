@@ -64,6 +64,7 @@ public sealed record TopicAvailabilitySnapshot(
     Guid? MajorId,
     string Title,
     string? Description,
+    string? SkillsJson,
     long UsedByGroups,
     bool CanTakeMore
 );

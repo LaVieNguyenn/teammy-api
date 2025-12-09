@@ -17,6 +17,14 @@ public partial class topic
 
     public string? source { get; set; }
 
+    public string? skills { get; set; }
+
+    public string? source_file_name { get; set; }
+
+    public string? source_file_type { get; set; }
+
+    public long? source_file_size { get; set; }
+
     public string status { get; set; } = null!;
 
     public Guid created_by { get; set; }

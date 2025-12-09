@@ -64,7 +64,7 @@ public static class DependencyInjection
         // Topics
         services.AddScoped<ITopicReadOnlyQueries, TopicReadOnlyQueries>();
         services.AddScoped<ITopicWriteRepository, TopicWriteRepository>();
-        services.AddScoped<ITopicImportService, ExcelTopicImportService>();
+        services.AddScoped<ITopicImportService, TopicRegistrationPackageImportService>();
         services.AddScoped<TopicsService>();
         services.AddScoped<IMentorLookupService, MentorLookupService>();
         services.AddScoped<ITopicMentorService, TopicMentorService>();
