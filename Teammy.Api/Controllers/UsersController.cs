@@ -186,7 +186,6 @@ public sealed class UsersController : ControllerBase
         return CreatedAtAction(nameof(GetById), new { userId }, dto);
     }
 
-    
     [HttpPut("admin/{userId:guid}")]
     [Authorize(Roles = "admin")]
     public async Task<IActionResult> Update(
@@ -218,7 +217,6 @@ public sealed class UsersController : ControllerBase
         return NoContent();
     }
 
- 
     [HttpDelete("admin/{userId:guid}")]
     [Authorize(Roles = "admin")]
     public async Task<IActionResult> Delete(Guid userId, CancellationToken ct)

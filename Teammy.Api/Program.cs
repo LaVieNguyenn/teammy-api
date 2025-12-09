@@ -3,6 +3,7 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Linq;
 using System.Text;
+using Teammy.Application.Activity.Services;
 using Microsoft.Extensions.Configuration.Json;
 using Teammy.Application.Auth.Queries;
 using Teammy.Application.Auth.Services;
@@ -64,6 +65,7 @@ builder.Services.AddCors(options =>
 });
 
 // Application services
+builder.Services.AddScoped<ActivityLogService>();
 builder.Services.AddScoped<AuthenticationService>();
 builder.Services.AddScoped<CurrentUserQueryService>();
 builder.Services.AddScoped<GroupService>();
@@ -76,6 +78,7 @@ builder.Services.AddScoped<ChatSessionMessageService>();
 builder.Services.AddScoped<IGroupChatNotifier, GroupChatNotifier>();
 builder.Services.AddScoped<IInvitationNotifier, InvitationNotifier>();
 builder.Services.AddScoped<IAnnouncementNotifier, AnnouncementNotifier>();
+builder.Services.AddScoped<IActivityLogNotifier, ActivityLogNotifier>();
 builder.Services.AddSingleton<IAppUrlProvider, Teammy.Api.App.AppUrlProvider>();
 
 // Infrastructure (DbContext, Auth services, Repositories)

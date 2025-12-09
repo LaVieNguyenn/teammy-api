@@ -12,6 +12,7 @@ public partial class AppDbContext : DbContext
     {
     }
 
+    public virtual DbSet<activity_log> activity_logs { get; set; }
     public virtual DbSet<announcement> announcements { get; set; }
 
     public virtual DbSet<backlog_item> backlog_items { get; set; }
@@ -86,6 +87,37 @@ public partial class AppDbContext : DbContext
             .HasPostgresExtension("citext")
             .HasPostgresExtension("pgcrypto")
             .HasPostgresExtension("unaccent");
+
+        modelBuilder.Entity<activity_log>(entity =>
+        {
+            entity.HasKey(e => e.activity_id).HasName("activity_logs_pkey");
+
+            entity.ToTable("activity_logs", "teammy");
+
+            entity.HasIndex(e => new { e.group_id, e.created_at }, "ix_activity_logs_group").IsDescending(false, true);
+            entity.HasIndex(e => new { e.actor_id, e.created_at }, "ix_activity_logs_actor").IsDescending(false, true);
+
+            entity.Property(e => e.activity_id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.created_at).HasDefaultValueSql("now()");
+            entity.Property(e => e.status).HasDefaultValue("success");
+            entity.Property(e => e.severity).HasDefaultValue("info");
+            entity.Property(e => e.metadata).HasColumnType("jsonb");
+
+            entity.HasOne(d => d.actor).WithMany()
+                .HasForeignKey(d => d.actor_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("activity_logs_actor_id_fkey");
+
+            entity.HasOne(d => d.target_user).WithMany()
+                .HasForeignKey(d => d.target_user_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("activity_logs_target_user_id_fkey");
+
+            entity.HasOne(d => d.group).WithMany()
+                .HasForeignKey(d => d.group_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("activity_logs_group_id_fkey");
+        });
 
         modelBuilder.Entity<announcement>(entity =>
         {

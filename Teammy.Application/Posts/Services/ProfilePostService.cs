@@ -87,7 +87,6 @@ public sealed class ProfilePostService(
         if (existing.HasValue)
         {
             var (applicationId, status) = existing.Value;
-
             if (string.Equals(status, "pending", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"already_invited:{applicationId}");
 
@@ -131,9 +130,8 @@ public sealed class ProfilePostService(
             if (!userMajor.HasValue || userMajor.Value != invitation.GroupMajorId.Value)
                 throw new InvalidOperationException("major_mismatch");
         }
-
         await groupRepo.AddMembershipAsync(invitation.GroupId, currentUserId, invitation.SemesterId, "member", ct);
-        await repo.DeleteProfilePostsForUserAsync(currentUserId, invitation.SemesterId, ct);
+    await repo.DeleteProfilePostsForUserAsync(currentUserId, invitation.SemesterId, ct);
         await repo.UpdateApplicationStatusAsync(candidateId, "accepted", ct);
         await repo.RejectPendingProfileInvitationsAsync(currentUserId, invitation.SemesterId, candidateId, ct);
     }
