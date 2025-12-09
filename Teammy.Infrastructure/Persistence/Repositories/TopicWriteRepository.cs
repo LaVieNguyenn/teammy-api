@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Teammy.Application.Common.Interfaces;
@@ -44,6 +45,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 title       = titleTrim,
                 description = string.IsNullOrWhiteSpace(req.Description) ? null : req.Description,
                 source      = source,
+                skills      = SerializeSkills(req.Skills),
                 status      = status,
                 created_by  = createdBy,
                 created_at  = DateTime.UtcNow
@@ -80,6 +82,8 @@ namespace Teammy.Infrastructure.Persistence.Repositories
             entity.source      = NormalizeSource(req.Source);
             entity.status      = status;
             entity.major_id    = req.MajorId;
+            if (req.Skills is not null)
+                entity.skills = SerializeSkills(req.Skills);
 
             await _db.SaveChangesAsync(ct);
         }
@@ -111,12 +115,17 @@ namespace Teammy.Infrastructure.Persistence.Repositories
             string status,
             Guid? majorId,
             string? source,
+            string? sourceFileName,
+            string? sourceFileType,
+            long? sourceFileSize,
+            IReadOnlyList<string>? skills,
             Guid createdBy,
             CancellationToken ct)
         {
             status = NormalizeStatus(status);
             var titleTrim = title.Trim();
             var normalizedSource = NormalizeSource(source);
+            var serializedSkills = SerializeSkills(skills);
 
             var exist = await _db.topics
                 .FirstOrDefaultAsync(t =>
@@ -133,6 +142,10 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                     title       = titleTrim,
                     description = string.IsNullOrWhiteSpace(description) ? null : description,
                     source      = normalizedSource,
+                    source_file_name = sourceFileName,
+                    source_file_type = sourceFileType,
+                    source_file_size = sourceFileSize,
+                    skills      = serializedSkills,
                     status      = status,
                     created_by  = createdBy,
                     created_at  = DateTime.UtcNow
@@ -147,11 +160,19 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 exist.description = description;
 
             if (normalizedSource is not null)
+            {
                 exist.source = normalizedSource;
+                exist.source_file_name = sourceFileName;
+                exist.source_file_type = sourceFileType;
+                exist.source_file_size = sourceFileSize;
+            }
 
             exist.status = status;
             if (majorId.HasValue)
                 exist.major_id = majorId;
+
+            if (serializedSkills is not null)
+                exist.skills = serializedSkills;
 
             await _db.SaveChangesAsync(ct);
             return (exist.topic_id, false);
@@ -164,6 +185,22 @@ namespace Teammy.Infrastructure.Persistence.Repositories
             if (!ValidStatus(s))
                 throw new ArgumentException("Status must be open|closed|archived.");
             return s;
+        }
+
+        private static string? SerializeSkills(IEnumerable<string>? skills)
+        {
+            if (skills is null)
+                return null;
+
+            var normalized = skills
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            return normalized.Count == 0
+                ? null
+                : JsonSerializer.Serialize(normalized);
         }
 
         private static string? NormalizeSource(string? raw)

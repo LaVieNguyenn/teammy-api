@@ -231,6 +231,7 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
                 r.major_id,
                 r.title ?? string.Empty,
                 r.description,
+                r.skills,
                 r.used_by_groups ?? 0,
                 r.can_take_more ?? false))
             .ToList();

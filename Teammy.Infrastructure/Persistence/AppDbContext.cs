@@ -723,6 +723,7 @@ public partial class AppDbContext : DbContext
             entity.Property(e => e.topic_id).HasDefaultValueSql("gen_random_uuid()");
             entity.Property(e => e.created_at).HasDefaultValueSql("now()");
             entity.Property(e => e.status).HasDefaultValueSql("'open'::text");
+            entity.Property(e => e.skills).HasColumnType("jsonb");
 
             entity.HasOne(d => d.created_byNavigation).WithMany(p => p.topics)
                 .HasForeignKey(d => d.created_by)

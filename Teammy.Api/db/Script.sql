@@ -73,6 +73,10 @@ CREATE TABLE IF NOT EXISTS teammy.topics (
   title        TEXT NOT NULL,
   description  TEXT,
   source       TEXT,
+  source_file_name TEXT,
+  source_file_type TEXT,
+  source_file_size BIGINT,
+  skills       JSONB,
   status       TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed','archived')),
   created_by   UUID NOT NULL REFERENCES teammy.users(user_id),
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -80,7 +84,11 @@ CREATE TABLE IF NOT EXISTS teammy.topics (
 );
 
 ALTER TABLE teammy.topics
-  ADD COLUMN IF NOT EXISTS source TEXT;
+  ADD COLUMN IF NOT EXISTS source TEXT,
+  ADD COLUMN IF NOT EXISTS source_file_name TEXT,
+  ADD COLUMN IF NOT EXISTS source_file_type TEXT,
+  ADD COLUMN IF NOT EXISTS source_file_size BIGINT,
+  ADD COLUMN IF NOT EXISTS skills JSONB;
 
 CREATE TABLE IF NOT EXISTS teammy.topics_mentor (
   topic_id  UUID NOT NULL REFERENCES teammy.topics(topic_id) ON DELETE CASCADE,
@@ -545,7 +553,10 @@ FROM teammy.groups g
 WHERE g.topic_id IS NULL;
 
 -- Topics available (open & not taken)
-CREATE OR REPLACE VIEW teammy.vw_topics_available AS
+DROP MATERIALIZED VIEW IF EXISTS teammy.mv_group_topic_match;
+
+DROP VIEW IF EXISTS teammy.vw_topics_available;
+CREATE VIEW teammy.vw_topics_available AS
 WITH used AS (
   SELECT topic_id, COUNT(*) AS used_by_groups
   FROM teammy.groups
@@ -553,7 +564,17 @@ WITH used AS (
   GROUP BY topic_id
 )
 SELECT
-  t.topic_id, t.semester_id, t.major_id, t.title, t.description, t.status,
+  t.topic_id,
+  t.semester_id,
+  t.major_id,
+  t.title,
+  t.description,
+  t.status,
+  t.skills,
+  t.source,
+  t.source_file_name,
+  t.source_file_type,
+  t.source_file_size,
   COALESCE(u.used_by_groups,0) AS used_by_groups,
   (t.status='open' AND COALESCE(u.used_by_groups,0)=0) AS can_take_more
 FROM teammy.topics t
@@ -614,7 +635,8 @@ LEFT JOIN teammy.group_members gm ON gm.group_id = g.group_id
 GROUP BY g.group_id, g.semester_id, g.major_id, g.name, g.description, g.max_members;
 
 -- Group-Topic simple match (NOW FIXED: g.description is present in vw_groups_without_topic)
-CREATE MATERIALIZED VIEW IF NOT EXISTS teammy.mv_group_topic_match AS
+DROP MATERIALIZED VIEW IF EXISTS teammy.mv_group_topic_match;
+CREATE MATERIALIZED VIEW teammy.mv_group_topic_match AS
 SELECT 
   g.group_id, g.semester_id, g.major_id, g.name AS group_name, g.description AS group_desc,
   t.topic_id, t.title, t.description AS topic_desc,

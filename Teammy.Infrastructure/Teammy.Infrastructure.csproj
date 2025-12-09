@@ -15,6 +15,7 @@
     <PackageReference Include="FirebaseAdmin" Version="3.4.0" />
     <PackageReference Include="ClosedXML" Version="0.102.2" />
     <PackageReference Include="Google.Apis.Drive.v3" Version="1.67.0.3539" />
+    <PackageReference Include="DocumentFormat.OpenXml" Version="2.20.0" />
   </ItemGroup>
     <ItemGroup>
     <ProjectReference Include="..\Teammy.Domain\Teammy.Domain.csproj" />
