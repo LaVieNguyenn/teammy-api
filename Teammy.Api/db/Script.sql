@@ -476,7 +476,7 @@ CREATE INDEX IF NOT EXISTS ix_messages_session_created
 -- ========== 8) Activity Logs ==========
 CREATE TABLE IF NOT EXISTS teammy.activity_logs (
   activity_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  group_id       UUID REFERENCES teammy.groups(group_id) ON DELETE CASCADE,
+  group_id       UUID REFERENCES teammy.groups(group_id) ON DELETE SET NULL,
   entity_type    TEXT NOT NULL,
   entity_id      UUID,
   action         TEXT NOT NULL,

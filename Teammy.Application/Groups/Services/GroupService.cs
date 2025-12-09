@@ -80,9 +80,11 @@ public sealed class GroupService(
         if (!ok)
             throw new InvalidOperationException("Not a member of this group");
 
+        var groupStillExists = await queries.GetGroupAsync(groupId, ct) is not null;
+
         await LogAsync(new ActivityLogCreateRequest(userId, "group", "GROUP_MEMBER_LEFT")
         {
-            GroupId = groupId,
+            GroupId = groupStillExists ? groupId : null,
             EntityId = groupId,
             TargetUserId = userId,
             Message = $"User {userId} left group"
