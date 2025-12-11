@@ -27,6 +27,7 @@ public sealed class AiMatchingService(
     private const int RecruitmentScoreMax = 220;
     private const int TopicScoreThreshold = 10;
     private const int TopicScoreMax = 110;
+    private const int TopicSkillCoverageWeight = 65;
     private const int ProfileScoreThreshold = 20;
     private const int ProfileScoreMax = 140;
 
@@ -1234,6 +1235,45 @@ public sealed class AiMatchingService(
         return remapped.Count == 0 ? matches : remapped;
     }
 
+    private static (double Coverage, List<string> Matches) CalculateTopicSkillCoverage(
+        IReadOnlyList<string> topicSkills,
+        AiSkillProfile groupProfile)
+    {
+        var matches = new List<string>();
+        if (topicSkills.Count == 0 || !groupProfile.HasTags)
+            return (0, matches);
+
+        var groupSkillKeys = BuildSkillKeySet(groupProfile.Tags);
+        if (groupSkillKeys.Count == 0)
+            return (0, matches);
+
+        var matchedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var skill in topicSkills)
+        {
+            var key = NormalizeSkillKey(skill);
+            if (key is null || !groupSkillKeys.Contains(key) || !matchedKeys.Add(key))
+                continue;
+
+            matches.Add(skill);
+        }
+
+        var coverage = topicSkills.Count == 0 ? 0 : (double)matches.Count / topicSkills.Count;
+        return (coverage, matches);
+    }
+
+    private static HashSet<string> BuildSkillKeySet(IEnumerable<string> tags)
+    {
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var tag in tags)
+        {
+            var key = NormalizeSkillKey(tag);
+            if (key is not null)
+                keys.Add(key);
+        }
+
+        return keys;
+    }
+
     private static string? NormalizeSkillKey(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -1352,17 +1392,28 @@ public sealed class AiMatchingService(
         List<string> matchingSkills;
         int matchScore;
 
-        if (topicProfile.HasTags)
+        if (topic.SkillNames.Count > 0 && groupProfile.HasTags)
+        {
+            var (coverage, canonicalMatches) = CalculateTopicSkillCoverage(topic.SkillNames, groupProfile);
+            matchingSkills = canonicalMatches;
+            matchScore = (int)Math.Round(coverage * TopicSkillCoverageWeight, MidpointRounding.AwayFromZero);
+        }
+        else if (topicProfile.HasTags)
         {
             if (groupProfile.HasTags)
             {
-                matchingSkills = groupProfile.FindMatches(topicProfile).Take(5).ToList();
-                matchScore = Math.Min(matchingSkills.Count, 5) * 18;
+                matchingSkills = groupProfile.FindMatches(topicProfile)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                matchScore = Math.Min(matchingSkills.Count, 6) * 18;
             }
             else
             {
-                matchingSkills = topicProfile.Tags.Take(5).ToList();
-                matchScore = Math.Min(matchingSkills.Count, 5) * 10;
+                matchingSkills = topicProfile.Tags
+                    .Where(tag => !string.IsNullOrWhiteSpace(tag))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                matchScore = Math.Min(matchingSkills.Count, 6) * 10;
             }
         }
         else
@@ -1371,11 +1422,10 @@ public sealed class AiMatchingService(
                 ? groupProfile.Tags
                     .Where(tag => searchable.Contains(tag))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Take(5)
                     .ToList()
                 : new List<string>();
 
-            matchScore = Math.Min(matchingSkills.Count, 5) * 12;
+            matchScore = Math.Min(matchingSkills.Count, 6) * 12;
             if (matchingSkills.Count == 0 && !groupProfile.HasTags)
                 matchScore = 8;
         }
