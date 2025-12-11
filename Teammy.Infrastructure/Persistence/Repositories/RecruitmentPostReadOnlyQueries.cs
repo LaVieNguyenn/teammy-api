@@ -190,6 +190,95 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
             .ToListAsync(ct);
     }
 
+    public async Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListByGroupAsync(Guid groupId, Teammy.Application.Posts.Dtos.ExpandOptions expand, Guid? currentUserId, CancellationToken ct)
+    {
+        var q = db.recruitment_posts.AsNoTracking()
+            .Where(p => p.group_id == groupId);
+
+        return await q
+            .OrderByDescending(p => p.created_at)
+            .Join(db.semesters.AsNoTracking(), p => p.semester_id, s => s.semester_id, (p, s) => new { p, s })
+            .GroupJoin(db.groups.AsNoTracking(), ps => ps.p.group_id, g => g.group_id, (ps, grps) => new { ps, grps })
+            .SelectMany(x => x.grps.DefaultIfEmpty(), (x, g) => new { x.ps.p, x.ps.s, g })
+            .GroupJoin(db.majors.AsNoTracking(), t => t.p.major_id, m => m.major_id, (t, ms) => new { t.p, t.s, t.g, ms })
+            .SelectMany(x => x.ms.DefaultIfEmpty(), (x, m) => new { x.p, x.s, x.g, m })
+            .GroupJoin(db.majors.AsNoTracking(), t => t.g != null ? (Guid?)t.g.major_id : null, gm => (Guid?)gm.major_id, (t, gms) => new { t.p, t.s, t.g, t.m, gms })
+            .SelectMany(x => x.gms.DefaultIfEmpty(), (x, gm) => new { x.p, x.s, x.g, x.m, gm })
+            .GroupJoin(db.topics.AsNoTracking(), t => t.g != null ? (Guid?)t.g.topic_id : null, tp => (Guid?)tp.topic_id, (t, tps) => new { t.p, t.s, t.g, t.m, t.gm, tps })
+            .SelectMany(x => x.tps.DefaultIfEmpty(), (x, topic) => new { x.p, x.s, x.g, x.m, x.gm, topic })
+            .GroupJoin(db.users.AsNoTracking(), t => t.g != null ? (Guid?)t.g.mentor_id : null, u => (Guid?)u.user_id, (t, mentors) => new { t.p, t.s, t.g, t.m, t.gm, t.topic, mentors })
+            .SelectMany(x => x.mentors.DefaultIfEmpty(), (x, mentor) => new { x.p, x.s, x.g, x.m, x.gm, x.topic, mentor })
+            .Select(x => new RecruitmentPostSummaryDto(
+                x.p.post_id,
+                x.p.semester_id,
+                string.Concat(x.s.season ?? "", " ", (x.s.year.HasValue ? x.s.year.Value.ToString() : "")),
+                (expand & Teammy.Application.Posts.Dtos.ExpandOptions.Semester) != 0
+                    ? new PostSemesterDto(x.s.semester_id, x.s.season, x.s.year, x.s.start_date, x.s.end_date, x.s.is_active)
+                    : null,
+                x.p.title,
+                x.p.status,
+                x.p.post_type,
+                x.p.group_id,
+                x.g != null ? x.g.name : null,
+                (expand & Teammy.Application.Posts.Dtos.ExpandOptions.Group) != 0 && x.g != null
+                    ? new PostGroupDto(
+                        x.g.group_id,
+                        x.g.semester_id,
+                        x.g.mentor_id,
+                        x.g.name,
+                        x.g.description,
+                        x.g.status,
+                        x.g.max_members,
+                        x.g.major_id,
+                        x.g.topic_id,
+                        x.g.created_at,
+                        x.g.updated_at,
+                        x.gm != null ? new PostMajorDto(x.gm.major_id, x.gm.major_name) : null,
+                        x.topic != null ? new PostTopicDto(
+                            x.topic.topic_id,
+                            x.topic.semester_id,
+                            x.topic.major_id,
+                            x.topic.title,
+                            x.topic.description,
+                            x.topic.status,
+                            x.topic.created_by,
+                            x.topic.created_at) : null,
+                        x.mentor != null ? new PostUserDto(
+                            x.mentor.user_id,
+                            x.mentor.email!,
+                            x.mentor.display_name!,
+                            x.mentor.avatar_url,
+                            x.mentor.email_verified) : null)
+                    : null,
+                x.p.major_id,
+                x.m != null ? x.m.major_name : null,
+                (expand & Teammy.Application.Posts.Dtos.ExpandOptions.Major) != 0 && x.m != null
+                    ? new PostMajorDto(x.m.major_id, x.m.major_name)
+                    : null,
+                x.p.position_needed,
+                ParseSkills(x.p.required_skills),
+                x.g != null
+                    ? db.group_members.Count(mb => mb.group_id == x.g.group_id && (mb.status == "member" || mb.status == "leader"))
+                    : 0,
+                x.p.description,
+                x.p.created_at,
+                x.p.application_deadline,
+                currentUserId.HasValue && db.candidates.Any(c => c.post_id == x.p.post_id && c.applicant_user_id == currentUserId.Value),
+                currentUserId.HasValue
+                    ? db.candidates.Where(c => c.post_id == x.p.post_id && c.applicant_user_id == currentUserId.Value)
+                        .Select(c => (Guid?)c.candidate_id)
+                        .FirstOrDefault()
+                    : null,
+                currentUserId.HasValue
+                    ? db.candidates.Where(c => c.post_id == x.p.post_id && c.applicant_user_id == currentUserId.Value)
+                        .Select(c => c.status)
+                        .FirstOrDefault()
+                    : null,
+                db.candidates.Count(c => c.post_id == x.p.post_id)
+            ))
+            .ToListAsync(ct);
+    }
+
     public async Task<IReadOnlyList<ApplicationDto>> ListApplicationsAsync(Guid postId, CancellationToken ct)
     {
         var q = from c in db.candidates.AsNoTracking()

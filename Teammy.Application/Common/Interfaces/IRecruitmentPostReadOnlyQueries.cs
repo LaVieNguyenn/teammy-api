@@ -10,6 +10,8 @@ public interface IRecruitmentPostReadOnlyQueries
 
     Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListAsync(string? skills, Guid? majorId, string? status, ExpandOptions expand, Guid? currentUserId, CancellationToken ct);
 
+    Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListByGroupAsync(Guid groupId, ExpandOptions expand, Guid? currentUserId, CancellationToken ct);
+
     // Profile posts (student looking for group)
     Task<IReadOnlyList<ProfilePostSummaryDto>> ListProfilePostsAsync(string? skills, Guid? majorId, string? status, ExpandOptions expand, Guid? currentUserId, CancellationToken ct);
 
