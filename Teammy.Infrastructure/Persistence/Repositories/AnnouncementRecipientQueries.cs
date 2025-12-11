@@ -24,6 +24,12 @@ public sealed class AnnouncementRecipientQueries(AppDbContext db) : IAnnouncemen
             recipients = await FetchRoleUsersAsync(targetRole!, ct);
         else if (scope == AnnouncementScopes.Group && targetGroupId.HasValue)
             recipients = await FetchGroupUsersAsync(targetGroupId.Value, ct);
+        else if (scope == AnnouncementScopes.GroupsWithoutTopic && semesterId.HasValue)
+            recipients = await FetchGroupsWithoutTopicAsync(semesterId.Value, ct);
+        else if (scope == AnnouncementScopes.GroupsUnderstaffed && semesterId.HasValue)
+            recipients = await FetchUnderstaffedGroupUsersAsync(semesterId.Value, ct);
+        else if (scope == AnnouncementScopes.StudentsWithoutGroup && semesterId.HasValue)
+            recipients = await FetchStudentsWithoutGroupAsync(semesterId.Value, ct);
         else
             recipients = new List<AnnouncementRecipient>();
 
@@ -96,5 +102,78 @@ public sealed class AnnouncementRecipientQueries(AppDbContext db) : IAnnouncemen
             select new AnnouncementRecipient(u.user_id, u.email!, u.display_name);
 
         return members.Union(mentor).ToListAsync(ct);
+    }
+
+    private Task<List<AnnouncementRecipient>> FetchGroupsWithoutTopicAsync(Guid semesterId, CancellationToken ct)
+    {
+        var members =
+            from gm in db.group_members.AsNoTracking()
+            join g in db.groups.AsNoTracking() on gm.group_id equals g.group_id
+            join u in db.users.AsNoTracking() on gm.user_id equals u.user_id
+            where g.semester_id == semesterId
+                  && g.topic_id == null
+                  && g.status != "closed"
+                  && ActiveStatuses.Contains(gm.status)
+                  && u.is_active
+                  && !string.IsNullOrWhiteSpace(u.email)
+            select new AnnouncementRecipient(u.user_id, u.email!, u.display_name);
+
+        var mentors =
+            from g in db.groups.AsNoTracking()
+            join u in db.users.AsNoTracking() on g.mentor_id equals u.user_id
+            where g.semester_id == semesterId
+                  && g.topic_id == null
+                  && g.status != "closed"
+                  && g.mentor_id != null
+                  && u.is_active
+                  && !string.IsNullOrWhiteSpace(u.email)
+            select new AnnouncementRecipient(u.user_id, u.email!, u.display_name);
+
+        return members.Union(mentors).ToListAsync(ct);
+    }
+
+    private Task<List<AnnouncementRecipient>> FetchUnderstaffedGroupUsersAsync(Guid semesterId, CancellationToken ct)
+    {
+        var members =
+            from gm in db.group_members.AsNoTracking()
+            join g in db.groups.AsNoTracking() on gm.group_id equals g.group_id
+            join u in db.users.AsNoTracking() on gm.user_id equals u.user_id
+            where g.semester_id == semesterId
+                  && g.status != "closed"
+                  && ActiveStatuses.Contains(gm.status)
+                  && u.is_active
+                  && !string.IsNullOrWhiteSpace(u.email)
+                  && db.group_members.Count(x => x.group_id == g.group_id && ActiveStatuses.Contains(x.status)) < g.max_members
+            select new AnnouncementRecipient(u.user_id, u.email!, u.display_name);
+
+        var mentors =
+            from g in db.groups.AsNoTracking()
+            join u in db.users.AsNoTracking() on g.mentor_id equals u.user_id
+            where g.semester_id == semesterId
+                  && g.status != "closed"
+                  && g.mentor_id != null
+                  && u.is_active
+                  && !string.IsNullOrWhiteSpace(u.email)
+                  && db.group_members.Count(x => x.group_id == g.group_id && ActiveStatuses.Contains(x.status)) < g.max_members
+            select new AnnouncementRecipient(u.user_id, u.email!, u.display_name);
+
+        return members.Union(mentors).ToListAsync(ct);
+    }
+
+    private Task<List<AnnouncementRecipient>> FetchStudentsWithoutGroupAsync(Guid semesterId, CancellationToken ct)
+    {
+        var students =
+            from ur in db.user_roles.AsNoTracking()
+            join r in db.roles.AsNoTracking() on ur.role_id equals r.role_id
+            join u in db.users.AsNoTracking() on ur.user_id equals u.user_id
+            where r.name.ToLower() == "student"
+                  && u.is_active
+                  && !string.IsNullOrWhiteSpace(u.email)
+                  && !db.group_members.Any(gm => gm.user_id == u.user_id
+                      && gm.semester_id == semesterId
+                      && ActiveStatuses.Contains(gm.status))
+            select new AnnouncementRecipient(u.user_id, u.email!, u.display_name);
+
+        return students.ToListAsync(ct);
     }
 }
