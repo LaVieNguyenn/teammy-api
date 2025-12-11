@@ -9,15 +9,38 @@ public static class InvitationEmailTemplate
         string groupName,
         string actionUrl,
         string? logoUrl = null,
-        string brandHex = "#F97316"
-    )
+        string brandHex = "#F97316",
+        IEnumerable<(string Label, string Value)>? extraInfo = null,
+        string? extraTitle = null)
     {
-        var subject = $"{appName} • {leaderName} invited you to {groupName}";
+        var subject = $"{appName} - {leaderName} invited you to {groupName}";
         var safeLeader = System.Net.WebUtility.HtmlEncode(leaderName);
         var safeLeaderEmail = System.Net.WebUtility.HtmlEncode(leaderEmail);
         var safeGroup = System.Net.WebUtility.HtmlEncode(groupName);
         var safeAction = System.Net.WebUtility.HtmlEncode(actionUrl);
-        var initial = string.IsNullOrWhiteSpace(logoUrl) ? (appName.Length > 0 ? appName.Substring(0,1).ToUpper() : "T") : "";
+
+        var extraRows = extraInfo?
+            .Where(p => !string.IsNullOrWhiteSpace(p.Value))
+            .Select(p => (Label: System.Net.WebUtility.HtmlEncode(p.Label), Value: System.Net.WebUtility.HtmlEncode(p.Value)))
+            .ToList();
+
+        var extraBlock = (extraRows is { Count: > 0 })
+            ? $@"<tr>
+            <td style=""padding:16px 24px 0 24px;"">
+              <table width=""100%"" style=""border:1px solid #e2e8f0;border-radius:8px;"" cellpadding=""0"" cellspacing=""0"">
+                <tr>
+                  <td style=""padding:12px 16px;font-size:13px;color:#0f172a;font-weight:600;"">{System.Net.WebUtility.HtmlEncode(extraTitle ?? "Post details")}</td>
+                </tr>
+                {string.Join(string.Empty, extraRows.Select(row => $@"<tr>
+                  <td style=""padding:12px 16px;border-top:1px solid #e2e8f0;font-size:14px;color:#334155;"">
+                    <div style=""font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#94a3b8;margin-bottom:4px;"">{row.Label}</div>
+                    <div>{row.Value}</div>
+                  </td>
+                </tr>"))}
+              </table>
+            </td>
+          </tr>"
+            : string.Empty;
 
         var html = $@"<!doctype html>
 <html>
@@ -30,13 +53,6 @@ public static class InvitationEmailTemplate
     <table role=""presentation"" border=""0"" cellpadding=""0"" cellspacing=""0"" width=""100%""> 
       <tr><td align=""center"" style=""padding:24px;"">
         <table role=""presentation"" width=""640"" style=""max-width:640px;background:#ffffff;border-radius:12px;border:1px solid #e2e8f0;"" cellpadding=""0"" cellspacing=""0"">
-          <tr>
-            <td style=""padding:24px 24px 8px 24px;"">
-              <table width=""100%""><tr>
-              
-              </tr></table>
-            </td>
-          </tr>
           <tr>
             <td style=""padding:8px 24px 0 24px;"">
               <div style=""font-size:16px;line-height:24px;color:#0f172a;"">
@@ -61,6 +77,7 @@ public static class InvitationEmailTemplate
               <div style=""font-size:14px;color:#334155;"">You'll be joining the {safeGroup} team to collaborate and access all group resources.</div>
             </td>
           </tr>
+          {extraBlock}
           <tr>
             <td style=""padding:24px;"">
               <a href=""{safeAction}"" style=""background:{brandHex};color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:8px;display:inline-block;font-weight:600;"">View Invitation</a>
@@ -91,10 +108,9 @@ public static class InvitationEmailTemplate
         string actionUrl,
         string? note,
         string? logoUrl = null,
-        string brandHex = "#2563EB"
-    )
+        string brandHex = "#2563EB")
     {
-        var subject = $"{appName} – {leaderName} requests you as mentor for {groupName}";
+        var subject = $"{appName} - {leaderName} requests you as mentor for {groupName}";
         var safeLeader = System.Net.WebUtility.HtmlEncode(leaderName);
         var safeLeaderEmail = System.Net.WebUtility.HtmlEncode(leaderEmail);
         var safeGroup = System.Net.WebUtility.HtmlEncode(groupName);

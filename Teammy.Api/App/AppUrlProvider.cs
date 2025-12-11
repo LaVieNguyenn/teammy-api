@@ -5,10 +5,14 @@ namespace Teammy.Api.App;
 
 public sealed class AppUrlProvider(IConfiguration cfg) : IAppUrlProvider
 {
-    public string GetInvitationUrl(Guid invitationId, Guid groupId)
-    {
-        var baseUrl = cfg["App:ClientUrl"]?.TrimEnd('/') ?? "https://teammy.vercel.app";
-        return $"{baseUrl}/login";
-    }
-}
+    private readonly string _baseUrl = cfg["App:ClientUrl"]?.TrimEnd('/') ?? "https://teammy.vercel.app";
 
+    public string GetInvitationUrl(Guid invitationId, Guid groupId)
+        => $"{_baseUrl}/invitations/{invitationId}?groupId={groupId}";
+
+    public string GetRecruitmentPostUrl(Guid postId)
+        => $"{_baseUrl}/recruitment-posts/{postId}";
+
+    public string GetProfilePostUrl(Guid postId)
+        => $"{_baseUrl}/profile-posts/{postId}";
+}

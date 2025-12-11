@@ -22,6 +22,7 @@ public sealed class InvitationService(
     ActivityLogService activityLogService
 )
 {
+    private const string AppName = "TEAMMY";
     private readonly ITopicReadOnlyQueries _topicQueries = topicQueries;
     private readonly ITopicWriteRepository _topicWrite = topicWrite;
     private readonly IInvitationNotifier _invitationNotifier = invitationNotifier;
@@ -205,6 +206,7 @@ public sealed class InvitationService(
         }, ct);
         await repo.UpdateStatusAsync(invitationId, "accepted", DateTime.UtcNow, ct);
         await BroadcastStatusAsync(inv.InviteeUserId, inv.GroupId, invitationId, "accepted", ct);
+        await NotifyInviterAsync(inv, "accepted", ct);
 
         await postRepo.RejectPendingApplicationsForUserInGroupAsync(inv.GroupId, currentUserId, ct);
 
@@ -219,6 +221,7 @@ public sealed class InvitationService(
 
         await repo.UpdateStatusAsync(invitationId, "rejected", DateTime.UtcNow, ct);
         await BroadcastStatusAsync(inv.InviteeUserId, inv.GroupId, invitationId, "rejected", ct);
+        await NotifyInviterAsync(inv, "rejected", ct);
     }
 
     // Leader-only cancel an invitation
@@ -264,6 +267,7 @@ public sealed class InvitationService(
         await repo.UpdateStatusAsync(inv.InvitationId, "accepted", DateTime.UtcNow, ct);
         await repo.RevokePendingMentorInvitesAsync(inv.GroupId, inv.InvitationId, ct);
         await BroadcastStatusAsync(inv.InviteeUserId, inv.GroupId, inv.InvitationId, "accepted", ct);
+        await NotifyInviterAsync(inv, "accepted", ct);
     }
 
     private async Task EnsureInvitationActiveAsync(Guid invitationId, InvitationDetailDto inv, CancellationToken ct)
@@ -292,4 +296,29 @@ public sealed class InvitationService(
 
     private static InvitationRealtimeDto ToRealtimeDto(InvitationDetailDto detail)
         => new(detail.InvitationId, detail.GroupId, detail.GroupName, detail.Type, detail.Status, detail.CreatedAt, detail.InvitedBy, detail.TopicId, detail.TopicTitle);
+
+    private async Task NotifyInviterAsync(InvitationDetailDto inv, string status, CancellationToken ct)
+    {
+        if (inv.InvitedBy == Guid.Empty) return;
+        var inviter = await userQueries.GetCurrentUserAsync(inv.InvitedBy, ct);
+        if (inviter?.Email is null) return;
+        var invitee = await userQueries.GetCurrentUserAsync(inv.InviteeUserId, ct);
+        var group = await groupQueries.GetGroupAsync(inv.GroupId, ct);
+        var inviteeName = invitee?.DisplayName ?? invitee?.Email ?? "The user";
+        var groupName = group?.Name ?? "your group";
+        var statusText = status.Equals("accepted", StringComparison.OrdinalIgnoreCase) ? "accepted" : "rejected";
+        var subject = $"{AppName} - {inviteeName} {statusText} your invitation";
+        var html = $@"<!doctype html>
+<html><body style=""font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#0f172a"">
+<p>{System.Net.WebUtility.HtmlEncode(inviteeName)} has <strong>{statusText}</strong> the invitation for group <b>{System.Net.WebUtility.HtmlEncode(groupName)}</b>.</p>
+<p>You can review group members in TEAMMY.</p>
+</body></html>";
+
+        await emailSender.SendAsync(
+            inviter.Email,
+            subject,
+            html,
+            ct,
+            fromDisplayName: groupName);
+    }
 }

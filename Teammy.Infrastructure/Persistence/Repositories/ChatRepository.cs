@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Teammy.Application.Chat.Dtos;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Infrastructure.Persistence;
@@ -48,14 +49,10 @@ public sealed class ChatRepository(AppDbContext db) : IChatRepository
         Guid smaller = userAId.CompareTo(userBId) <= 0 ? userAId : userBId;
         Guid larger = userAId.CompareTo(userBId) <= 0 ? userBId : userAId;
 
-        var existing = await (
-            from s in db.chat_sessions.AsNoTracking()
-            where s.type == "dm"
-            join p1 in db.chat_session_participants.AsNoTracking() on s.chat_session_id equals p1.chat_session_id
-            join p2 in db.chat_session_participants.AsNoTracking() on s.chat_session_id equals p2.chat_session_id
-            where p1.user_id == smaller && p2.user_id == larger
-            select (Guid?)s.chat_session_id
-        ).FirstOrDefaultAsync(ct);
+        var existing = await db.chat_sessions.AsNoTracking()
+            .Where(s => s.type == "dm" && s.participant_a == smaller && s.participant_b == larger)
+            .Select(s => (Guid?)s.chat_session_id)
+            .FirstOrDefaultAsync(ct);
         if (existing.HasValue) return existing.Value;
 
         var session = new chat_session
@@ -63,6 +60,8 @@ public sealed class ChatRepository(AppDbContext db) : IChatRepository
             chat_session_id = Guid.NewGuid(),
             type = "dm",
             group_id = null,
+            participant_a = smaller,
+            participant_b = larger,
             members = 2,
             created_at = DateTime.UtcNow,
             updated_at = DateTime.UtcNow,
@@ -75,16 +74,12 @@ public sealed class ChatRepository(AppDbContext db) : IChatRepository
         {
             await db.SaveChangesAsync(ct);
         }
-        catch (DbUpdateException)
+        catch (DbUpdateException ex) when (ex.InnerException is PostgresException pg && pg.SqlState == PostgresErrorCodes.UniqueViolation)
         {
-            var fallback = await (
-                from s in db.chat_sessions.AsNoTracking()
-                where s.type == "dm"
-                join p1 in db.chat_session_participants.AsNoTracking() on s.chat_session_id equals p1.chat_session_id
-                join p2 in db.chat_session_participants.AsNoTracking() on s.chat_session_id equals p2.chat_session_id
-                where p1.user_id == smaller && p2.user_id == larger
-                select (Guid?)s.chat_session_id
-            ).FirstOrDefaultAsync(ct);
+            var fallback = await db.chat_sessions.AsNoTracking()
+                .Where(s => s.type == "dm" && s.participant_a == smaller && s.participant_b == larger)
+                .Select(s => (Guid?)s.chat_session_id)
+                .FirstOrDefaultAsync(ct);
             if (fallback.HasValue) return fallback.Value;
             throw;
         }

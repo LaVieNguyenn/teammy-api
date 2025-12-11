@@ -1,4 +1,5 @@
 using System.Linq;
+using System.Net;
 using System.Text.Json;
 using Teammy.Application.Activity.Dtos;
 using Teammy.Application.Activity.Services;
@@ -12,11 +13,14 @@ public sealed class GroupService(
     IGroupReadOnlyQueries queries,
     IUserReadOnlyQueries userQueries,
     IRecruitmentPostRepository postRepo,
-    ActivityLogService activityLogService)
+    ActivityLogService activityLogService,
+    IEmailSender emailSender)
 {
+    private const string AppName = "TEAMMY";
     private readonly IUserReadOnlyQueries _userQueries = userQueries;
     private readonly IRecruitmentPostRepository _postRepo = postRepo;
     private readonly ActivityLogService _activityLog = activityLogService;
+    private readonly IEmailSender _emailSender = emailSender;
 
     public async Task<Guid> CreateGroupAsync(Guid creatorUserId, CreateGroupRequest req, CancellationToken ct)
     {
@@ -71,7 +75,7 @@ public sealed class GroupService(
         var isLeader = await queries.IsLeaderAsync(groupId, userId, ct);
         if (isLeader)
         {
-            var (_, activeCount) = await queries.GetGroupCapacityAsync(groupId, ct); 
+            var (_, activeCount) = await queries.GetGroupCapacityAsync(groupId, ct);
             if (activeCount > 1)
                 throw new InvalidOperationException("Change Leaderfirst");
         }
@@ -89,6 +93,11 @@ public sealed class GroupService(
             TargetUserId = userId,
             Message = $"User {userId} left group"
         }, ct);
+
+        if (groupStillExists && !isLeader)
+        {
+            await SendMemberLeftLeaderEmailAsync(groupId, userId, ct);
+        }
     }
 
 
@@ -198,6 +207,8 @@ public sealed class GroupService(
             TargetUserId = targetUserId,
             Message = $"Leader removed user {targetUserId}"
         }, ct);
+
+        await SendRemovalEmailAsync(groupId, targetUserId, leaderUserId, ct);
     }
     public async Task<IReadOnlyList<GroupMemberRoleDto>> ListMemberRolesAsync(Guid groupId, Guid currentUserId, Guid memberUserId, CancellationToken ct)
     {
@@ -247,5 +258,61 @@ public sealed class GroupService(
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         return JsonSerializer.Serialize(normalized);
+    }
+
+    private async Task SendRemovalEmailAsync(Guid groupId, Guid removedUserId, Guid actedByUserId, CancellationToken ct)
+    {
+        var removedUser = await _userQueries.GetAdminDetailAsync(removedUserId, ct);
+        if (removedUser?.Email is null) return;
+        var actedBy = await _userQueries.GetAdminDetailAsync(actedByUserId, ct);
+        var group = await queries.GetGroupAsync(groupId, ct);
+        var groupName = group?.Name ?? "your group";
+        var subject = $"{AppName} - You were removed from {groupName}";
+        var message = actedBy is null
+            ? $"<p>You have been removed from the group <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong>.</p>"
+            : $"<p>{System.Net.WebUtility.HtmlEncode(actedBy.DisplayName ?? actedBy.Email ?? "Group leader")} removed you from the group <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong>.</p>";
+        var html = $@"<!doctype html>
+<html><body style=""font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#0f172a"">
+{message}
+<p>If you believe this is a mistake, please contact the leader.</p>
+</body></html>";
+
+        await _emailSender.SendAsync(
+            removedUser.Email,
+            subject,
+            html,
+            ct,
+            replyToEmail: actedBy?.Email,
+            fromDisplayName: actedBy?.DisplayName);
+    }
+
+    private async Task SendMemberLeftLeaderEmailAsync(Guid groupId, Guid memberUserId, CancellationToken ct)
+    {
+        var leaders = await queries.ListActiveMembersAsync(groupId, ct);
+        var recipients = leaders
+            .Where(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(m.Email))
+            .ToList();
+        if (recipients.Count == 0) return;
+
+        var member = await _userQueries.GetAdminDetailAsync(memberUserId, ct);
+        var memberName = member?.DisplayName ?? member?.Email ?? "A member";
+        var group = await queries.GetGroupAsync(groupId, ct);
+        var groupName = group?.Name ?? "your group";
+        var subject = $"{AppName} - {memberName} left {groupName}";
+        var html = $@"<!doctype html>
+<html><body style=""font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#0f172a"">
+<p>{System.Net.WebUtility.HtmlEncode(memberName)} has left <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong>.</p>
+<p>Please review your member list if needed.</p>
+</body></html>";
+
+        foreach (var leader in recipients)
+        {
+            await _emailSender.SendAsync(
+                leader.Email!,
+                subject,
+                html,
+                ct,
+                fromDisplayName: groupName);
+        }
     }
 }

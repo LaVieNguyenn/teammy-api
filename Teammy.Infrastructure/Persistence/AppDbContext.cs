@@ -242,6 +242,10 @@ public partial class AppDbContext : DbContext
                 .IsUnique()
                 .HasFilter("(type = 'project'::text)");
 
+            entity.HasIndex(e => new { e.participant_a, e.participant_b }, "ux_chat_dm_pair")
+                .IsUnique()
+                .HasFilter("(type = 'dm'::text)");
+
             entity.Property(e => e.chat_session_id).HasDefaultValueSql("gen_random_uuid()");
             entity.Property(e => e.created_at).HasDefaultValueSql("now()");
             entity.Property(e => e.members).HasDefaultValue(0);

@@ -31,12 +31,8 @@ public static class DependencyInjection
 
         services.AddSingleton<IExternalTokenVerifier, FirebaseTokenVerifier>();
         services.AddSingleton<ITokenService, JwtTokenService>();
-        // Choose email provider: HTTP API (SendGrid/Resend) or SMTP (default)
-        var provider = (configuration["Email:Provider"] ?? configuration["Email:Http:Provider"] ?? "").Trim().ToLowerInvariant();
-        if (provider == "sendgrid" || provider == "resend" || provider == "http")
-            services.AddSingleton<IEmailSender, HttpEmailSender>();
-        else
-            services.AddSingleton<IEmailSender, SmtpEmailSender>();
+        // Email
+        services.AddSingleton<IEmailSender, HttpEmailSender>();
 
         services.AddScoped<IActivityLogRepository, ActivityLogRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
