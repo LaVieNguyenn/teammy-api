@@ -107,6 +107,8 @@ namespace Teammy.Api.Controllers
         // POST /api/topics/import
         [HttpPost("import")]
         //[Authorize(Roles = "moderator")]
+        [DisableRequestSizeLimit]
+        [RequestFormLimits(MultipartBodyLengthLimit = 2L * 1024 * 1024 * 1024, ValueLengthLimit = int.MaxValue)]
         [Consumes("multipart/form-data")]
         public async Task<IActionResult> Import(IFormFile file, CancellationToken ct)
         {

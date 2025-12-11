@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.OpenApi.Models;
 using System.Linq;
 using System.Text;
@@ -22,6 +23,12 @@ foreach (var jsonSource in builder.Configuration.Sources.OfType<JsonConfiguratio
     jsonSource.ReloadOnChange = false;
 
 builder.Services.AddControllers();
+builder.Services.Configure<FormOptions>(options =>
+{
+    options.MultipartBodyLengthLimit = 2L * 1024 * 1024 * 1024; // 2 GB limit for uploads
+    options.ValueLengthLimit = int.MaxValue;
+    options.MemoryBufferThreshold = int.MaxValue;
+});
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSignalR();
 builder.Services.AddSwaggerGen(c =>
