@@ -194,14 +194,8 @@ public sealed class AiMatchingService(
         if (members.Count == 0)
             throw new InvalidOperationException("Nhóm cần ít nhất một thành viên có hồ sơ kỹ năng để gợi ý.");
 
-        var aggregatedProfile = members
-            .Select(m => AiSkillProfile.FromJson(m.SkillsJson))
-            .Where(p => p.HasTags || p.PrimaryRole != AiPrimaryRole.Unknown)
-            .ToList();
-
-        var groupSkillProfile = aggregatedProfile.Count == 0
-            ? AiSkillProfile.Empty
-            : AiSkillProfile.Combine(aggregatedProfile);
+        var memberProfiles = BuildMemberSkillProfiles(members);
+        var groupSkillProfile = BuildGroupSkillProfile(detail.Skills, memberProfiles);
 
         var available = await aiQueries.ListTopicAvailabilityAsync(detail.SemesterId, detail.MajorId, ct);
         if (available.Count == 0)
@@ -251,14 +245,8 @@ public sealed class AiMatchingService(
             throw new InvalidOperationException("Nhóm chưa có chuyên ngành xác định.");
 
         var members = await aiQueries.ListGroupMemberSkillsAsync(request.GroupId, ct);
-        var aggregatedProfile = members
-            .Select(m => AiSkillProfile.FromJson(m.SkillsJson))
-            .Where(p => p.HasTags || p.PrimaryRole != AiPrimaryRole.Unknown)
-            .ToList();
-
-        var groupSkillProfile = aggregatedProfile.Count == 0
-            ? AiSkillProfile.Empty
-            : AiSkillProfile.Combine(aggregatedProfile);
+        var memberProfiles = BuildMemberSkillProfiles(members);
+        var groupSkillProfile = BuildGroupSkillProfile(detail.Skills, memberProfiles);
 
         var mixes = await aiQueries.GetGroupRoleMixAsync(new[] { request.GroupId }, ct);
         var mix = mixes.TryGetValue(request.GroupId, out var snapshot)
@@ -617,16 +605,13 @@ public sealed class AiMatchingService(
 
     private async Task<AiSkillProfile> GetGroupSkillProfileAsync(Guid groupId, CancellationToken ct)
     {
+        var detail = await groupQueries.GetGroupAsync(groupId, ct);
         var members = await aiQueries.ListGroupMemberSkillsAsync(groupId, ct);
-        if (members.Count == 0)
+        if ((detail?.Skills is null || detail.Skills.Count == 0) && members.Count == 0)
             return AiSkillProfile.Empty;
 
-        var aggregated = members
-            .Select(m => AiSkillProfile.FromJson(m.SkillsJson))
-            .Where(p => p.HasTags || p.PrimaryRole != AiPrimaryRole.Unknown)
-            .ToList();
-
-        return aggregated.Count == 0 ? AiSkillProfile.Empty : AiSkillProfile.Combine(aggregated);
+        var memberProfiles = BuildMemberSkillProfiles(members);
+        return BuildGroupSkillProfile(detail?.Skills, memberProfiles);
     }
 
     private (IReadOnlyList<GroupStaffingOptionDto> Groups, IReadOnlyList<StudentPlacementOptionDto> Students) BuildStaffingOptions(
@@ -1206,6 +1191,39 @@ public sealed class AiMatchingService(
         };
 
         return JsonSerializer.Serialize(payload);
+    }
+
+    private static List<AiSkillProfile> BuildMemberSkillProfiles(IEnumerable<GroupMemberSkillSnapshot> members)
+    {
+        return members
+            .Select(m => AiSkillProfile.FromJson(m.SkillsJson))
+            .Where(p => p.HasTags || p.PrimaryRole != AiPrimaryRole.Unknown)
+            .ToList();
+    }
+
+    private static AiSkillProfile BuildGroupSkillProfile(IReadOnlyList<string>? groupSkills, IReadOnlyCollection<AiSkillProfile> memberProfiles)
+    {
+        var sources = new List<AiSkillProfile>();
+
+        if (memberProfiles.Count > 0)
+            sources.AddRange(memberProfiles);
+
+        if (groupSkills is { Count: > 0 })
+        {
+            var canonical = groupSkills
+                .Where(skill => !string.IsNullOrWhiteSpace(skill))
+                .Select(skill => skill.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (canonical.Count > 0)
+            {
+                var inferredRole = AiRoleHelper.InferFromTags(canonical);
+                sources.Add(new AiSkillProfile(inferredRole, canonical));
+            }
+        }
+
+        return sources.Count == 0 ? AiSkillProfile.Empty : AiSkillProfile.Combine(sources);
     }
 
     private static IReadOnlyList<string> RemapMatchingSkills(IReadOnlyList<string> matches, IReadOnlyList<string> topicSkills)
