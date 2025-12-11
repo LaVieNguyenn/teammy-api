@@ -50,6 +50,7 @@ public sealed class GroupService(
         var groupId = await repo.CreateGroupAsync(semesterId, null, majorId, req.Name, req.Description, req.MaxMembers, skillsJson, ct);
         await repo.AddMembershipAsync(groupId, creatorUserId, semesterId, "leader", ct);
         await _postRepo.DeleteProfilePostsForUserAsync(creatorUserId, semesterId, ct);
+        await _postRepo.WithdrawPendingApplicationsForUserInSemesterAsync(creatorUserId, semesterId, ct);
         await LogAsync(new ActivityLogCreateRequest(creatorUserId, "group", "GROUP_CREATED")
         {
             GroupId = groupId,

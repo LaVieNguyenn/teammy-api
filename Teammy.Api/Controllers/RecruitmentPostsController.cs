@@ -58,62 +58,30 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
         }
         var items = await service.ListAsync(skills, majorId, status, exp, TryGetUserId(), ct);
         if (!objectOnly) return Ok(items);
+        var shaped = await ShapeSummaryResponseAsync(items, ct);
+        return Ok(shaped);
+    }
 
-        // Build sequentially to avoid concurrent DbContext usage
-        var shaped = new List<object>(items.Count);
-        foreach (var d in items)
+    [HttpGet("group/{groupId:guid}")]
+    [Authorize]
+    public async Task<ActionResult> ListForGroup([FromRoute] Guid groupId, CancellationToken ct)
+    {
+        var exp = ExpandOptions.None;
+        var objectOnly = _objectOnlyDefault;
+        if (objectOnly)
         {
-            IReadOnlyList<Teammy.Application.Groups.Dtos.GroupMemberDto>? membersDetail = null;
-            Teammy.Application.Groups.Dtos.GroupMemberDto? leaderDetail = null;
-            if (d.GroupId is Guid gid)
-            {
-                var members = await _groupQueries.ListActiveMembersAsync(gid, ct);
-                leaderDetail = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase));
-                membersDetail = members.Where(m => !string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase)).ToList();
-            }
-
-            var topLevelMajor = d.Major ?? d.Group?.Major;
-            var topicObj = d.Group?.Topic;
-            shaped.Add(new
-            {
-                id = d.Id,
-                type = d.Type,
-                status = d.Status,
-                title = d.Title,
-                description = d.Description,
-                position_needed = d.PositionNeeded,
-                skills = d.Skills,
-                createdAt = d.CreatedAt,
-                applicationDeadline = d.ApplicationDeadline,
-                currentMembers = d.CurrentMembers,
-                applicationsCount = d.ApplicationsCount,
-                hasApplied = d.HasApplied,
-                myApplicationId = d.MyApplicationId,
-                myApplicationStatus = d.MyApplicationStatus,
-                semester = d.Semester,
-                mentor = d.Group?.Mentor,
-                group = d.Group is null ? null : new
-                {
-                    d.Group.GroupId,
-                    d.Group.SemesterId,
-                    d.Group.MentorId,
-                    d.Group.Name,
-                    d.Group.Description,
-                    d.Group.Status,
-                    d.Group.MaxMembers,
-                    d.Group.MajorId,
-                    d.Group.TopicId,
-                    d.Group.CreatedAt,
-                    d.Group.UpdatedAt,
-                    leader = leaderDetail,
-                    members = membersDetail,
-                    mentor = d.Group.Mentor
-                },
-                major = topLevelMajor,
-                topic = topicObj,
-                topicName = topicObj?.Title
-            });
+            exp |= ExpandOptions.Semester | ExpandOptions.Group | ExpandOptions.Major;
         }
+        IReadOnlyList<RecruitmentPostSummaryDto> items;
+        try
+        {
+            items = await service.ListByGroupAsync(groupId, GetUserId(), exp, ct);
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (KeyNotFoundException) { return NotFound(); }
+
+        if (!objectOnly) return Ok(items);
+        var shaped = await ShapeSummaryResponseAsync(items, ct);
         return Ok(shaped);
     }
 
@@ -133,8 +101,6 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
         }
         var items = await service.ListAppliedByUserAsync(GetUserId(), exp, ct);
         if (!objectOnly) return Ok(items);
-
-        // Build sequentially like List() to avoid DbContext concurrency
         var shaped = new List<object>(items.Count);
         foreach (var d in items)
         {
@@ -209,8 +175,6 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
         var d = await service.GetAsync(id, exp, TryGetUserId(), ct);
         if (d is null) return NotFound();
         if (!objectOnly) return Ok(d);
-
-        // Enrich group with member userIds
         IReadOnlyList<Teammy.Application.Groups.Dtos.GroupMemberDto>? membersDetail2 = null;
         Teammy.Application.Groups.Dtos.GroupMemberDto? leaderDetail2 = null;
         if (d.GroupId is Guid gid)
@@ -261,6 +225,64 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
             topic = topicObj,
             topicName = topicObj?.Title
         });
+    }
+    private async Task<List<object>> ShapeSummaryResponseAsync(IReadOnlyList<RecruitmentPostSummaryDto> items, CancellationToken ct)
+    {
+        var shaped = new List<object>(items.Count);
+        foreach (var d in items)
+        {
+            IReadOnlyList<Teammy.Application.Groups.Dtos.GroupMemberDto>? membersDetail = null;
+            Teammy.Application.Groups.Dtos.GroupMemberDto? leaderDetail = null;
+            if (d.GroupId is Guid gid)
+            {
+                var members = await _groupQueries.ListActiveMembersAsync(gid, ct);
+                leaderDetail = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase));
+                membersDetail = members.Where(m => !string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase)).ToList();
+            }
+
+            var topLevelMajor = d.Major ?? d.Group?.Major;
+            var topicObj = d.Group?.Topic;
+            shaped.Add(new
+            {
+                id = d.Id,
+                type = d.Type,
+                status = d.Status,
+                title = d.Title,
+                description = d.Description,
+                position_needed = d.PositionNeeded,
+                skills = d.Skills,
+                createdAt = d.CreatedAt,
+                applicationDeadline = d.ApplicationDeadline,
+                currentMembers = d.CurrentMembers,
+                applicationsCount = d.ApplicationsCount,
+                hasApplied = d.HasApplied,
+                myApplicationId = d.MyApplicationId,
+                myApplicationStatus = d.MyApplicationStatus,
+                semester = d.Semester,
+                mentor = d.Group?.Mentor,
+                group = d.Group is null ? null : new
+                {
+                    d.Group.GroupId,
+                    d.Group.SemesterId,
+                    d.Group.MentorId,
+                    d.Group.Name,
+                    d.Group.Description,
+                    d.Group.Status,
+                    d.Group.MaxMembers,
+                    d.Group.MajorId,
+                    d.Group.TopicId,
+                    d.Group.CreatedAt,
+                    d.Group.UpdatedAt,
+                    leader = leaderDetail,
+                    members = membersDetail,
+                    mentor = d.Group.Mentor
+                },
+                major = topLevelMajor,
+                topic = topicObj,
+                topicName = topicObj?.Title
+            });
+        }
+        return shaped;
     }
 
     private static Teammy.Application.Posts.Dtos.ExpandOptions ParseExpand(string? e)

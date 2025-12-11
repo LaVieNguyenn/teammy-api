@@ -32,6 +32,7 @@ public interface IRecruitmentPostRepository
     Task<int> SetOpenPostsStatusForGroupAsync(Guid groupId, string newStatus, CancellationToken ct);
 
     Task<int> RejectPendingApplicationsForUserInGroupAsync(Guid groupId, Guid userId, CancellationToken ct);
+    Task<int> WithdrawPendingApplicationsForUserInSemesterAsync(Guid userId, Guid semesterId, CancellationToken ct);
 
     Task ReactivateApplicationAsync(Guid applicationId, string? message, CancellationToken ct);
 

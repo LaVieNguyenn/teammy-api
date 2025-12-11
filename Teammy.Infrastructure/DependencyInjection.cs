@@ -13,6 +13,7 @@ using Teammy.Application.Skills.Services;
 using Teammy.Application.Users.Services;
 using Teammy.Application.ProjectTracking.Interfaces;
 using Teammy.Application.ProjectTracking.Services;
+using Teammy.Application.Reports;
 using Teammy.Infrastructure.Auth;
 using Teammy.Infrastructure.Email;
 using Teammy.Infrastructure.Excel;
@@ -20,6 +21,7 @@ using Teammy.Infrastructure.Files;
 using Teammy.Infrastructure.Persistence;
 using Teammy.Infrastructure.Persistence.Repositories;
 using Teammy.Infrastructure.Topics;
+using Teammy.Infrastructure.Reports;
 namespace Teammy.Infrastructure;
 
 public static class DependencyInjection
@@ -109,6 +111,9 @@ public static class DependencyInjection
         
         // Semester phase guard
         services.AddScoped<SemesterPhaseGuard>();
+
+        // Reports
+        services.AddScoped<IReportExportService, ExcelReportExportService>();
         return services;
     }
 }

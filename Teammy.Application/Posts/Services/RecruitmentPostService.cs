@@ -62,6 +62,15 @@ public sealed class RecruitmentPostService(
         return items.Where(x => x.GroupId != null).ToList();
     }
 
+    public async Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListByGroupAsync(Guid groupId, Guid currentUserId, ExpandOptions expand, CancellationToken ct)
+    {
+        _ = await groupQueries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
+        var isMember = await groupQueries.IsActiveMemberAsync(groupId, currentUserId, ct);
+        if (!isMember) throw new UnauthorizedAccessException("Not a group member");
+        await repo.ExpireOpenPostsAsync(DateTime.UtcNow, ct);
+        return await queries.ListByGroupAsync(groupId, expand, currentUserId, ct);
+    }
+
     public async Task<RecruitmentPostDetailDto?> GetAsync(Guid id, ExpandOptions expand, Guid? currentUserId, CancellationToken ct)
     {
         await repo.ExpireOpenPostsAsync(DateTime.UtcNow, ct);
