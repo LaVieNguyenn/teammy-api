@@ -1,4 +1,7 @@
+using System.Collections.Generic;
+using System.Net;
 using Teammy.Application.Common.Interfaces;
+using Teammy.Application.Invitations.Templates;
 using Teammy.Application.Posts.Dtos;
 
 namespace Teammy.Application.Posts.Services;
@@ -8,9 +11,16 @@ public sealed class ProfilePostService(
     IRecruitmentPostReadOnlyQueries queries,
     IGroupReadOnlyQueries groupQueries,
     IGroupRepository groupRepo,
-    IUserReadOnlyQueries userQueries)
+    IUserReadOnlyQueries userQueries,
+    IEmailSender emailSender,
+    IAppUrlProvider urlProvider)
 {
+    private readonly IGroupReadOnlyQueries _groupQueries = groupQueries;
+    private readonly IRecruitmentPostReadOnlyQueries _queries = queries;
     private readonly IUserReadOnlyQueries _userQueries = userQueries;
+    private readonly IEmailSender _emailSender = emailSender;
+    private readonly IAppUrlProvider _urlProvider = urlProvider;
+    private const string AppName = "TEAMMY";
 
     public async Task<Guid> CreateAsync(Guid currentUserId, CreateProfilePostRequest req, CancellationToken ct)
     {
@@ -84,13 +94,15 @@ public sealed class ProfilePostService(
         }
 
         var existing = await queries.FindApplicationByPostAndGroupAsync(profilePostId, groupId, ct);
+        var inviteeEmail = ownerDetail.Email;
         if (existing.HasValue)
         {
             var (applicationId, status) = existing.Value;
             if (string.Equals(status, "pending", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException($"already_invited:{applicationId}");
+                throw new InvalidOperationException($"Already Invited!!!");
 
             await repo.ReactivateApplicationAsync(applicationId, null, ct);
+            await SendProfileInviteEmailAsync(profilePostId, groupId, currentUserId, groupDetail.Name, inviteeEmail, ct);
             return;
         }
         await repo.CreateApplicationAsync(
@@ -100,6 +112,7 @@ public sealed class ProfilePostService(
             appliedByUserId: currentUserId,
             message: null,
             ct);
+        await SendProfileInviteEmailAsync(profilePostId, groupId, currentUserId, groupDetail.Name, inviteeEmail, ct);
     }
 
     public Task<IReadOnlyList<ProfilePostInvitationDto>> ListInvitationsAsync(Guid currentUserId, string? status, CancellationToken ct)
@@ -131,9 +144,10 @@ public sealed class ProfilePostService(
                 throw new InvalidOperationException("major_mismatch");
         }
         await groupRepo.AddMembershipAsync(invitation.GroupId, currentUserId, invitation.SemesterId, "member", ct);
-    await repo.DeleteProfilePostsForUserAsync(currentUserId, invitation.SemesterId, ct);
         await repo.UpdateApplicationStatusAsync(candidateId, "accepted", ct);
         await repo.RejectPendingProfileInvitationsAsync(currentUserId, invitation.SemesterId, candidateId, ct);
+        await repo.DeleteProfilePostsForUserAsync(currentUserId, invitation.SemesterId, ct);
+        await SendProfileInvitationStatusEmailAsync(invitation, userDetail.DisplayName ?? userDetail.Email ?? "Student", "accepted", ct);
     }
 
     public async Task RejectInvitationAsync(Guid postId, Guid candidateId, Guid currentUserId, CancellationToken ct)
@@ -146,5 +160,77 @@ public sealed class ProfilePostService(
             throw new InvalidOperationException("Invitation already handled");
 
         await repo.UpdateApplicationStatusAsync(candidateId, "rejected", ct);
+        var userDetail = await _userQueries.GetAdminDetailAsync(currentUserId, ct);
+        var displayName = userDetail?.DisplayName ?? userDetail?.Email ?? "Student";
+        await SendProfileInvitationStatusEmailAsync(invitation, displayName, "rejected", ct);
+    }
+
+    private async Task SendProfileInviteEmailAsync(Guid profilePostId, Guid groupId, Guid leaderUserId, string groupName, string? inviteeEmail, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(inviteeEmail)) return;
+        var leader = await _userQueries.GetAdminDetailAsync(leaderUserId, ct);
+        if (leader is null || string.IsNullOrWhiteSpace(leader.Email)) return;
+
+        var profile = await _queries.GetProfilePostAsync(profilePostId, ExpandOptions.None, null, ct);
+        List<(string Label, string Value)>? infoRows = null;
+        if (profile is not null)
+        {
+            infoRows = new List<(string, string)>();
+            if (!string.IsNullOrWhiteSpace(profile.Title))
+                infoRows.Add(("Profile title", profile.Title));
+            if (!string.IsNullOrWhiteSpace(profile.Description))
+                infoRows.Add(("Introduction", profile.Description!));
+            if (!string.IsNullOrWhiteSpace(profile.Skills))
+                infoRows.Add(("Skills", profile.Skills!));
+            if (infoRows.Count == 0) infoRows = null;
+        }
+
+        var actionUrl = _urlProvider.GetProfilePostUrl(profilePostId);
+        var (subject, html) = InvitationEmailTemplate.Build(
+            AppName,
+            leader.DisplayName ?? "Group leader",
+            leader.Email,
+            groupName,
+            actionUrl,
+            logoUrl: null,
+            brandHex: "#F97316",
+            extraInfo: infoRows,
+            extraTitle: "Profile post");
+
+        await _emailSender.SendAsync(
+            inviteeEmail!,
+            subject,
+            html,
+            ct,
+            replyToEmail: leader.Email,
+            fromDisplayName: leader.DisplayName);
+    }
+
+    private async Task SendProfileInvitationStatusEmailAsync(ProfilePostInvitationDetail invitation, string applicantName, string status, CancellationToken ct)
+    {
+        var leaders = await _groupQueries.ListActiveMembersAsync(invitation.GroupId, ct);
+        var leaderRecipients = leaders
+            .Where(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(m.Email))
+            .ToList();
+        if (leaderRecipients.Count == 0) return;
+
+        var group = await _groupQueries.GetGroupAsync(invitation.GroupId, ct);
+        var groupName = group?.Name ?? "your group";
+        var statusText = status.Equals("accepted", StringComparison.OrdinalIgnoreCase) ? "accepted" : "rejected";
+        var subject = $"{AppName} - {applicantName} {statusText} your invitation";
+        var html = $@"<!doctype html>
+<html><body style=""font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#0f172a"">
+<p>{WebUtility.HtmlEncode(applicantName)} has <strong>{statusText}</strong> the invitation to join <b>{WebUtility.HtmlEncode(groupName)}</b>.</p>
+</body></html>";
+
+        foreach (var leader in leaderRecipients)
+        {
+            await _emailSender.SendAsync(
+                leader.Email,
+                subject,
+                html,
+                ct,
+                fromDisplayName: groupName);
+        }
     }
 }

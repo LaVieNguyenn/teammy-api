@@ -155,7 +155,6 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
 
     public async Task TransferLeadershipAsync(Guid groupId, Guid currentLeaderUserId, Guid newLeaderUserId, CancellationToken ct)
     {
-        // Demote current leader -> member, then promote new leader -> leader (ensure unique index)
         await using var tx = await db.Database.BeginTransactionAsync(ct);
 
         var currentLeader = await db.group_members.FirstOrDefaultAsync(x => x.group_id == groupId && x.user_id == currentLeaderUserId && x.status == "leader", ct)
@@ -163,14 +162,10 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
 
         var newLeader = await db.group_members.FirstOrDefaultAsync(x => x.group_id == groupId && x.user_id == newLeaderUserId && x.status == "member", ct)
             ?? throw new KeyNotFoundException("New leader must be an existing member of the group");
-
         currentLeader.status = "member";
         await db.SaveChangesAsync(ct);
-
-        // Now promote new leader
         newLeader.status = "leader";
         await db.SaveChangesAsync(ct);
-
         await tx.CommitAsync(ct);
     }
 

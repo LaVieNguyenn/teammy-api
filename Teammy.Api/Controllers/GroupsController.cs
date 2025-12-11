@@ -271,15 +271,15 @@ public sealed class GroupsController : ControllerBase
             {
                 var idText = ex.Message.Split(':', 2)[1];
                 if (Guid.TryParse(idText, out var invId))
-                    return Conflict(new { code = "already_invited", invitationId = invId });
-                return Conflict(new { code = "already_invited" });
+                    return Conflict(new { code = "Already Invited!!!"});
+                return Conflict(new { code = "Already Invited!!!" });
             }
             if (ex.Message.StartsWith("invite_exists:"))
             {
                 var parts = ex.Message.Split(':');
                 Guid.TryParse(parts.ElementAtOrDefault(1), out var invId);
                 var status = parts.ElementAtOrDefault(2) ?? "unknown";
-                return Conflict(new { code = "invite_exists", invitationId = invId, status });
+                return Conflict(new { code = "Invite Exists"});
             }
             return Conflict(ex.Message);
         }
@@ -289,8 +289,6 @@ public sealed class GroupsController : ControllerBase
     [Authorize]
     public ActionResult AssignRole([FromRoute] Guid id, [FromRoute] Guid userId)
         => StatusCode(501, "Not Implemented: internal member role not yet modeled");
-
-    // Leader removes a member or cancels a pending member
     [HttpDelete("{id:guid}/members/{userId:guid}")]
     [Authorize]
     public async Task<ActionResult> ForceRemoveMember([FromRoute] Guid id, [FromRoute] Guid userId, CancellationToken ct)
@@ -362,7 +360,6 @@ public sealed class GroupsController : ControllerBase
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
     }
-    // Unified pending list (leader-only)
     [HttpGet("{id:guid}/pending")]
     [Authorize]
     public async Task<ActionResult<IReadOnlyList<GroupPendingItemDto>>> UnifiedPending([FromRoute] Guid id, CancellationToken ct)

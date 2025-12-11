@@ -1,6 +1,7 @@
 using Teammy.Application.Common.Interfaces;
 using System.Text.Json;
 using Teammy.Application.Posts.Dtos;
+using Teammy.Application.Posts.Templates;
 
 namespace Teammy.Application.Posts.Services;
 
@@ -8,8 +9,16 @@ public sealed class RecruitmentPostService(
     IRecruitmentPostRepository repo,
     IRecruitmentPostReadOnlyQueries queries,
     IGroupReadOnlyQueries groupQueries,
-    IGroupRepository groupRepo)
+    IGroupRepository groupRepo,
+    IEmailSender emailSender,
+    IUserReadOnlyQueries userQueries,
+    IAppUrlProvider urlProvider)
 {
+    private const string AppName = "TEAMMY";
+    private readonly IEmailSender _emailSender = emailSender;
+    private readonly IUserReadOnlyQueries _userQueries = userQueries;
+    private readonly IAppUrlProvider _urlProvider = urlProvider;
+
     public async Task<Guid> CreateAsync(Guid currentUserId, CreateRecruitmentPostRequest req, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(req.Title)) throw new ArgumentException("Title is required");
@@ -75,26 +84,22 @@ public sealed class RecruitmentPostService(
         await EnsurePostIsOpenAsync(owner, postId, ct);
         var (maxMembers, activeCount) = await groupQueries.GetGroupCapacityAsync(owner.GroupId!.Value, ct);
         if (activeCount >= maxMembers) throw new InvalidOperationException("Group is full");
-
         var hasActive = await groupQueries.HasActiveMembershipInSemesterAsync(userId, owner.SemesterId, ct);
         if (hasActive) throw new InvalidOperationException("User already has active/pending membership in this semester");
-
-        // If an application exists for this post+user: handle by status
         var existingApp = await queries.FindApplicationByPostAndUserAsync(postId, userId, ct);
         if (existingApp.HasValue)
         {
             var (appId, status) = existingApp.Value;
             if (string.Equals(status, "pending", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException($"already_applied:{appId}");
+                throw new InvalidOperationException($"Already applied!!!");
             if (string.Equals(status, "accepted", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException($"already_accepted:{appId}");
-
-            // statuses like rejected/withdrawn can be reactivated
+                throw new InvalidOperationException($"Already accepted!!!");
             await repo.ReactivateApplicationAsync(appId, message, ct);
+            await NotifyLeadersAboutApplicationAsync(postId, owner.GroupId.Value, userId, message, ct);
             return;
         }
-
         await repo.CreateApplicationAsync(postId, userId, null, userId, message, ct);
+        await NotifyLeadersAboutApplicationAsync(postId, owner.GroupId.Value, userId, message, ct);
     }
 
     public Task<IReadOnlyList<ApplicationDto>> ListApplicationsAsync(Guid postId, Guid currentUserId, CancellationToken ct)
@@ -115,27 +120,39 @@ public sealed class RecruitmentPostService(
         var owner = await EnsureOwnerAndGet(postId, currentUserId, ct);
         var (maxMembers, activeCount) = await groupQueries.GetGroupCapacityAsync(owner.GroupId!.Value, ct);
         if (activeCount >= maxMembers) throw new InvalidOperationException("Group is full");
-        // Load application
-        var apps = await queries.ListApplicationsAsync(postId, ct);
-        var app = apps.FirstOrDefault(a => a.ApplicationId == appId) ?? throw new KeyNotFoundException("Application not found");
+        var app = await GetApplicationForPostAsync(postId, appId, ct);
         if (app.ApplicantUserId is null) throw new InvalidOperationException("Invalid application");
-
         var hasActive = await groupQueries.HasActiveMembershipInSemesterAsync(app.ApplicantUserId.Value, owner.SemesterId, ct);
         if (hasActive) throw new InvalidOperationException("User already has active/pending membership in this semester");
-
         await groupRepo.AddMembershipAsync(owner.GroupId.Value, app.ApplicantUserId.Value, owner.SemesterId, "member", ct);
         await repo.DeleteProfilePostsForUserAsync(app.ApplicantUserId.Value, owner.SemesterId, ct);
         await repo.UpdateApplicationStatusAsync(appId, "accepted", ct);
-
-        // Cleanup duplicates: reject other pending applications by this user to the same group
         await repo.RejectPendingApplicationsForUserInGroupAsync(owner.GroupId.Value, app.ApplicantUserId.Value, ct);
-
-        // Closing posts now happens when leader selects topic (group update)
+        await NotifyApplicantDecisionAsync(
+            app.ApplicantUserId.Value,
+            app.ApplicantEmail,
+            app.ApplicantDisplayName,
+            owner.GroupId.Value,
+            postId,
+            "accepted",
+            ct);
     }
 
     public async Task RejectAsync(Guid postId, Guid appId, Guid currentUserId, CancellationToken ct)
     {
-        await EnsureOwner(postId, currentUserId, ct, () => repo.UpdateApplicationStatusAsync(appId, "rejected", ct));
+        var owner = await EnsureOwnerAndGet(postId, currentUserId, ct);
+        var app = await GetApplicationForPostAsync(postId, appId, ct);
+        if (app.ApplicantUserId is null) throw new InvalidOperationException("Invalid application");
+
+        await repo.UpdateApplicationStatusAsync(appId, "rejected", ct);
+        await NotifyApplicantDecisionAsync(
+            app.ApplicantUserId.Value,
+            app.ApplicantEmail,
+            app.ApplicantDisplayName,
+            owner.GroupId!.Value,
+            postId,
+            "rejected",
+            ct);
     }
 
     public async Task WithdrawAsync(Guid postId, Guid appId, Guid currentUserId, CancellationToken ct)
@@ -201,6 +218,98 @@ public sealed class RecruitmentPostService(
                 throw new UnauthorizedAccessException("Not a group post");
             throw new InvalidOperationException("Post does not accept applications");
         }
+    }
+
+    private async Task NotifyLeadersAboutApplicationAsync(Guid postId, Guid groupId, Guid applicantUserId, string? applicantMessage, CancellationToken ct)
+    {
+        var leaders = await groupQueries.ListActiveMembersAsync(groupId, ct);
+        var recipients = leaders
+            .Where(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(m.Email))
+            .ToList();
+
+        if (recipients.Count == 0) return;
+
+        var group = await groupQueries.GetGroupAsync(groupId, ct);
+        var groupName = group?.Name ?? "your group";
+        var applicant = await _userQueries.GetAdminDetailAsync(applicantUserId, ct);
+        var applicantName = applicant?.DisplayName ?? "A student";
+        var applicantEmail = applicant?.Email;
+        var postDetail = await queries.GetAsync(postId, ExpandOptions.None, null, ct);
+        var postTitle = postDetail?.Title ?? groupName;
+        var actionUrl = _urlProvider.GetRecruitmentPostUrl(postId);
+        var (subject, html) = RecruitmentPostEmailTemplate.BuildApplicationNotice(
+            AppName,
+            groupName,
+            applicantName,
+            applicantEmail,
+            applicantMessage,
+            actionUrl,
+            postTitle,
+            postDetail?.Description,
+            postDetail?.PositionNeeded,
+            postDetail?.Skills);
+
+        foreach (var leader in recipients)
+        {
+            await _emailSender.SendAsync(
+                leader.Email,
+                subject,
+                html,
+                ct,
+                replyToEmail: applicantEmail,
+                fromDisplayName: applicantName);
+        }
+    }
+
+    private async Task<ApplicationDto> GetApplicationForPostAsync(Guid postId, Guid applicationId, CancellationToken ct)
+    {
+        var apps = await queries.ListApplicationsAsync(postId, ct);
+        var app = apps.FirstOrDefault(a => a.ApplicationId == applicationId);
+        if (app is null) throw new KeyNotFoundException("Application not found");
+        return app;
+    }
+
+    private async Task NotifyApplicantDecisionAsync(
+        Guid applicantUserId,
+        string? applicantEmail,
+        string? applicantDisplayName,
+        Guid groupId,
+        Guid postId,
+        string decision,
+        CancellationToken ct)
+    {
+        var detail = applicantEmail;
+        var displayName = applicantDisplayName;
+        if (string.IsNullOrWhiteSpace(detail) || string.IsNullOrWhiteSpace(displayName))
+        {
+            var profile = await _userQueries.GetAdminDetailAsync(applicantUserId, ct);
+            detail ??= profile?.Email;
+            displayName ??= profile?.DisplayName ?? profile?.Email ?? "You";
+        }
+
+        if (string.IsNullOrWhiteSpace(detail)) return;
+
+        var group = await groupQueries.GetGroupAsync(groupId, ct);
+        var groupName = group?.Name ?? "your group";
+        var postDetail = await queries.GetAsync(postId, ExpandOptions.None, null, ct);
+        var actionUrl = _urlProvider.GetRecruitmentPostUrl(postId);
+        var (subject, html) = RecruitmentPostEmailTemplate.BuildApplicationDecision(
+            AppName,
+            displayName ?? "You",
+            decision,
+            groupName,
+            postDetail?.Title ?? groupName,
+            postDetail?.Description,
+            postDetail?.PositionNeeded,
+            postDetail?.Skills,
+            actionUrl);
+
+        await _emailSender.SendAsync(
+            detail,
+            subject,
+            html,
+            ct,
+            fromDisplayName: groupName);
     }
 
     private static string? SerializeSkills(List<string>? skills)

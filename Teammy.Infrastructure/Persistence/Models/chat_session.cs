@@ -11,6 +11,10 @@ public partial class chat_session
 
     public Guid? group_id { get; set; }
 
+    public Guid? participant_a { get; set; }
+
+    public Guid? participant_b { get; set; }
+
     public int members { get; set; }
 
     public DateTime created_at { get; set; }
