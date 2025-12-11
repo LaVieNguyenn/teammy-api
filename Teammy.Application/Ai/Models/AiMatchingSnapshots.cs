@@ -65,6 +65,7 @@ public sealed record TopicAvailabilitySnapshot(
     string Title,
     string? Description,
     string? SkillsJson,
+    IReadOnlyList<string> SkillNames,
     long UsedByGroups,
     bool CanTakeMore
 );

@@ -1207,6 +1207,40 @@ public sealed class AiMatchingService(
         return JsonSerializer.Serialize(payload);
     }
 
+    private static IReadOnlyList<string> RemapMatchingSkills(IReadOnlyList<string> matches, IReadOnlyList<string> topicSkills)
+    {
+        if (matches.Count == 0 || topicSkills.Count == 0)
+            return matches;
+
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var skill in topicSkills)
+        {
+            var key = NormalizeSkillKey(skill);
+            if (key is not null && !map.ContainsKey(key))
+                map[key] = skill;
+        }
+
+        if (map.Count == 0)
+            return matches;
+
+        var remapped = matches
+            .Select(match => map.TryGetValue(NormalizeSkillKey(match) ?? string.Empty, out var display)
+                ? display
+                : match)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return remapped.Count == 0 ? matches : remapped;
+    }
+
+    private static string? NormalizeSkillKey(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        return value.Trim().ToLowerInvariant();
+    }
+
     private Task RefreshAssignmentCachesAsync(CancellationToken ct)
         => aiQueries.RefreshStudentsPoolAsync(ct);
 
@@ -1354,7 +1388,8 @@ public sealed class AiMatchingService(
             return null;
 
         var normalizedScore = NormalizeScoreToPercent(totalScore, TopicScoreThreshold, TopicScoreMax);
-        return new TopicSuggestionDto(topic.TopicId, topic.Title, topic.Description, normalizedScore, topic.CanTakeMore, matchingSkills);
+        var displayMatches = RemapMatchingSkills(matchingSkills, topic.SkillNames);
+        return new TopicSuggestionDto(topic.TopicId, topic.Title, topic.Description, normalizedScore, topic.CanTakeMore, displayMatches, topic.SkillNames);
     }
 
     private static ProfilePostSuggestionDto? BuildProfilePostSuggestion(
