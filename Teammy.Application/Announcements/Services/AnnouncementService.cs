@@ -91,6 +91,12 @@ public sealed class AnnouncementService(
                 if (!request.SemesterId.HasValue)
                     throw new ValidationException("SemesterId is required for semester scope");
                 break;
+            case AnnouncementScopes.GroupsWithoutTopic:
+            case AnnouncementScopes.GroupsUnderstaffed:
+            case AnnouncementScopes.StudentsWithoutGroup:
+                if (!request.SemesterId.HasValue)
+                    throw new ValidationException("SemesterId is required for this scope");
+                break;
             case AnnouncementScopes.Role:
                 if (string.IsNullOrWhiteSpace(request.TargetRole))
                     throw new ValidationException("TargetRole is required for role scope");

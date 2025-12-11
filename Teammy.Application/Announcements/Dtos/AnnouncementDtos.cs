@@ -6,8 +6,20 @@ public static class AnnouncementScopes
     public const string Semester = "semester";
     public const string Role = "role";
     public const string Group = "group";
+    public const string GroupsWithoutTopic = "groups_without_topic";
+    public const string GroupsUnderstaffed = "groups_understaffed";
+    public const string StudentsWithoutGroup = "students_without_group";
 
-    public static readonly string[] All = { Global, Semester, Role, Group };
+    public static readonly string[] All =
+    {
+        Global,
+        Semester,
+        Role,
+        Group,
+        GroupsWithoutTopic,
+        GroupsUnderstaffed,
+        StudentsWithoutGroup
+    };
 
     public static bool IsValid(string? scope)
         => !string.IsNullOrWhiteSpace(scope)
