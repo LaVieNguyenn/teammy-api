@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -232,6 +233,7 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
                 r.title ?? string.Empty,
                 r.description,
                 r.skills,
+                ParseSkillList(r.skills),
                 r.used_by_groups ?? 0,
                 r.can_take_more ?? false))
             .ToList();
@@ -361,5 +363,29 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
             // ignore malformed skill json
         }
         return null;
+    }
+
+    private static IReadOnlyList<string> ParseSkillList(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return Array.Empty<string>();
+
+        try
+        {
+            var list = JsonSerializer.Deserialize<List<string>>(json);
+            if (list is null || list.Count == 0)
+                return Array.Empty<string>();
+
+            return list
+                .Select(item => item?.Trim())
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .Select(item => item!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
     }
 }

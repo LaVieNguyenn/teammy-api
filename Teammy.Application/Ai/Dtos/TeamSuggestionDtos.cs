@@ -45,7 +45,8 @@ public sealed record TopicSuggestionDto(
     string? Description,
     int Score,
     bool CanTakeMore,
-    IReadOnlyList<string> MatchingSkills
+    IReadOnlyList<string> MatchingSkills,
+    IReadOnlyList<string> TopicSkills
 )
 {
     public TopicDetailDto? Detail { get; init; }
