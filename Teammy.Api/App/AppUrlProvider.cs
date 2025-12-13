@@ -8,11 +8,11 @@ public sealed class AppUrlProvider(IConfiguration cfg) : IAppUrlProvider
     private readonly string _baseUrl = cfg["App:ClientUrl"]?.TrimEnd('/') ?? "https://teammy.vercel.app";
 
     public string GetInvitationUrl(Guid invitationId, Guid groupId)
-        => $"{_baseUrl}/invitations/{invitationId}?groupId={groupId}";
+        => $"{_baseUrl}/login;";
 
     public string GetRecruitmentPostUrl(Guid postId)
-        => $"{_baseUrl}/recruitment-posts/{postId}";
+        => $"{_baseUrl}/login;";
 
     public string GetProfilePostUrl(Guid postId)
-        => $"{_baseUrl}/profile-posts/{postId}";
+        => $"{_baseUrl}/login;";
 }

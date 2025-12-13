@@ -182,8 +182,6 @@ public sealed class GroupService(
         string? skillsJson = req.Skills is null ? null : SerializeSkills(req.Skills);
         await repo.UpdateGroupAsync(groupId, req.Name, req.Description, req.MaxMembers, req.MajorId, null, null, skillsJson, ct);
     }
-
-    // Leader remove a member 
     public async Task ForceRemoveMemberAsync(Guid groupId, Guid leaderUserId, Guid targetUserId, CancellationToken ct)
     {
         var isLeader = await queries.IsLeaderAsync(groupId, leaderUserId, ct);

@@ -52,6 +52,12 @@ public sealed class ActivityLogRepository(AppDbContext db) : IActivityLogReposit
         if (request.Before.HasValue)
             baseQuery = baseQuery.Where(x => x.created_at < request.Before.Value);
 
+        if (request.StartUtc.HasValue)
+            baseQuery = baseQuery.Where(x => x.created_at >= request.StartUtc.Value);
+
+        if (request.EndUtc.HasValue)
+            baseQuery = baseQuery.Where(x => x.created_at < request.EndUtc.Value);
+
         var limit = request.GetEffectiveLimit();
 
         baseQuery = baseQuery.OrderByDescending(x => x.created_at);

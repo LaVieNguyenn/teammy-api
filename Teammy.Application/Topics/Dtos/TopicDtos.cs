@@ -34,7 +34,10 @@ namespace Teammy.Application.Topics.Dtos
         string? Description,
         string? Source,
         TopicRegistrationFileDto? RegistrationFile,
-        string Status,       // 'open' | 'closed' | 'archived'
+        string Status,       // 'open' | 'pending' | 'closed' | 'archived'
+        Guid? PendingGroupId,
+        string? PendingGroupName,
+        DateTime? PendingSince,
 
         // Created by
         Guid   CreatedById,
@@ -68,6 +71,9 @@ namespace Teammy.Application.Topics.Dtos
         string? Source,
         TopicRegistrationFileDto? RegistrationFile,
         string Status,
+        Guid? PendingGroupId,
+        string? PendingGroupName,
+        DateTime? PendingSince,
 
         // Created by
         Guid   CreatedById,

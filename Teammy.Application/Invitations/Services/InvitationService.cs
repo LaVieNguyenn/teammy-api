@@ -99,10 +99,13 @@ public sealed class InvitationService(
         if (string.Equals(detail.Status, "active", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Group is already active");
         if (detail.TopicId.HasValue && detail.TopicId.Value != topicId)
-            throw new InvalidOperationException("Group already linked to a different topic");
+            throw new InvalidOperationException("Group already assigned topic");
 
         var topic = await _topicQueries.GetByIdAsync(topicId, ct) ?? throw new KeyNotFoundException("Topic not found");
-        if (!string.Equals(topic.Status, "open", StringComparison.OrdinalIgnoreCase))
+        var topicStatus = topic.Status?.ToLowerInvariant();
+        var ownsPending = topic.PendingGroupId.HasValue && topic.PendingGroupId.Value == groupId;
+        if (!(string.Equals(topicStatus, "open", StringComparison.OrdinalIgnoreCase) ||
+              (string.Equals(topicStatus, "pending", StringComparison.OrdinalIgnoreCase) && ownsPending)))
             throw new InvalidOperationException("Topic is not open");
         if (topic.SemesterId != detail.SemesterId)
             throw new InvalidOperationException("Topic must belong to the same semester");
@@ -122,7 +125,7 @@ public sealed class InvitationService(
             if (existingTopicId == topicId)
             {
                 if (status != "pending")
-                    throw new InvalidOperationException($"invite_exists:{dupId}:{status}");
+                    throw new InvalidOperationException($"Invite existed!!!");
 
                 await repo.ResetPendingAsync(dupId, now, expiresAt, ct);
                 invitationId = dupId;
@@ -130,7 +133,7 @@ public sealed class InvitationService(
             else
             {
                 if (status == "pending")
-                    throw new InvalidOperationException("invite_pending_other_topic");
+                    throw new InvalidOperationException("Invite pending other topic");
 
                 invitationId = await repo.CreateAsync(groupId, mentorUserId, invitedByUserId, message, expiresAt, topicId, ct);
             }
@@ -141,6 +144,7 @@ public sealed class InvitationService(
         }
 
         var detailDto = await queries.GetAsync(invitationId, ct);
+        await _topicWrite.SetStatusAsync(topicId, "pending", groupId, now, ct);
         var mentor = await userQueries.GetCurrentUserAsync(mentorUserId, ct);
         if (!string.IsNullOrWhiteSpace(mentor?.Email))
         {
@@ -220,11 +224,11 @@ public sealed class InvitationService(
         if (inv.Status != "pending") throw new InvalidOperationException("Invitation already handled");
 
         await repo.UpdateStatusAsync(invitationId, "rejected", DateTime.UtcNow, ct);
+        if (inv.TopicId.HasValue)
+            await _topicWrite.SetStatusAsync(inv.TopicId.Value, "open", null, null, ct);
         await BroadcastStatusAsync(inv.InviteeUserId, inv.GroupId, invitationId, "rejected", ct);
         await NotifyInviterAsync(inv, "rejected", ct);
     }
-
-    // Leader-only cancel an invitation
     public async Task CancelAsync(Guid invitationId, Guid currentUserId, CancellationToken ct)
     {
         var inv = await queries.GetAsync(invitationId, ct) ?? throw new KeyNotFoundException("Invitation not found");
@@ -233,12 +237,19 @@ public sealed class InvitationService(
         await EnsureInvitationActiveAsync(invitationId, inv, ct);
         if (inv.Status != "pending") throw new InvalidOperationException("Invitation already handled");
         await repo.UpdateStatusAsync(invitationId, "revoked", DateTime.UtcNow, ct);
+        if (inv.TopicId.HasValue)
+            await _topicWrite.SetStatusAsync(inv.TopicId.Value, "open", null, null, ct);
         await BroadcastStatusAsync(inv.InviteeUserId, inv.GroupId, invitationId, "revoked", ct);
     }
 
     public async Task<IReadOnlyList<InvitationListItemDto>> ListMyInvitationsAsync(Guid currentUserId, string? status, CancellationToken ct)
     {
-        await repo.ExpirePendingAsync(DateTime.UtcNow, ct);
+        var expired = await repo.ExpirePendingAsync(DateTime.UtcNow, ct);
+        foreach (var (invId, groupId, topicId) in expired)
+        {
+            if (topicId.HasValue)
+                await _topicWrite.SetStatusAsync(topicId.Value, "open", null, null, ct);
+        }
         return await queries.ListForUserAsync(currentUserId, status, ct);
     }
     private async Task AcceptMentorInvitationAsync(InvitationDetailDto inv, CancellationToken ct)
@@ -253,7 +264,10 @@ public sealed class InvitationService(
             throw new InvalidOperationException("Group already active");
 
         var topic = await _topicQueries.GetByIdAsync(inv.TopicId.Value, ct) ?? throw new KeyNotFoundException("Topic not found");
-        if (!string.Equals(topic.Status, "open", StringComparison.OrdinalIgnoreCase))
+        var topicStatus = topic.Status?.ToLowerInvariant();
+        var ownsPending = topic.PendingGroupId.HasValue && topic.PendingGroupId.Value == inv.GroupId;
+        if (!(string.Equals(topicStatus, "open", StringComparison.OrdinalIgnoreCase) ||
+              (string.Equals(topicStatus, "pending", StringComparison.OrdinalIgnoreCase) && ownsPending)))
             throw new InvalidOperationException("Topic already closed");
         if (topic.SemesterId != group.SemesterId)
             throw new InvalidOperationException("Topic semester mismatch");
@@ -262,7 +276,7 @@ public sealed class InvitationService(
 
         await groupRepo.UpdateGroupAsync(inv.GroupId, null, null, null, null, inv.TopicId, inv.InviteeUserId, null, ct);
         await groupRepo.SetStatusAsync(inv.GroupId, "active", ct);
-        await _topicWrite.SetStatusAsync(inv.TopicId.Value, "closed", ct);
+        await _topicWrite.SetStatusAsync(inv.TopicId.Value, "closed", null, null, ct);
         await postRepo.CloseAllOpenPostsForGroupAsync(inv.GroupId, ct);
         await repo.UpdateStatusAsync(inv.InvitationId, "accepted", DateTime.UtcNow, ct);
         await repo.RevokePendingMentorInvitesAsync(inv.GroupId, inv.InvitationId, ct);

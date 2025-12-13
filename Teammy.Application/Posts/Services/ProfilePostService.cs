@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Net;
 using Teammy.Application.Common.Interfaces;
+using Teammy.Application.Invitations.Dtos;
 using Teammy.Application.Invitations.Templates;
 using Teammy.Application.Posts.Dtos;
 
@@ -13,13 +14,15 @@ public sealed class ProfilePostService(
     IGroupRepository groupRepo,
     IUserReadOnlyQueries userQueries,
     IEmailSender emailSender,
-    IAppUrlProvider urlProvider)
+    IAppUrlProvider urlProvider,
+    IInvitationNotifier invitationNotifier)
 {
     private readonly IGroupReadOnlyQueries _groupQueries = groupQueries;
     private readonly IRecruitmentPostReadOnlyQueries _queries = queries;
     private readonly IUserReadOnlyQueries _userQueries = userQueries;
     private readonly IEmailSender _emailSender = emailSender;
     private readonly IAppUrlProvider _urlProvider = urlProvider;
+    private readonly IInvitationNotifier _invitationNotifier = invitationNotifier;
     private const string AppName = "TEAMMY";
 
     public async Task<Guid> CreateAsync(Guid currentUserId, CreateProfilePostRequest req, CancellationToken ct)
@@ -103,9 +106,10 @@ public sealed class ProfilePostService(
 
             await repo.ReactivateApplicationAsync(applicationId, null, ct);
             await SendProfileInviteEmailAsync(profilePostId, groupId, currentUserId, groupDetail.Name, inviteeEmail, ct);
+            await BroadcastProfileInvitationAsync(owner.OwnerUserId.Value, groupId, groupDetail.Name, currentUserId, applicationId, ct);
             return;
         }
-        await repo.CreateApplicationAsync(
+        var candidateId = await repo.CreateApplicationAsync(
             profilePostId,
             applicantUserId: null,
             applicantGroupId: groupId,
@@ -113,6 +117,7 @@ public sealed class ProfilePostService(
             message: null,
             ct);
         await SendProfileInviteEmailAsync(profilePostId, groupId, currentUserId, groupDetail.Name, inviteeEmail, ct);
+        await BroadcastProfileInvitationAsync(owner.OwnerUserId.Value, groupId, groupDetail.Name, currentUserId, candidateId, ct);
     }
 
     public Task<IReadOnlyList<ProfilePostInvitationDto>> ListInvitationsAsync(Guid currentUserId, string? status, CancellationToken ct)
@@ -148,6 +153,8 @@ public sealed class ProfilePostService(
         await repo.RejectPendingProfileInvitationsAsync(currentUserId, invitation.SemesterId, candidateId, ct);
         await repo.DeleteProfilePostsForUserAsync(currentUserId, invitation.SemesterId, ct);
         await SendProfileInvitationStatusEmailAsync(invitation, userDetail.DisplayName ?? userDetail.Email ?? "Student", "accepted", ct);
+        await _invitationNotifier.NotifyInvitationStatusAsync(currentUserId, candidateId, "accepted", ct);
+        await _invitationNotifier.NotifyGroupPendingAsync(invitation.GroupId, ct);
     }
 
     public async Task RejectInvitationAsync(Guid postId, Guid candidateId, Guid currentUserId, CancellationToken ct)
@@ -163,6 +170,8 @@ public sealed class ProfilePostService(
         var userDetail = await _userQueries.GetAdminDetailAsync(currentUserId, ct);
         var displayName = userDetail?.DisplayName ?? userDetail?.Email ?? "Student";
         await SendProfileInvitationStatusEmailAsync(invitation, displayName, "rejected", ct);
+        await _invitationNotifier.NotifyInvitationStatusAsync(currentUserId, candidateId, "rejected", ct);
+        await _invitationNotifier.NotifyGroupPendingAsync(invitation.GroupId, ct);
     }
 
     private async Task SendProfileInviteEmailAsync(Guid profilePostId, Guid groupId, Guid leaderUserId, string groupName, string? inviteeEmail, CancellationToken ct)
@@ -204,6 +213,23 @@ public sealed class ProfilePostService(
             ct,
             replyToEmail: leader.Email,
             fromDisplayName: leader.DisplayName);
+    }
+
+    private async Task BroadcastProfileInvitationAsync(Guid inviteeUserId, Guid groupId, string groupName, Guid leaderUserId, Guid candidateId, CancellationToken ct)
+    {
+        var dto = new InvitationRealtimeDto(
+            candidateId,
+            groupId,
+            groupName,
+            "profile_post",
+            "pending",
+            DateTime.UtcNow,
+            leaderUserId,
+            null,
+            null);
+
+        await _invitationNotifier.NotifyInvitationCreatedAsync(inviteeUserId, dto, ct);
+        await _invitationNotifier.NotifyGroupPendingAsync(groupId, ct);
     }
 
     private async Task SendProfileInvitationStatusEmailAsync(ProfilePostInvitationDetail invitation, string applicantName, string status, CancellationToken ct)
