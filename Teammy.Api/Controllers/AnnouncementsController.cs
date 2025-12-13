@@ -28,6 +28,17 @@ public sealed class AnnouncementsController(AnnouncementService service) : Contr
         return CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
 
+    [HttpGet("recipients-preview")]
+    [Authorize(Roles = "mentor,moderator,admin")]
+    public async Task<ActionResult<AnnouncementRecipientPreviewDto>> PreviewRecipients([FromQuery] AnnouncementRecipientPreviewRequest request, CancellationToken ct)
+    {
+        if (request is null)
+            throw new ArgumentNullException(nameof(request));
+
+        var preview = await service.PreviewRecipientsAsync(GetUserId(), request, ct);
+        return Ok(preview);
+    }
+
     private Guid GetUserId()
     {
         var sub = User.FindFirstValue(ClaimTypes.NameIdentifier)

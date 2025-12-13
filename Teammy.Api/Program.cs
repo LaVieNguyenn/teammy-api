@@ -85,6 +85,7 @@ builder.Services.AddScoped<IAnnouncementNotifier, AnnouncementNotifier>();
 builder.Services.AddScoped<IActivityLogNotifier, ActivityLogNotifier>();
 builder.Services.AddSingleton<IAppUrlProvider, Teammy.Api.App.AppUrlProvider>();
 builder.Services.AddSingleton<IChatPresenceTracker, ChatPresenceTracker>();
+builder.Services.AddHttpClient<Teammy.Api.Services.AiGatewayClient>();
 
 // Infrastructure (DbContext, Auth services, Repositories)
 builder.Services.AddInfrastructure(builder.Configuration);

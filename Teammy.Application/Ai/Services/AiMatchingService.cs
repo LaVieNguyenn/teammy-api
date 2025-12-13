@@ -1,6 +1,8 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Teammy.Application.Ai.Dtos;
 using Teammy.Application.Ai.Models;
 using Teammy.Application.Common.Interfaces;
@@ -18,7 +20,9 @@ public sealed class AiMatchingService(
     IRecruitmentPostReadOnlyQueries recruitmentPostQueries,
     ITopicWriteRepository topicWriteRepository,
     ITopicReadOnlyQueries topicQueries,
-    IMajorReadOnlyQueries majorQueries)
+    IMajorReadOnlyQueries majorQueries,
+    IAiSemanticSearch semanticSearch,
+    ILogger<AiMatchingService> logger)
 {
     private const int DefaultSuggestionLimit = 5;
     private const int MaxSuggestionLimit = 20;
@@ -30,6 +34,10 @@ public sealed class AiMatchingService(
     private const int TopicSkillCoverageWeight = 65;
     private const int ProfileScoreThreshold = 20;
     private const int ProfileScoreMax = 140;
+    private const int SemanticShortlistLimit = 50;
+
+    private readonly IAiSemanticSearch _semanticSearch = semanticSearch ?? throw new ArgumentNullException(nameof(semanticSearch));
+    private readonly ILogger<AiMatchingService> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
     public async Task<AiSummaryDto> GetSummaryAsync(Guid? semesterId, CancellationToken ct)
     {
@@ -123,7 +131,12 @@ public sealed class AiMatchingService(
         if (posts.Count == 0)
             return Array.Empty<RecruitmentPostSuggestionDto>();
 
-        var groupIds = posts
+        var semanticQuery = BuildSemanticQuery(studentSkills);
+        var filteredPosts = await ApplySemanticShortlistAsync("recruitment_post", semanticQuery, semesterCtx.SemesterId, targetMajorId, posts, p => p.PostId, ct);
+        if (filteredPosts.Count == 0)
+            return Array.Empty<RecruitmentPostSuggestionDto>();
+
+        var groupIds = filteredPosts
             .Where(p => p.GroupId.HasValue)
             .Select(p => p.GroupId!.Value)
             .Distinct()
@@ -134,7 +147,7 @@ public sealed class AiMatchingService(
             : await aiQueries.GetGroupRoleMixAsync(groupIds, ct);
 
         var limit = NormalizeLimit(request.Limit);
-        var suggestions = posts
+        var suggestions = filteredPosts
             .Select(post =>
             {
                 GroupRoleMixSnapshot? mix = null;
@@ -201,8 +214,13 @@ public sealed class AiMatchingService(
         if (available.Count == 0)
             return Array.Empty<TopicSuggestionDto>();
 
+        var semanticQuery = BuildSemanticQuery(groupSkillProfile);
+        var candidates = await ApplySemanticShortlistAsync("topic", semanticQuery, detail.SemesterId, detail.MajorId, available, t => t.TopicId, ct);
+        if (candidates.Count == 0)
+            return Array.Empty<TopicSuggestionDto>();
+
         var limitValue = NormalizeLimit(limit);
-        var items = available
+        var items = candidates
             .Select(topic => BuildTopicSuggestion(topic, groupSkillProfile))
             .Where(dto => dto is not null)
             .Select(dto => dto!)
@@ -257,8 +275,13 @@ public sealed class AiMatchingService(
         if (posts.Count == 0)
             return Array.Empty<ProfilePostSuggestionDto>();
 
+        var semanticQuery = BuildSemanticQuery(groupSkillProfile);
+        var filteredPosts = await ApplySemanticShortlistAsync("profile_post", semanticQuery, detail.SemesterId, detail.MajorId, posts, p => p.PostId, ct);
+        if (filteredPosts.Count == 0)
+            return Array.Empty<ProfilePostSuggestionDto>();
+
         var limit = NormalizeLimit(request.Limit);
-        var suggestions = posts
+        var suggestions = filteredPosts
             .Select(post => BuildProfilePostSuggestion(post, groupSkillProfile, mix))
             .Where(dto => dto is not null)
             .Select(dto => dto!)
@@ -1224,6 +1247,61 @@ public sealed class AiMatchingService(
         }
 
         return sources.Count == 0 ? AiSkillProfile.Empty : AiSkillProfile.Combine(sources);
+    }
+
+    private static string BuildSemanticQuery(AiSkillProfile profile)
+    {
+        var parts = new List<string>();
+        if (profile.PrimaryRole != AiPrimaryRole.Unknown)
+            parts.Add(AiRoleHelper.ToDisplayString(profile.PrimaryRole));
+        if (profile.HasTags)
+            parts.Add(string.Join(", ", profile.Tags));
+        return string.Join("; ", parts.Where(part => !string.IsNullOrWhiteSpace(part)));
+    }
+
+    private async Task<List<T>> ApplySemanticShortlistAsync<T>(
+        string type,
+        string queryText,
+        Guid semesterId,
+        Guid? majorId,
+        IReadOnlyList<T> source,
+        Func<T, Guid> idSelector,
+        CancellationToken ct)
+    {
+        if (source.Count == 0 || string.IsNullOrWhiteSpace(queryText))
+            return source.ToList();
+
+        IReadOnlyList<Guid> shortlist = Array.Empty<Guid>();
+        try
+        {
+            shortlist = await _semanticSearch.SearchIdsAsync(queryText, type, semesterId, majorId, SemanticShortlistLimit, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Semantic search failed for {Type}. Falling back to full set ({Count}).", type, source.Count);
+            return source.ToList();
+        }
+
+        if (shortlist.Count == 0)
+            return source.ToList();
+
+        var shortlistSet = new HashSet<Guid>(shortlist);
+        var filtered = source.Where(item => shortlistSet.Contains(idSelector(item))).ToList();
+
+        if (filtered.Count == 0)
+        {
+            _logger.LogInformation("Semantic shortlist for {Type} returned {Shortlist} ids with no overlaps. Using original {Total} items.", type, shortlist.Count, source.Count);
+            return source.ToList();
+        }
+
+        _logger.LogInformation(
+            "Semantic shortlist for {Type}: {Shortlist} ids, reduced candidates to {Filtered}/{Total}.",
+            type,
+            shortlist.Count,
+            filtered.Count,
+            source.Count);
+
+        return filtered;
     }
 
     private static IReadOnlyList<string> RemapMatchingSkills(IReadOnlyList<string> matches, IReadOnlyList<string> topicSkills)
