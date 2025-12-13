@@ -1,3 +1,5 @@
+using Teammy.Application.Common.Dtos;
+
 namespace Teammy.Application.Announcements.Dtos;
 
 public static class AnnouncementScopes
@@ -71,6 +73,23 @@ public sealed record AnnouncementDto(
 );
 
 public sealed record AnnouncementRecipient(Guid UserId, string Email, string? DisplayName);
+
+public sealed record AnnouncementRecipientPreviewRequest(
+    string Scope,
+    Guid? SemesterId,
+    string? TargetRole,
+    Guid? TargetGroupId,
+    int Page = 1,
+    int PageSize = 50
+);
+
+public sealed record AnnouncementRecipientPreviewDto(
+    string Scope,
+    Guid? SemesterId,
+    string? TargetRole,
+    Guid? TargetGroupId,
+    PaginatedResult<AnnouncementRecipient> Recipients
+);
 
 public sealed record CreateAnnouncementCommand(
     Guid CreatedBy,

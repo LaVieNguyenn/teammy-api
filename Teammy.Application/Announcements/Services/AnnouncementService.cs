@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Net;
 using System.Text;
 using Teammy.Application.Announcements.Dtos;
+using Teammy.Application.Common.Dtos;
 using Teammy.Application.Common.Interfaces;
 
 namespace Teammy.Application.Announcements.Services;
@@ -14,6 +15,8 @@ public sealed class AnnouncementService(
     IAnnouncementNotifier notifier
 )
 {
+    private const int MaxPreviewPageSize = 200;
+
     public Task<IReadOnlyList<AnnouncementDto>> ListAsync(Guid currentUserId, AnnouncementFilter filter, CancellationToken ct)
         => readQueries.ListForUserAsync(currentUserId, filter, ct);
 
@@ -61,6 +64,20 @@ public sealed class AnnouncementService(
         return created;
     }
 
+    public async Task<AnnouncementRecipientPreviewDto> PreviewRecipientsAsync(Guid currentUserId, AnnouncementRecipientPreviewRequest request, CancellationToken ct)
+    {
+        if (request is null)
+            throw new ArgumentNullException(nameof(request));
+
+        var scope = NormalizeScope(request.Scope);
+        ValidateScopeFilters(scope, request.SemesterId, request.TargetRole, request.TargetGroupId);
+        var normalizedRole = NormalizeRole(request.TargetRole);
+        var (page, pageSize) = NormalizePagination(request.Page, request.PageSize);
+
+        var recipients = await recipientQueries.ListRecipientsAsync(scope, request.SemesterId, normalizedRole, request.TargetGroupId, page, pageSize, ct);
+        return new AnnouncementRecipientPreviewDto(scope, request.SemesterId, normalizedRole, request.TargetGroupId, recipients);
+    }
+
     private static string NormalizeScope(string scope)
     {
         if (!AnnouncementScopes.IsValid(scope))
@@ -85,27 +102,38 @@ public sealed class AnnouncementService(
         if (string.IsNullOrWhiteSpace(request.Content))
             throw new ValidationException("Content is required");
 
+        ValidateScopeFilters(scope, request.SemesterId, request.TargetRole, request.TargetGroupId);
+    }
+
+    private static void ValidateScopeFilters(string scope, Guid? semesterId, string? targetRole, Guid? targetGroupId)
+    {
         switch (scope)
         {
             case AnnouncementScopes.Semester:
-                if (!request.SemesterId.HasValue)
-                    throw new ValidationException("SemesterId is required for semester scope");
-                break;
             case AnnouncementScopes.GroupsWithoutTopic:
             case AnnouncementScopes.GroupsUnderstaffed:
             case AnnouncementScopes.StudentsWithoutGroup:
-                if (!request.SemesterId.HasValue)
+                if (!semesterId.HasValue)
                     throw new ValidationException("SemesterId is required for this scope");
                 break;
             case AnnouncementScopes.Role:
-                if (string.IsNullOrWhiteSpace(request.TargetRole))
+                if (string.IsNullOrWhiteSpace(targetRole))
                     throw new ValidationException("TargetRole is required for role scope");
                 break;
             case AnnouncementScopes.Group:
-                if (!request.TargetGroupId.HasValue)
+                if (!targetGroupId.HasValue)
                     throw new ValidationException("TargetGroupId is required for group scope");
                 break;
         }
+    }
+
+    private static (int Page, int PageSize) NormalizePagination(int page, int pageSize)
+    {
+        if (page <= 0)
+            page = 1;
+        if (pageSize <= 0)
+            pageSize = 25;
+        return (page, Math.Min(pageSize, MaxPreviewPageSize));
     }
 
     private Task<IReadOnlyList<AnnouncementRecipient>> ResolveRecipientsAsync(AnnouncementDto announcement, CancellationToken ct)

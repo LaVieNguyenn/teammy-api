@@ -1,3 +1,4 @@
+using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,6 +23,7 @@ using Teammy.Infrastructure.Persistence;
 using Teammy.Infrastructure.Persistence.Repositories;
 using Teammy.Infrastructure.Topics;
 using Teammy.Infrastructure.Reports;
+using Teammy.Infrastructure.Ai;
 namespace Teammy.Infrastructure;
 
 public static class DependencyInjection
@@ -114,6 +116,19 @@ public static class DependencyInjection
 
         // Reports
         services.AddScoped<IReportExportService, ExcelReportExportService>();
+
+        services.AddHttpClient<IAiSemanticSearch, AiSemanticSearchClient>(client =>
+        {
+            var baseUrl = configuration["AI_GATEWAY_BASE_URL"];
+            if (string.IsNullOrWhiteSpace(baseUrl))
+                throw new InvalidOperationException("AI_GATEWAY_BASE_URL is not configured.");
+
+            if (!baseUrl.EndsWith('/'))
+                baseUrl += "/";
+
+            client.BaseAddress = new Uri(baseUrl);
+            client.Timeout = TimeSpan.FromSeconds(15);
+        });
         return services;
     }
 }
