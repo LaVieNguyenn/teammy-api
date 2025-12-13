@@ -100,8 +100,14 @@ public sealed class ChatRepository(AppDbContext db) : IChatRepository
                 u.email ?? string.Empty,
                 u.avatar_url,
                 m.type,
-                m.content,
-                m.created_at);
+                m.is_deleted ? "[deleted]" : m.content,
+                m.created_at,
+                m.is_pinned,
+                m.pinned_by,
+                m.pinned_at,
+                m.is_deleted,
+                m.deleted_by,
+                m.deleted_at);
 
         var list = await q.Skip(offset).Take(limit).ToListAsync(ct);
         list.Reverse();
@@ -131,20 +137,7 @@ public sealed class ChatRepository(AppDbContext db) : IChatRepository
 
         await db.SaveChangesAsync(ct);
 
-        var sender = await db.users.AsNoTracking()
-            .Where(u => u.user_id == senderUserId)
-            .Select(u => new { u.display_name, u.email, u.avatar_url, u.user_id })
-            .FirstAsync(ct);
-
-        return new ChatMessageDto(
-            msg.message_id,
-            sender.user_id,
-            sender.display_name ?? string.Empty,
-            sender.email ?? string.Empty,
-            sender.avatar_url,
-            msg.type,
-            msg.content,
-            msg.created_at);
+        return await ProjectMessageAsync(msg.message_id, ct);
     }
 
     public async Task UpdateMembersCountAsync(Guid chatSessionId, int members, CancellationToken ct)
@@ -226,4 +219,65 @@ public sealed class ChatRepository(AppDbContext db) : IChatRepository
     public Task<bool> IsParticipantAsync(Guid chatSessionId, Guid userId, CancellationToken ct)
         => db.chat_session_participants.AsNoTracking()
             .AnyAsync(p => p.chat_session_id == chatSessionId && p.user_id == userId, ct);
+
+    public async Task<(Guid ChatSessionId, Guid SenderId, bool IsDeleted)?> GetMessageMetaAsync(Guid messageId, CancellationToken ct)
+    {
+        var meta = await db.messages.AsNoTracking()
+            .Where(m => m.message_id == messageId)
+            .Select(m => new { m.chat_session_id, m.sender_id, m.is_deleted })
+            .FirstOrDefaultAsync(ct);
+
+        return meta is null ? null : (meta.chat_session_id, meta.sender_id, meta.is_deleted);
+    }
+
+    public async Task<ChatMessageDto> SetMessagePinAsync(Guid chatSessionId, Guid messageId, Guid userId, bool pin, CancellationToken ct)
+    {
+        var entity = await db.messages.FirstOrDefaultAsync(m => m.message_id == messageId && m.chat_session_id == chatSessionId, ct)
+            ?? throw new KeyNotFoundException("Message not found");
+
+        entity.is_pinned = pin;
+        entity.pinned_by = pin ? userId : null;
+        entity.pinned_at = pin ? DateTime.UtcNow : null;
+        entity.updated_at = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+        return await ProjectMessageAsync(messageId, ct);
+    }
+
+    public async Task<ChatMessageDto> MarkMessageDeletedAsync(Guid chatSessionId, Guid messageId, Guid userId, CancellationToken ct)
+    {
+        var entity = await db.messages.FirstOrDefaultAsync(m => m.message_id == messageId && m.chat_session_id == chatSessionId, ct)
+            ?? throw new KeyNotFoundException("Message not found");
+        if (entity.is_deleted) return await ProjectMessageAsync(messageId, ct);
+
+        entity.is_deleted = true;
+        entity.deleted_by = userId;
+        entity.deleted_at = DateTime.UtcNow;
+        entity.updated_at = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+        return await ProjectMessageAsync(messageId, ct);
+    }
+
+    private Task<ChatMessageDto> ProjectMessageAsync(Guid messageId, CancellationToken ct)
+    {
+        return (
+            from m in db.messages.AsNoTracking()
+            join u in db.users.AsNoTracking() on m.sender_id equals u.user_id
+            where m.message_id == messageId
+            select new ChatMessageDto(
+                m.message_id,
+                u.user_id,
+                u.display_name ?? string.Empty,
+                u.email ?? string.Empty,
+                u.avatar_url,
+                m.type,
+                m.is_deleted ? "[deleted]" : m.content,
+                m.created_at,
+                m.is_pinned,
+                m.pinned_by,
+                m.pinned_at,
+                m.is_deleted,
+                m.deleted_by,
+                m.deleted_at)
+        ).FirstAsync(ct);
+    }
 }

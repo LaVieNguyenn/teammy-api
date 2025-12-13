@@ -10,6 +10,8 @@ public sealed class ActivityLogListRequest
     public string? EntityType { get; init; }
     public string? Action { get; init; }
     public Guid? GroupId { get; init; }
+    public DateTime? StartUtc { get; init; }
+    public DateTime? EndUtc { get; init; }
 
     public int GetEffectiveLimit()
     {

@@ -42,12 +42,12 @@ public sealed class InvitationRepository(AppDbContext db) : IInvitationRepositor
         await db.SaveChangesAsync(ct);
     }
 
-    public async Task ExpirePendingAsync(DateTime utcNow, CancellationToken ct)
+    public async Task<IReadOnlyList<(Guid InvitationId, Guid GroupId, Guid? TopicId)>> ExpirePendingAsync(DateTime utcNow, CancellationToken ct)
     {
         var expired = await db.invitations
             .Where(i => i.status == "pending" && i.expires_at.HasValue && i.expires_at <= utcNow)
             .ToListAsync(ct);
-        if (expired.Count == 0) return;
+        if (expired.Count == 0) return Array.Empty<(Guid, Guid, Guid?)>();
 
         foreach (var inv in expired)
         {
@@ -56,6 +56,7 @@ public sealed class InvitationRepository(AppDbContext db) : IInvitationRepositor
         }
 
         await db.SaveChangesAsync(ct);
+        return expired.Select(i => (i.invitation_id, i.group_id, (Guid?)i.topic_id)).ToList();
     }
 
     public async Task ResetPendingAsync(Guid invitationId, DateTime newCreatedAt, DateTime expiresAt, CancellationToken ct)

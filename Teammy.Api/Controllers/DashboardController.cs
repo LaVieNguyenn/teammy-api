@@ -1,3 +1,4 @@
+using System;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Teammy.Application.Common.Interfaces;
@@ -13,4 +14,9 @@ public sealed class DashboardController(IDashboardReadOnlyQueries queries) : Con
     [HttpGet]
     public Task<DashboardStatsDto> Get(CancellationToken ct)
         => queries.GetStatsAsync(ct);
+
+    [HttpGet("moderator")]
+    [Authorize(Roles = "moderator")]
+    public Task<ModeratorDashboardStatsDto> GetModerator([FromQuery] Guid? semesterId, CancellationToken ct)
+        => queries.GetModeratorStatsAsync(semesterId, ct);
 }

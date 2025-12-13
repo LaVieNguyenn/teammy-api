@@ -457,6 +457,8 @@ public partial class AppDbContext : DbContext
             entity.Property(e => e.message_id).HasDefaultValueSql("gen_random_uuid()");
             entity.Property(e => e.created_at).HasDefaultValueSql("now()");
             entity.Property(e => e.updated_at).HasDefaultValueSql("now()");
+            entity.Property(e => e.is_pinned).HasDefaultValue(false);
+            entity.Property(e => e.is_deleted).HasDefaultValue(false);
 
             entity.HasOne(d => d.chat_session).WithMany(p => p.messages)
                 .HasForeignKey(d => d.chat_session_id)
@@ -465,6 +467,16 @@ public partial class AppDbContext : DbContext
             entity.HasOne(d => d.sender).WithMany(p => p.messages)
                 .HasForeignKey(d => d.sender_id)
                 .HasConstraintName("messages_sender_id_fkey");
+
+            entity.HasOne<user>()
+                .WithMany()
+                .HasForeignKey(d => d.pinned_by)
+                .HasConstraintName("messages_pinned_by_fkey");
+
+            entity.HasOne<user>()
+                .WithMany()
+                .HasForeignKey(d => d.deleted_by)
+                .HasConstraintName("messages_deleted_by_fkey");
         });
 
         modelBuilder.Entity<milestone>(entity =>
@@ -742,6 +754,11 @@ public partial class AppDbContext : DbContext
             entity.HasOne(d => d.semester).WithMany(p => p.topics)
                 .HasForeignKey(d => d.semester_id)
                 .HasConstraintName("topics_semester_id_fkey");
+
+            entity.HasOne(d => d.pending_group).WithMany(p => p.pending_topics)
+                .HasForeignKey(d => d.pending_group_id)
+                .OnDelete(DeleteBehavior.SetNull)
+                .HasConstraintName("topics_pending_group_id_fkey");
 
             entity.HasMany(d => d.mentors).WithMany(p => p.topicsNavigation)
                 .UsingEntity<Dictionary<string, object>>(

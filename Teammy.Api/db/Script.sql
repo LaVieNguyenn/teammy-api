@@ -77,7 +77,9 @@ CREATE TABLE IF NOT EXISTS teammy.topics (
   source_file_type TEXT,
   source_file_size BIGINT,
   skills       JSONB,
-  status       TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed','archived')),
+  status       TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','pending','closed','archived')),
+  pending_group_id UUID REFERENCES teammy.groups(group_id) ON DELETE SET NULL,
+  pending_since TIMESTAMPTZ,
   created_by   UUID NOT NULL REFERENCES teammy.users(user_id),
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (semester_id, title)
@@ -85,10 +87,12 @@ CREATE TABLE IF NOT EXISTS teammy.topics (
 
 ALTER TABLE teammy.topics
   ADD COLUMN IF NOT EXISTS source TEXT,
-  ADD COLUMN IF NOT EXISTS source_file_name TEXT,
-  ADD COLUMN IF NOT EXISTS source_file_type TEXT,
-  ADD COLUMN IF NOT EXISTS source_file_size BIGINT,
-  ADD COLUMN IF NOT EXISTS skills JSONB;
+    ADD COLUMN IF NOT EXISTS source_file_name TEXT,
+    ADD COLUMN IF NOT EXISTS source_file_type TEXT,
+    ADD COLUMN IF NOT EXISTS source_file_size BIGINT,
+    ADD COLUMN IF NOT EXISTS skills JSONB,
+    ADD COLUMN IF NOT EXISTS pending_group_id UUID,
+    ADD COLUMN IF NOT EXISTS pending_since TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS teammy.topics_mentor (
   topic_id  UUID NOT NULL REFERENCES teammy.topics(topic_id) ON DELETE CASCADE,
@@ -475,6 +479,12 @@ CREATE TABLE IF NOT EXISTS teammy.messages (
   sender_id       UUID NOT NULL REFERENCES teammy.users(user_id) ON DELETE CASCADE,
   type            TEXT,
   content         TEXT NOT NULL,
+  is_pinned       BOOLEAN NOT NULL DEFAULT FALSE,
+  pinned_at       TIMESTAMPTZ,
+  pinned_by       UUID REFERENCES teammy.users(user_id),
+  is_deleted      BOOLEAN NOT NULL DEFAULT FALSE,
+  deleted_at      TIMESTAMPTZ,
+  deleted_by      UUID REFERENCES teammy.users(user_id),
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -910,6 +920,4 @@ SELECT 'bbbb4444-4444-4444-4444-bbbbbbbb0002', ig.semester_id, 'group_hiring', i
      'open', now() + interval '10 days'
 FROM insight_group ig
 WHERE NOT EXISTS (SELECT 1 FROM teammy.recruitment_posts WHERE post_id = 'bbbb4444-4444-4444-4444-bbbbbbbb0002');
-
-
 

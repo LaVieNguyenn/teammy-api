@@ -58,4 +58,6 @@ public partial class group
     public virtual ICollection<task> tasks { get; set; } = new List<task>();
 
     public virtual topic? topic { get; set; }
+
+    public virtual ICollection<topic> pending_topics { get; set; } = new List<topic>();
 }

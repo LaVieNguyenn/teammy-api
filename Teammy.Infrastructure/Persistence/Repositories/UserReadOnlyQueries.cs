@@ -220,7 +220,65 @@ namespace Teammy.Infrastructure.Persistence.Repositories
 
             return await q.AsNoTracking().FirstOrDefaultAsync(ct);
         }
+        public async Task<AdminUserDetailDto?> GetByDisplayNameAsync(string displayName, CancellationToken ct)
+        {
+            var q =
+                from u in _db.users.AsNoTracking()
+                join ur in _db.user_roles.AsNoTracking() on u.user_id equals ur.user_id
+                join r in _db.roles.AsNoTracking() on ur.role_id equals r.role_id
+                join m in _db.majors on u.major_id equals m.major_id into mj
+                from m in mj.DefaultIfEmpty()
+                where u.display_name.ToLower() == displayName.ToLower()
+                select new AdminUserDetailDto(
+                    u.user_id,
+                    u.email!,
+                    u.display_name!,
+                    u.avatar_url,
+                    r.name ?? "student",
+                    u.email_verified,
+                    u.is_active,
+                    u.major_id,
+                    m.major_name,
+                    u.student_code,
+                    u.gender,
+                    u.skills_completed,
+                    u.created_at,
+                    u.updated_at,
+                    u.portfolio_url
+                );
 
+            return await q.AsNoTracking().FirstOrDefaultAsync(ct);
+        }
+
+        public async Task<AdminUserDetailDto?> GetByStudentCodeAsync(string studentCode, CancellationToken ct)
+        {
+            var q =
+                from u in _db.users.AsNoTracking()
+                join ur in _db.user_roles.AsNoTracking() on u.user_id equals ur.user_id
+                join r in _db.roles.AsNoTracking() on ur.role_id equals r.role_id
+                join m in _db.majors on u.major_id equals m.major_id into mj
+                from m in mj.DefaultIfEmpty()
+                where u.student_code == studentCode
+                select new AdminUserDetailDto(
+                    u.user_id,
+                    u.email!,
+                    u.display_name!,
+                    u.avatar_url,
+                    r.name ?? "student",
+                    u.email_verified,
+                    u.is_active,
+                    u.major_id,
+                    m.major_name,
+                    u.student_code,
+                    u.gender,
+                    u.skills_completed,
+                    u.created_at,
+                    u.updated_at,
+                    u.portfolio_url
+                );
+
+            return await q.AsNoTracking().FirstOrDefaultAsync(ct);
+        }
         public async Task<IReadOnlyList<AdminMajorStatsDto>> GetMajorStatsAsync(Guid semesterId, CancellationToken ct)
         {
             var activeStatuses = new[] { "member", "leader" };

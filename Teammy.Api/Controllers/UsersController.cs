@@ -168,6 +168,10 @@ public sealed class UsersController : ControllerBase
         if (await _userWrite.EmailExistsAnyAsync(request.Email, ct))
             return Conflict("Email already exists.");
 
+        if (!string.IsNullOrWhiteSpace(request.StudentCode) && 
+            await _userWrite.StudentCodeExistsAnyAsync(request.StudentCode, ct))
+            return Conflict("StudentCode already exists.");
+
         var roleId = await _roles.GetRoleIdByNameAsync(request.Role, ct);
         if (!roleId.HasValue)
             return BadRequest("Invalid role.");
@@ -198,6 +202,13 @@ public sealed class UsersController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Role))
             return BadRequest("Role is required.");
 
+        if (!string.IsNullOrWhiteSpace(request.StudentCode))
+        {
+            var existingUserWithStudentCode = await _users.GetByStudentCodeAsync(request.StudentCode, ct);
+            if (existingUserWithStudentCode is not null && existingUserWithStudentCode.UserId != userId)
+                return Conflict("StudentCode already exists.");
+        }
+
         var roleId = await _roles.GetRoleIdByNameAsync(request.Role, ct);
         if (!roleId.HasValue)
             return BadRequest("Invalid role.");
@@ -216,6 +227,7 @@ public sealed class UsersController : ControllerBase
 
         return NoContent();
     }
+
 
     [HttpDelete("admin/{userId:guid}")]
     [Authorize(Roles = "admin")]

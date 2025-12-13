@@ -21,7 +21,11 @@ public sealed class UserWriteRepository : IUserWriteRepository
 
     public Task<bool> EmailExistsAnyAsync(string email, CancellationToken ct)
         => _db.users.AsNoTracking().AnyAsync(u => u.email.ToLower() == email.ToLower(), ct);
+    public Task<bool> DisplayNameExistsAnyAsync(string displayName, CancellationToken ct)
+          => _db.users.AsNoTracking().AnyAsync(u => u.display_name.ToLower() == displayName.ToLower(), ct);
 
+    public Task<bool> StudentCodeExistsAnyAsync(string studentCode, CancellationToken ct)
+        => _db.users.AsNoTracking().AnyAsync(u => u.student_code == studentCode, ct);
     public async Task<Guid> CreateUserAsync(
         string email,
         string displayName,
@@ -32,21 +36,21 @@ public sealed class UserWriteRepository : IUserWriteRepository
     {
         var entity = new user
         {
-            user_id          = Guid.NewGuid(),
-            email            = email,
-            email_verified   = false,
-            display_name     = displayName,
-            avatar_url       = null,
-            phone            = null,
-            student_code     = studentCode,
-            gender           = gender,
-            major_id         = majorId,
-            portfolio_url    = null,
-            skills           = null,
+            user_id = Guid.NewGuid(),
+            email = email,
+            email_verified = false,
+            display_name = displayName,
+            avatar_url = null,
+            phone = null,
+            student_code = studentCode,
+            gender = gender,
+            major_id = majorId,
+            portfolio_url = null,
+            skills = null,
             skills_completed = false,
-            is_active        = true,
-            created_at       = DateTime.UtcNow,
-            updated_at       = DateTime.UtcNow
+            is_active = true,
+            created_at = DateTime.UtcNow,
+            updated_at = DateTime.UtcNow
         };
 
         _db.users.Add(entity);
@@ -63,8 +67,8 @@ public sealed class UserWriteRepository : IUserWriteRepository
         var linking = new user_role
         {
             user_role_id = Guid.NewGuid(),
-            user_id      = userId,
-            role_id      = roleId,
+            user_id = userId,
+            role_id = roleId,
         };
         _db.user_roles.Add(linking);
         await _db.SaveChangesAsync(ct);
@@ -86,11 +90,11 @@ public sealed class UserWriteRepository : IUserWriteRepository
 
         entity.display_name = displayName;
         entity.student_code = studentCode;
-        entity.gender       = gender;
-        entity.major_id     = majorId;
-        entity.is_active    = isActive;
+        entity.gender = gender;
+        entity.major_id = majorId;
+        entity.is_active = isActive;
         entity.portfolio_url = NormalizePortfolio(portfolioUrl);
-        entity.updated_at   = DateTime.UtcNow;
+        entity.updated_at = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);
     }
@@ -100,7 +104,7 @@ public sealed class UserWriteRepository : IUserWriteRepository
         var entity = await _db.users.FirstOrDefaultAsync(u => u.user_id == userId, ct);
         if (entity is null) return;
 
-        entity.is_active  = false;
+        entity.is_active = false;
         entity.updated_at = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);
@@ -114,8 +118,8 @@ public sealed class UserWriteRepository : IUserWriteRepository
         var linking = new user_role
         {
             user_role_id = Guid.NewGuid(),
-            user_id      = userId,
-            role_id      = roleId
+            user_id = userId,
+            role_id = roleId
         };
 
         _db.user_roles.Add(linking);
@@ -138,15 +142,15 @@ public sealed class UserWriteRepository : IUserWriteRepository
         if (entity is null)
             throw new KeyNotFoundException("User not found");
 
-        entity.display_name     = displayName;
-        entity.phone            = phone;
-        entity.student_code     = studentCode;
-        entity.gender           = gender;
-        entity.major_id         = majorId;
-        entity.skills           = skillsJson;
+        entity.display_name = displayName;
+        entity.phone = phone;
+        entity.student_code = studentCode;
+        entity.gender = gender;
+        entity.major_id = majorId;
+        entity.skills = skillsJson;
         entity.skills_completed = skillsCompleted;
-        entity.portfolio_url    = NormalizePortfolio(portfolioUrl);
-        entity.updated_at       = DateTime.UtcNow;
+        entity.portfolio_url = NormalizePortfolio(portfolioUrl);
+        entity.updated_at = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);
     }

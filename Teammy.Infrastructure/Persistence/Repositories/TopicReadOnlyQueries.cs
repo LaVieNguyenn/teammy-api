@@ -32,6 +32,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 .Include(t => t.major)
                 .Include(t => t.created_byNavigation)
                 .Include(t => t.mentors)
+                .Include(t => t.pending_group)
                 .AsNoTracking()
                 .AsQueryable();
 
@@ -72,6 +73,9 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                     t.source_file_type,
                     t.source_file_size,
                     t.status,
+                    t.pending_group_id,
+                    PendingGroupName = t.pending_group != null ? t.pending_group.name : null,
+                    t.pending_since,
                     t.created_by,
                     CreatedByName = t.created_byNavigation.display_name,
                     CreatedByEmail = t.created_byNavigation.email,
@@ -100,6 +104,9 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                     r.source,
                     BuildFileDto(r.source, r.source_file_name, r.source_file_type, r.source_file_size),
                     r.status,
+                    r.pending_group_id,
+                    r.PendingGroupName,
+                    r.pending_since,
                     r.created_by,
                     r.CreatedByName,
                     r.CreatedByEmail,
@@ -116,6 +123,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 .Include(t => t.major)
                 .Include(t => t.created_byNavigation)
                 .Include(t => t.mentors)
+                .Include(t => t.pending_group)
                 .AsNoTracking()
                 .Where(t => t.topic_id == topicId)
                 .Select(t => new
@@ -133,6 +141,9 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                     t.source_file_type,
                     t.source_file_size,
                     t.status,
+                    t.pending_group_id,
+                    PendingGroupName = t.pending_group != null ? t.pending_group.name : null,
+                    t.pending_since,
                     t.created_by,
                     CreatedByName = t.created_byNavigation.display_name,
                     CreatedByEmail = t.created_byNavigation.email,
@@ -163,6 +174,9 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 row.source,
                 BuildFileDto(row.source, row.source_file_name, row.source_file_type, row.source_file_size),
                 row.status,
+                row.pending_group_id,
+                row.PendingGroupName,
+                row.pending_since,
                 row.created_by,
                 row.CreatedByName,
                 row.CreatedByEmail,

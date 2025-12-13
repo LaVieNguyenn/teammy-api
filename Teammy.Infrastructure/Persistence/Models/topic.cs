@@ -27,6 +27,10 @@ public partial class topic
 
     public string status { get; set; } = null!;
 
+    public Guid? pending_group_id { get; set; }
+
+    public DateTime? pending_since { get; set; }
+
     public Guid created_by { get; set; }
 
     public DateTime created_at { get; set; }
@@ -34,6 +38,8 @@ public partial class topic
     public virtual user created_byNavigation { get; set; } = null!;
 
     public virtual group? group { get; set; }
+
+    public virtual group? pending_group { get; set; }
 
     public virtual major? major { get; set; }
 

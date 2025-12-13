@@ -12,4 +12,7 @@ public interface IChatRepository
     Task<IReadOnlyList<ConversationSummaryDto>> ListConversationsAsync(Guid userId, CancellationToken ct);
     Task<(string Type, Guid? GroupId)?> GetSessionInfoAsync(Guid chatSessionId, CancellationToken ct);
     Task<bool> IsParticipantAsync(Guid chatSessionId, Guid userId, CancellationToken ct);
+    Task<(Guid ChatSessionId, Guid SenderId, bool IsDeleted)?> GetMessageMetaAsync(Guid messageId, CancellationToken ct);
+    Task<ChatMessageDto> SetMessagePinAsync(Guid chatSessionId, Guid messageId, Guid userId, bool pin, CancellationToken ct);
+    Task<ChatMessageDto> MarkMessageDeletedAsync(Guid chatSessionId, Guid messageId, Guid userId, CancellationToken ct);
 }
