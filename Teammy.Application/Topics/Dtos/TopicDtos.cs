@@ -9,6 +9,12 @@ namespace Teammy.Application.Topics.Dtos
         string MentorEmail
     );
 
+    public sealed record TopicGroupUsageDto(
+        Guid GroupId,
+        string GroupName,
+        string Status
+    );
+
     public sealed record TopicRegistrationFileDto(
         string? FileUrl,
         string? FileName,
@@ -16,7 +22,7 @@ namespace Teammy.Application.Topics.Dtos
         long?   FileSize
     );
 
-    // Dùng cho GetAll
+    // Dạng cho GetAll
     public sealed record TopicListItemDto(
         Guid   TopicId,
 
@@ -34,25 +40,25 @@ namespace Teammy.Application.Topics.Dtos
         string? Description,
         string? Source,
         TopicRegistrationFileDto? RegistrationFile,
-        string Status,       // 'open' | 'pending' | 'closed' | 'archived'
-        Guid? PendingGroupId,
-        string? PendingGroupName,
-        DateTime? PendingSince,
+        string Status,       // 'open' | 'closed' | 'archived'
 
         // Created by
         Guid   CreatedById,
         string CreatedByName,
         string CreatedByEmail,
 
-        // Nhiều mentor
+        // Mentors
         IReadOnlyList<TopicMentorDto> Mentors,
+
+        // Groups currently linked to this topic
+        IReadOnlyList<TopicGroupUsageDto> Groups,
 
         IReadOnlyList<string> Skills,
 
         DateTime CreatedAt
     );
 
-    // Dùng cho GetById
+    // Dạng cho GetById
     public sealed record TopicDetailDto(
         Guid   TopicId,
 
@@ -71,17 +77,17 @@ namespace Teammy.Application.Topics.Dtos
         string? Source,
         TopicRegistrationFileDto? RegistrationFile,
         string Status,
-        Guid? PendingGroupId,
-        string? PendingGroupName,
-        DateTime? PendingSince,
 
         // Created by
         Guid   CreatedById,
         string CreatedByName,
         string CreatedByEmail,
 
-        // Nhiều mentor
+        // Mentors
         IReadOnlyList<TopicMentorDto> Mentors,
+
+        // Groups currently linked to this topic
+        IReadOnlyList<TopicGroupUsageDto> Groups,
 
         IReadOnlyList<string> Skills,
 
@@ -96,7 +102,7 @@ namespace Teammy.Application.Topics.Dtos
         string? Source,
         string Status,               // open/closed/archived
         List<string> MentorEmails,
-        List<string>? Skills    
+        List<string>? Skills
     );
 
     // Request update topic
@@ -107,7 +113,7 @@ namespace Teammy.Application.Topics.Dtos
         string? Source,
         string Status,               // open/closed/archived
         List<string> MentorEmails,
-        List<string>? Skills    
+        List<string>? Skills
     );
 
     public sealed record TopicImportResult(

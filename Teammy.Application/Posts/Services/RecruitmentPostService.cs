@@ -31,8 +31,8 @@ public sealed class RecruitmentPostService(
         var detail = await groupQueries.GetGroupAsync(req.GroupId, ct) ?? throw new KeyNotFoundException("Group not found");
         var isLeader = await groupQueries.IsLeaderAsync(req.GroupId, currentUserId, ct);
         if (!isLeader) throw new UnauthorizedAccessException("Leader only");
-        if (string.Equals(detail.Status, "active", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Active group cannot create recruitment posts");
+        if (string.Equals(detail.Status, "closed", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Closed group cannot create recruitment posts");
 
         var semesterId = detail.SemesterId;
         var targetMajorId = req.MajorId ?? detail.MajorId;

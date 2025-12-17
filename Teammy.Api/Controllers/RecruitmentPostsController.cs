@@ -30,7 +30,7 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
 
     [HttpPost]
     [Authorize]
-    public async Task<ActionResult> Create([FromBody] CreateRecruitmentPostRequest req, CancellationToken ct)
+    public async Task<ActionResult> CreateRecruitmentPost([FromBody] CreateRecruitmentPostRequest req, CancellationToken ct)
     {
         try
         {
@@ -362,7 +362,7 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
 
     [HttpPatch("{id:guid}")]
     [Authorize]
-    public async Task<ActionResult> Update([FromRoute] Guid id, [FromBody] UpdateRecruitmentPostRequest req, CancellationToken ct)
+    public async Task<ActionResult> UpdateRecruitmentPost([FromRoute] Guid id, [FromBody] UpdateRecruitmentPostRequest req, CancellationToken ct)
     {
         try
         {
