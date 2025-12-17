@@ -755,11 +755,6 @@ public partial class AppDbContext : DbContext
                 .HasForeignKey(d => d.semester_id)
                 .HasConstraintName("topics_semester_id_fkey");
 
-            entity.HasOne(d => d.pending_group).WithMany(p => p.pending_topics)
-                .HasForeignKey(d => d.pending_group_id)
-                .OnDelete(DeleteBehavior.SetNull)
-                .HasConstraintName("topics_pending_group_id_fkey");
-
             entity.HasMany(d => d.mentors).WithMany(p => p.topicsNavigation)
                 .UsingEntity<Dictionary<string, object>>(
                     "topics_mentor",

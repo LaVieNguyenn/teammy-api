@@ -339,8 +339,15 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
                 t != null ? t.title : null)
         ).ToListAsync(ct);
 
-        return apps
+        var combined = apps
             .Concat(invs)
+            .ToList();
+
+        var reminder = await CreateMentorReminderAsync(groupId, ct);
+        if (reminder is not null)
+            combined.Add(reminder);
+
+        return combined
             .OrderByDescending(x => x.CreatedAt)
             .ToList();
     }
@@ -358,5 +365,50 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
         {
             return null;
         }
+    }
+
+    private async Task<GroupPendingItemDto?> CreateMentorReminderAsync(Guid groupId, CancellationToken ct)
+    {
+        var info = await db.groups.AsNoTracking()
+            .Where(g => g.group_id == groupId)
+            .Select(g => new
+            {
+                g.group_id,
+                g.topic_id,
+                g.mentor_id,
+                g.max_members,
+                g.updated_at
+            })
+            .FirstOrDefaultAsync(ct);
+
+        if (info is null || !info.topic_id.HasValue || !info.mentor_id.HasValue)
+            return null;
+
+        var activeStatuses = new[] { "member", "leader" };
+        var activeCount = await db.group_members.AsNoTracking()
+            .CountAsync(m => m.group_id == groupId && activeStatuses.Contains(m.status), ct);
+        if (activeCount >= info.max_members)
+            return null;
+
+        var topicTitle = await db.topics.AsNoTracking()
+            .Where(t => t.topic_id == info.topic_id.Value)
+            .Select(t => t.title)
+            .FirstOrDefaultAsync(ct);
+
+        var missing = info.max_members - activeCount;
+        var message = $"Group mentor confirmed but only {activeCount}/{info.max_members} members. Recruit {missing} more member{(missing == 1 ? string.Empty : "s")}.";
+
+        return new GroupPendingItemDto(
+            "member_reminder",
+            groupId,
+            null,
+            Guid.Empty,
+            string.Empty,
+            string.Empty,
+            null,
+            info.updated_at,
+            message,
+            info.topic_id,
+            topicTitle);
     }
 }

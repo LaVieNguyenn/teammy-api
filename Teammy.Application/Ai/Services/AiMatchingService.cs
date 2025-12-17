@@ -1119,7 +1119,7 @@ public sealed class AiMatchingService(
 
         await groupRepository.UpdateGroupAsync(groupId, null, null, null, null, chosen.TopicId, mentorId, null, ct);
         await groupRepository.SetStatusAsync(groupId, "active", ct);
-        await topicWriteRepository.SetStatusAsync(chosen.TopicId, "closed", null, null, ct);
+        await topicWriteRepository.SetStatusAsync(chosen.TopicId, "closed", ct);
         await postRepository.CloseAllOpenPostsForGroupAsync(groupId, ct);
 
         return TopicAssignmentAttemptResult.FromSuccess(new AutoAssignTopicResultDto(groupId, chosen.TopicId, chosen.Title, chosen.Score));

@@ -19,7 +19,7 @@ public sealed class HttpEmailSender : IEmailSender
     public async Task<bool> SendAsync(string toEmail, string subject, string htmlBody, CancellationToken ct, string? replyToEmail = null, string? fromDisplayName = null)
     {
         var provider = (_cfg["Email:Provider"] ?? _cfg["Email:Http:Provider"] ?? "").Trim().ToLowerInvariant();
-        if (string.IsNullOrWhiteSpace(provider)) provider = "sendgrid"; // default
+        if (string.IsNullOrWhiteSpace(provider)) provider = "sendgrid"; 
 
         var apiKey = _cfg["Email:Http:ApiKey"];
         var fromEmail = _cfg["Email:Http:From"] ?? _cfg["Email:Smtp:From"] ?? _cfg["Email:Smtp:User"];

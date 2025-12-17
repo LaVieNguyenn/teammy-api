@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Text.Json;
@@ -5,6 +6,7 @@ using Teammy.Application.Activity.Dtos;
 using Teammy.Application.Activity.Services;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Groups.Dtos;
+using Teammy.Application.Semesters.Dtos;
 
 namespace Teammy.Application.Groups.Services;
 
@@ -14,13 +16,16 @@ public sealed class GroupService(
     IUserReadOnlyQueries userQueries,
     IRecruitmentPostRepository postRepo,
     ActivityLogService activityLogService,
-    IEmailSender emailSender)
+    IEmailSender emailSender,
+    ISemesterReadOnlyQueries semesterQueries)
 {
     private const string AppName = "TEAMMY";
     private readonly IUserReadOnlyQueries _userQueries = userQueries;
     private readonly IRecruitmentPostRepository _postRepo = postRepo;
     private readonly ActivityLogService _activityLog = activityLogService;
     private readonly IEmailSender _emailSender = emailSender;
+    private readonly ISemesterReadOnlyQueries _semesterQueries = semesterQueries;
+    private readonly Dictionary<Guid, SemesterPolicyDto?> _semesterPolicyCache = new();
 
     public async Task<Guid> CreateGroupAsync(Guid creatorUserId, CreateGroupRequest req, CancellationToken ct)
     {
@@ -61,11 +66,43 @@ public sealed class GroupService(
         return groupId;
     }
 
-    public Task<IReadOnlyList<GroupSummaryDto>> ListGroupsAsync(string? status, Guid? majorId, Guid? topicId, CancellationToken ct)
-        => queries.ListGroupsAsync(status, majorId, topicId, ct);
+    public async Task<IReadOnlyList<GroupSummaryDto>> ListGroupsAsync(string? status, Guid? majorId, Guid? topicId, CancellationToken ct)
+    {
+        var list = await queries.ListGroupsAsync(status, majorId, topicId, ct);
+        var activated = await AutoActivateEligibleGroupsAsync(
+            list.Select(x => new ActivationSnapshot(
+                x.Id,
+                x.Semester.SemesterId,
+                x.Status,
+                x.Topic is not null,
+                x.Mentor is not null,
+                x.CurrentMembers,
+                x.MaxMembers)),
+            ct);
+        if (activated)
+            list = await queries.ListGroupsAsync(status, majorId, topicId, ct);
+        return list;
+    }
 
-    public Task<GroupDetailDto?> GetGroupAsync(Guid id, CancellationToken ct)
-        => queries.GetGroupAsync(id, ct);
+    public async Task<GroupDetailDto?> GetGroupAsync(Guid id, CancellationToken ct)
+    {
+        var detail = await queries.GetGroupAsync(id, ct);
+        if (detail is null) return null;
+        var mentor = await queries.GetMentorAsync(id, ct);
+        var activated = await AutoActivateGroupAsync(
+            new ActivationSnapshot(
+                detail.Id,
+                detail.SemesterId,
+                detail.Status,
+                detail.TopicId.HasValue,
+                mentor is not null,
+                detail.CurrentMembers,
+                detail.MaxMembers),
+            ct);
+        if (activated)
+            detail = await queries.GetGroupAsync(id, ct);
+        return detail;
+    }
 
     public async Task LeaveGroupAsync(Guid groupId, Guid userId, CancellationToken ct)
     {
@@ -125,6 +162,22 @@ public sealed class GroupService(
             Message = $"Leader invited user {inviteeUserId}",
             Metadata = new { inviteeUserId }
         }, ct);
+    }
+
+    public async Task ConfirmActiveAsync(Guid groupId, Guid currentUserId, CancellationToken ct)
+    {
+        var isLeader = await queries.IsLeaderAsync(groupId, currentUserId, ct);
+        if (!isLeader) throw new UnauthorizedAccessException("Leader only");
+
+        var detail = await queries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
+        if (string.Equals(detail.Status, "active", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var readiness = await EvaluateActivationReadinessAsync(detail, ct);
+        if (!readiness.Ready)
+            throw new InvalidOperationException(readiness.ErrorMessage ?? "Group is not ready to activate");
+
+        await ActivateGroupInternalAsync(groupId, currentUserId, "Leader confirmated!!!", ct);
     }
 
     public Task<IReadOnlyList<MyGroupDto>> ListMyGroupsAsync(Guid currentUserId, Guid? semesterId, CancellationToken ct)
@@ -313,5 +366,102 @@ public sealed class GroupService(
                 ct,
                 fromDisplayName: groupName);
         }
+    }
+
+    private sealed record ActivationSnapshot(
+        Guid GroupId,
+        Guid SemesterId,
+        string Status,
+        bool HasTopic,
+        bool HasMentor,
+        int CurrentMembers,
+        int MaxMembers);
+
+    private sealed record ActivationReadinessResult(bool Ready, string? ErrorMessage);
+
+    private async Task<ActivationReadinessResult> EvaluateActivationReadinessAsync(GroupDetailDto detail, CancellationToken ct)
+    {
+        if (!detail.TopicId.HasValue)
+            return new ActivationReadinessResult(false, "Group must select a topic and mentor before confirming");
+        var mentor = await queries.GetMentorAsync(detail.Id, ct);
+        if (mentor is null)
+            return new ActivationReadinessResult(false, "Mentor has not confirmed this group");
+        var (maxMembers, activeCount) = await queries.GetGroupCapacityAsync(detail.Id, ct);
+        if (activeCount < maxMembers)
+            return new ActivationReadinessResult(false, $"Need {maxMembers - activeCount} more member(s) to activate");
+        return new ActivationReadinessResult(true, null);
+    }
+
+    private async Task<bool> AutoActivateEligibleGroupsAsync(IEnumerable<ActivationSnapshot> snapshots, CancellationToken ct)
+    {
+        var activatedAny = false;
+        foreach (var s in snapshots)
+        {
+            if (await AutoActivateGroupAsync(s, ct))
+                activatedAny = true;
+        }
+        return activatedAny;
+    }
+
+    private async Task<bool> AutoActivateGroupAsync(ActivationSnapshot snapshot, CancellationToken ct)
+    {
+        if (!string.Equals(snapshot.Status, "recruiting", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (!snapshot.HasTopic || !snapshot.HasMentor)
+            return false;
+        if (snapshot.CurrentMembers < snapshot.MaxMembers)
+            return false;
+
+        var policy = await GetSemesterPolicyAsync(snapshot.SemesterId, ct);
+        if (policy is null)
+            return false;
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        if (today <= policy.TeamSelfSelectEnd)
+            return false;
+
+        await ActivateGroupInternalAsync(snapshot.GroupId, null, "deadline_auto_activation", ct);
+        return true;
+    }
+
+    private async Task ActivateGroupInternalAsync(Guid groupId, Guid? actorUserId, string trigger, CancellationToken ct)
+    {
+        await repo.SetStatusAsync(groupId, "active", ct);
+        await _postRepo.CloseAllOpenPostsForGroupAsync(groupId, ct);
+        var action = trigger == "Leader confirmated!!!" ? "GROUP_CONFIRMED_ACTIVE" : "GROUP_AUTO_ACTIVATED";
+        var message = trigger == "Leader confirmated!!!"
+            ? "Leader confirmed the group is ready and activated it"
+            : "Group automatically activated after team self-selection window ended";
+        var resolvedActorId = actorUserId ?? await TryResolveDefaultActorAsync(groupId, ct);
+        if (resolvedActorId.HasValue)
+        {
+            await LogAsync(new ActivityLogCreateRequest(resolvedActorId.Value, "group", action)
+            {
+                GroupId = groupId,
+                EntityId = groupId,
+                Message = message,
+                Metadata = new { trigger }
+            }, ct);
+        }
+    }
+
+    private async Task<SemesterPolicyDto?> GetSemesterPolicyAsync(Guid semesterId, CancellationToken ct)
+    {
+        if (_semesterPolicyCache.TryGetValue(semesterId, out var cached))
+            return cached;
+        var policy = await _semesterQueries.GetPolicyAsync(semesterId, ct);
+        _semesterPolicyCache[semesterId] = policy;
+        return policy;
+    }
+
+    private async Task<Guid?> TryResolveDefaultActorAsync(Guid groupId, CancellationToken ct)
+    {
+        var members = await queries.ListActiveMembersAsync(groupId, ct);
+        var leader = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase));
+        if (leader is not null)
+            return leader.UserId;
+        if (members.Count > 0)
+            return members[0].UserId;
+        var mentor = await queries.GetMentorAsync(groupId, ct);
+        return mentor?.UserId;
     }
 }

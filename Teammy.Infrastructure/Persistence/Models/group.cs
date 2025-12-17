@@ -59,5 +59,4 @@ public partial class group
 
     public virtual topic? topic { get; set; }
 
-    public virtual ICollection<topic> pending_topics { get; set; } = new List<topic>();
 }

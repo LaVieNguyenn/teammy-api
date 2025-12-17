@@ -12,7 +12,7 @@ public sealed class SemesterService(
             throw new ArgumentException("Season is required");
 
         if (req.StartDate > req.EndDate)
-            throw new ArgumentException("StartDate must be <= EndDate");
+            throw new ArgumentException("StartDate must be < EndDate");
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         if (req.EndDate < today)
             throw new InvalidOperationException("Semester dates cannot be created in the past.");

@@ -84,4 +84,22 @@ public sealed class InvitationRepository(AppDbContext db) : IInvitationRepositor
         await db.SaveChangesAsync(ct);
         return items.Count;
     }
+
+    public async Task<IReadOnlyList<(Guid InvitationId, Guid InviteeUserId, Guid GroupId, Guid InvitedBy)>> RejectPendingMentorInvitesForTopicAsync(Guid topicId, Guid exceptInvitationId, CancellationToken ct)
+    {
+        var items = await db.invitations
+            .Where(i => i.topic_id == topicId && i.invitation_id != exceptInvitationId && i.status == "pending")
+            .ToListAsync(ct);
+        if (items.Count == 0) return Array.Empty<(Guid, Guid, Guid, Guid)>();
+        var now = DateTime.UtcNow;
+        foreach (var inv in items)
+        {
+            inv.status = "rejected";
+            inv.responded_at = now;
+        }
+        await db.SaveChangesAsync(ct);
+        return items
+            .Select(i => (i.invitation_id, i.invitee_user_id, i.group_id, i.invited_by))
+            .ToList();
+    }
 }

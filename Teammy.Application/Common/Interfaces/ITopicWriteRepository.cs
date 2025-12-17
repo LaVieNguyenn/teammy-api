@@ -11,7 +11,7 @@ namespace Teammy.Application.Common.Interfaces
         Task<Guid> CreateAsync(CreateTopicRequest req, Guid createdBy, CancellationToken ct);
         Task UpdateAsync(Guid topicId, UpdateTopicRequest req, CancellationToken ct);
         Task DeleteAsync(Guid topicId, CancellationToken ct);
-        Task SetStatusAsync(Guid topicId, string status, Guid? pendingGroupId, DateTime? pendingSince, CancellationToken ct);
+        Task SetStatusAsync(Guid topicId, string status, CancellationToken ct);
 
         Task<(Guid topicId, bool created)> UpsertAsync(
             Guid semesterId,

@@ -28,7 +28,8 @@ public sealed class InvitationReadOnlyQueries(AppDbContext db) : IInvitationRead
                 g.name,
                 u.email,
                 i.topic_id,
-                t != null ? t.title : null
+                t != null ? t.title : null,
+                i.message
             )).FirstOrDefaultAsync(ct);
 
     public Task<IReadOnlyList<InvitationListItemDto>> ListForUserAsync(Guid userId, string? status, CancellationToken ct)
@@ -46,14 +47,15 @@ public sealed class InvitationReadOnlyQueries(AppDbContext db) : IInvitationRead
                     i.topic_id != null ? "mentor" : "member",
                     i.status,
                     i.created_at,
-                    i.expires_at,
-                    i.invited_by,
-                    invBy.display_name,
-                    g.group_id,
-                    g.name,
-                    i.topic_id,
-                    t != null ? t.title : null
-                );
+                i.expires_at,
+                i.invited_by,
+                invBy.display_name,
+                g.group_id,
+                g.name,
+                i.topic_id,
+                t != null ? t.title : null,
+                i.message
+            );
         return q.ToListAsync(ct).ContinueWith(t => (IReadOnlyList<InvitationListItemDto>)t.Result, ct);
     }
 
@@ -70,4 +72,11 @@ public sealed class InvitationReadOnlyQueries(AppDbContext db) : IInvitationRead
             .Select(i => new ValueTuple<Guid, string, Guid?>(i.invitation_id, i.status, i.topic_id))
             .FirstOrDefaultAsync(ct)
             .ContinueWith(t => t.Result == default ? (ValueTuple<Guid,string, Guid?>?)null : t.Result, ct);
+
+    public Task<Guid?> GetPendingMentorTopicAsync(Guid groupId, CancellationToken ct)
+        => db.invitations.AsNoTracking()
+            .Where(i => i.group_id == groupId && i.status == "pending" && i.topic_id != null)
+            .OrderByDescending(i => i.created_at)
+            .Select(i => (Guid?)i.topic_id)
+            .FirstOrDefaultAsync(ct);
 }

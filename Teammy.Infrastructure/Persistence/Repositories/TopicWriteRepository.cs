@@ -21,7 +21,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories
             _db = db;
         }
 
-        private static bool ValidStatus(string s) => s is "open" or "pending" or "closed" or "archived";
+        private static bool ValidStatus(string s) => s is "open" or "closed" or "archived";
 
         public async Task<Guid> CreateAsync(CreateTopicRequest req, Guid createdBy, CancellationToken ct)
         {
@@ -99,24 +99,12 @@ namespace Teammy.Infrastructure.Persistence.Repositories
             await _db.SaveChangesAsync(ct);
         }
 
-        public async Task SetStatusAsync(Guid topicId, string status, Guid? pendingGroupId, DateTime? pendingSince, CancellationToken ct)
+        public async Task SetStatusAsync(Guid topicId, string status, CancellationToken ct)
         {
             var normalized = NormalizeStatus(status);
             var entity = await _db.topics.FirstOrDefaultAsync(x => x.topic_id == topicId, ct)
                 ?? throw new KeyNotFoundException("Topic not found");
             entity.status = normalized;
-            if (normalized == "pending")
-            {
-                if (pendingGroupId is null)
-                    throw new ArgumentException("pending_group_required");
-                entity.pending_group_id = pendingGroupId;
-                entity.pending_since = pendingSince ?? DateTime.UtcNow;
-            }
-            else
-            {
-                entity.pending_group_id = null;
-                entity.pending_since = null;
-            }
             await _db.SaveChangesAsync(ct);
         }
 
@@ -195,7 +183,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories
             if (string.IsNullOrWhiteSpace(status)) return "open";
             var s = status.Trim().ToLowerInvariant();
             if (!ValidStatus(s))
-                throw new ArgumentException("Status must be open|pending|closed|archived.");
+                throw new ArgumentException("Status must be open|closed|archived.");
             return s;
         }
 
