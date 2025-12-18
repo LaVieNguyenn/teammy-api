@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
+using Teammy.Infrastructure.Ai.Indexing;
 using Teammy.Infrastructure.Persistence.Models;
 
 namespace Teammy.Infrastructure.Persistence;
@@ -79,6 +80,8 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<vw_groups_without_topic> vw_groups_without_topics { get; set; }
 
     public virtual DbSet<vw_topics_available> vw_topics_availables { get; set; }
+
+    public virtual DbSet<AiIndexOutboxItem> AiIndexOutbox { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -844,6 +847,59 @@ public partial class AppDbContext : DbContext
             entity
                 .HasNoKey()
                 .ToView("vw_topics_available", "teammy");
+        });
+
+        modelBuilder.Entity<AiIndexOutboxItem>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.ToTable("ai_index_outbox", "teammy");
+
+            entity.Property(e => e.Id)
+                .HasColumnName("id")
+                .ValueGeneratedOnAdd();
+
+            entity.Property(e => e.CreatedAtUtc)
+                .HasColumnName("created_at_utc")
+                .HasDefaultValueSql("now() at time zone 'utc'");
+
+            entity.Property(e => e.Type)
+                .HasColumnName("type")
+                .HasMaxLength(64)
+                .IsRequired();
+
+            entity.Property(e => e.EntityId)
+                .HasColumnName("entity_id");
+
+            entity.Property(e => e.PointId)
+                .HasColumnName("point_id")
+                .HasMaxLength(64)
+                .IsRequired();
+
+            entity.Property(e => e.Action)
+                .HasColumnName("action")
+                .HasConversion<int>();
+
+            entity.Property(e => e.SemesterId)
+                .HasColumnName("semester_id");
+
+            entity.Property(e => e.MajorId)
+                .HasColumnName("major_id");
+
+            entity.Property(e => e.RetryCount)
+                .HasColumnName("retry_count");
+
+            entity.Property(e => e.LastError)
+                .HasColumnName("last_error")
+                .HasMaxLength(1024);
+
+            entity.Property(e => e.ProcessedAtUtc)
+                .HasColumnName("processed_at_utc");
+
+            entity.HasIndex(e => new { e.Type, e.EntityId, e.ProcessedAtUtc })
+                .HasDatabaseName("ix_ai_index_outbox_type_entity_processed");
+
+            entity.HasIndex(e => e.ProcessedAtUtc)
+                .HasDatabaseName("ix_ai_index_outbox_processed");
         });
 
         OnModelCreatingPartial(modelBuilder);

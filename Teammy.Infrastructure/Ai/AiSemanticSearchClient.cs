@@ -48,8 +48,21 @@ public sealed class AiSemanticSearchClient(HttpClient httpClient, IConfiguration
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
 
-        if (!document.RootElement.TryGetProperty("result", out var resultElement) || resultElement.ValueKind != JsonValueKind.Array)
+        // Support both legacy gateway shape: {"result":[{"payload":{"entityId":"..."}}]}
+        // and local gateway shape: {"hits":[{"payload":{"entityId":"..."},"distance":...}]}
+        JsonElement resultElement;
+        if (document.RootElement.TryGetProperty("result", out var legacy) && legacy.ValueKind == JsonValueKind.Array)
+        {
+            resultElement = legacy;
+        }
+        else if (document.RootElement.TryGetProperty("hits", out var hits) && hits.ValueKind == JsonValueKind.Array)
+        {
+            resultElement = hits;
+        }
+        else
+        {
             return Array.Empty<Guid>();
+        }
 
         var ids = new List<Guid>();
         foreach (var item in resultElement.EnumerateArray())
@@ -60,7 +73,9 @@ public sealed class AiSemanticSearchClient(HttpClient httpClient, IConfiguration
             if (!payloadElement.TryGetProperty("entityId", out var entityElement))
                 continue;
 
-            var entityId = entityElement.GetString();
+            var entityId = entityElement.ValueKind == JsonValueKind.String
+                ? entityElement.GetString()
+                : entityElement.ToString();
             if (Guid.TryParse(entityId, out var guid))
                 ids.Add(guid);
         }

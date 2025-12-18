@@ -85,10 +85,15 @@ builder.Services.AddScoped<IAnnouncementNotifier, AnnouncementNotifier>();
 builder.Services.AddScoped<IActivityLogNotifier, ActivityLogNotifier>();
 builder.Services.AddSingleton<IAppUrlProvider, Teammy.Api.App.AppUrlProvider>();
 builder.Services.AddSingleton<IChatPresenceTracker, ChatPresenceTracker>();
-builder.Services.AddHttpClient<Teammy.Api.Services.AiGatewayClient>();
 
 // Infrastructure (DbContext, Auth services, Repositories)
 builder.Services.AddInfrastructure(builder.Configuration);
+
+// Startup diagnostics for AI gateway wiring
+builder.Logging.AddFilter("Teammy.Infrastructure.Ai", Microsoft.Extensions.Logging.LogLevel.Information);
+Console.WriteLine($"[Startup] ASPNETCORE_ENVIRONMENT={builder.Environment.EnvironmentName}");
+Console.WriteLine($"[Startup] AI_GATEWAY_BASE_URL={builder.Configuration["AI_GATEWAY_BASE_URL"]}");
+Console.WriteLine($"[Startup] AI_GATEWAY_API_KEY={(string.IsNullOrWhiteSpace(builder.Configuration["AI_GATEWAY_API_KEY"]) ? "<empty>" : "<set>")}");
 
 // JWT
 var key = builder.Configuration["Auth:Jwt:Key"]!;

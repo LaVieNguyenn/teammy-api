@@ -24,14 +24,19 @@ using Teammy.Infrastructure.Persistence.Repositories;
 using Teammy.Infrastructure.Topics;
 using Teammy.Infrastructure.Reports;
 using Teammy.Infrastructure.Ai;
+using Teammy.Infrastructure.Ai.Indexing;
 namespace Teammy.Infrastructure;
 
 public static class DependencyInjection
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
-        services.AddDbContext<AppDbContext>(opt =>
-            opt.UseNpgsql(configuration.GetConnectionString("Default")));
+        services.AddSingleton<AiIndexOutboxSaveChangesInterceptor>();
+        services.AddDbContext<AppDbContext>((sp, opt) =>
+        {
+            opt.UseNpgsql(configuration.GetConnectionString("Default"));
+            opt.AddInterceptors(sp.GetRequiredService<AiIndexOutboxSaveChangesInterceptor>());
+        });
 
         services.AddSingleton<IExternalTokenVerifier, FirebaseTokenVerifier>();
         services.AddSingleton<ITokenService, JwtTokenService>();
@@ -94,7 +99,7 @@ public static class DependencyInjection
         // Semester & Semester policies
         services.AddScoped<ISemesterRepository, SemesterRepository>();
         services.AddScoped<ISemesterReadOnlyQueries, SemesterReadOnlyQueries>();
-        services.AddScoped<SemesterService>(); 
+        services.AddScoped<SemesterService>();
 
         // Skills
         services.AddScoped<ISkillDictionaryReadOnlyQueries, SkillDictionaryQueries>();
@@ -110,14 +115,35 @@ public static class DependencyInjection
         // AI Matching
         services.AddScoped<IAiMatchingQueries, AiMatchingQueries>();
         services.AddScoped<AiMatchingService>();
-        
+
         // Semester phase guard
         services.AddScoped<SemesterPhaseGuard>();
 
         // Reports
         services.AddScoped<IReportExportService, ExcelReportExportService>();
 
+        services.AddScoped<IAiIndexSourceQueries, AiIndexSourceQueries>();
+
         services.AddHttpClient<IAiSemanticSearch, AiSemanticSearchClient>(client =>
+        {
+            ConfigureAiGatewayClient(client, configuration, timeoutSeconds: 20);
+        });
+
+        services.AddHttpClient<IAiLlmClient, AiLlmClient>(client =>
+        {
+            ConfigureAiGatewayClient(client, configuration, timeoutSeconds: 90);
+        });
+
+        services.AddHttpClient<AiGatewayClient>(client =>
+        {
+            ConfigureAiGatewayClient(client, configuration, timeoutSeconds: 45);
+        });
+
+
+        services.AddHostedService<AiIndexOutboxWorker>();
+        return services;
+
+        static void ConfigureAiGatewayClient(HttpClient client, IConfiguration configuration, int timeoutSeconds)
         {
             var baseUrl = configuration["AI_GATEWAY_BASE_URL"];
             if (string.IsNullOrWhiteSpace(baseUrl))
@@ -127,8 +153,7 @@ public static class DependencyInjection
                 baseUrl += "/";
 
             client.BaseAddress = new Uri(baseUrl);
-            client.Timeout = TimeSpan.FromSeconds(15);
-        });
-        return services;
+            client.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
+        }
     }
 }
