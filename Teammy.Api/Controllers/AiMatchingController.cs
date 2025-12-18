@@ -131,6 +131,8 @@ public sealed class AiMatchingController : ControllerBase
             shaped.Add(new
             {
                 scorePercent = suggestion.Score,
+                aiReason = suggestion.AiReason,
+                aiBalanceNote = suggestion.AiBalanceNote,
                 matchingSkills = suggestion.MatchingSkills,
                 requiredSkills = suggestion.RequiredSkills,
                 post = postData
@@ -230,6 +232,8 @@ public sealed class AiMatchingController : ControllerBase
             shaped.Add(new
             {
                 scorePercent = suggestion.Score,
+                aiReason = suggestion.AiReason,
+                aiBalanceNote = suggestion.AiBalanceNote,
                 primaryRole = suggestion.PrimaryRole,
                 matchingSkills = suggestion.MatchingSkills,
                 profilePost = profileData

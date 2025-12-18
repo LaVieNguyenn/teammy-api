@@ -20,6 +20,8 @@ public sealed record RecruitmentPostSuggestionDto(
 )
 {
     public RecruitmentPostDetailDto? Detail { get; init; }
+    public string? AiReason { get; init; }
+    public string? AiBalanceNote { get; init; }
 }
 
 public sealed record ProfilePostSuggestionDto(
@@ -37,6 +39,8 @@ public sealed record ProfilePostSuggestionDto(
 )
 {
     public ProfilePostDetailDto? Detail { get; init; }
+    public string? AiReason { get; init; }
+    public string? AiBalanceNote { get; init; }
 }
 
 public sealed record TopicSuggestionDto(
@@ -50,6 +54,8 @@ public sealed record TopicSuggestionDto(
 )
 {
     public TopicDetailDto? Detail { get; init; }
+    public string? AiReason { get; init; }
+    public string? AiBalanceNote { get; init; }
 }
 
 public sealed record AutoAssignTopicResultDto(

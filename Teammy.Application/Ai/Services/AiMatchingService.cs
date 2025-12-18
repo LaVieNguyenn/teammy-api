@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Teammy.Application.Ai.Dtos;
@@ -22,6 +24,7 @@ public sealed class AiMatchingService(
     ITopicReadOnlyQueries topicQueries,
     IMajorReadOnlyQueries majorQueries,
     IAiSemanticSearch semanticSearch,
+    IAiLlmClient llmClient,
     ILogger<AiMatchingService> logger)
 {
     private const int DefaultSuggestionLimit = 5;
@@ -35,8 +38,11 @@ public sealed class AiMatchingService(
     private const int ProfileScoreThreshold = 20;
     private const int ProfileScoreMax = 140;
     private const int SemanticShortlistLimit = 50;
+    // Keep aligned with gateway MAX_SUGGESTIONS (currently 8) so every returned item can carry AI reason.
+    private const int LlmCandidatePoolSize = 8;
 
     private readonly IAiSemanticSearch _semanticSearch = semanticSearch ?? throw new ArgumentNullException(nameof(semanticSearch));
+    private readonly IAiLlmClient _llmClient = llmClient ?? throw new ArgumentNullException(nameof(llmClient));
     private readonly ILogger<AiMatchingService> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
     public async Task<AiSummaryDto> GetSummaryAsync(Guid? semesterId, CancellationToken ct)
@@ -95,6 +101,9 @@ public sealed class AiMatchingService(
 
             if (section is AiOptionSection.All or AiOptionSection.StudentsWithoutGroup)
                 studentPage = Paginate(studentOptions, page, pageSize);
+
+            // Enrich option reasons using AI (required for suggestions UX).
+            (staffingPage, studentPage) = await EnrichStaffingOptionReasonsWithAiAsync(staffingPage, studentPage, ct);
         }
 
         return new AiOptionListDto(
@@ -126,7 +135,7 @@ public sealed class AiMatchingService(
             ?? throw new InvalidOperationException("Không tìm thấy hồ sơ sinh viên trong danh sách ghép tự động.");
 
         var studentSkills = BuildSkillProfile(profile);
-        var targetMajorId = request.MajorId ?? profile.MajorId;
+        Guid? targetMajorId = request.MajorId ?? profile.MajorId;
         var posts = await aiQueries.ListOpenRecruitmentPostsAsync(semesterCtx.SemesterId, targetMajorId, ct);
         if (posts.Count == 0)
             return Array.Empty<RecruitmentPostSuggestionDto>();
@@ -147,6 +156,7 @@ public sealed class AiMatchingService(
             : await aiQueries.GetGroupRoleMixAsync(groupIds, ct);
 
         var limit = NormalizeLimit(request.Limit);
+        var poolSize = Math.Min(filteredPosts.Count, Math.Max(limit, LlmCandidatePoolSize));
         var suggestions = filteredPosts
             .Select(post =>
             {
@@ -158,13 +168,40 @@ public sealed class AiMatchingService(
             .Where(dto => dto is not null)
             .Select(dto => dto!)
             .OrderByDescending(dto => dto.Score)
-            .Take(limit)
+            .Take(poolSize)
             .ToList();
 
         if (suggestions.Count == 0)
             return suggestions;
 
-        return await HydrateRecruitmentPostSuggestionsAsync(suggestions, studentId, ct);
+        var queryText = BuildStudentQueryText(profile, studentSkills, targetMajorId);
+        var context = BuildLlmContext(
+            ("semesterId", semesterCtx.SemesterId.ToString()),
+            ("studentId", studentId.ToString()),
+            ("targetMajorId", targetMajorId?.ToString()),
+            ("mode", "group_post"),
+            ("topN", suggestions.Count.ToString(CultureInfo.InvariantCulture)));
+
+        var reranked = await ApplyLlmRerankAsync(
+            "recruitment_post",
+            queryText,
+            suggestions,
+            s => s.PostId,
+            BuildRecruitmentCandidate,
+            ApplyRecruitmentRerank,
+            s => s.Score,
+            context,
+                requireAiReason: true,
+            ct);
+
+        var finalSuggestions = reranked
+            .Take(limit)
+            .ToList();
+
+        if (finalSuggestions.Count == 0)
+            return finalSuggestions;
+
+        return await HydrateRecruitmentPostSuggestionsAsync(finalSuggestions, studentId, ct);
     }
 
     public async Task<IReadOnlyList<TopicSuggestionDto>> SuggestTopicsForGroupAsync(
@@ -219,19 +256,48 @@ public sealed class AiMatchingService(
         if (candidates.Count == 0)
             return Array.Empty<TopicSuggestionDto>();
 
-        var limitValue = NormalizeLimit(limit);
+        // Topic suggestions: luôn trả 4-6 items (default 5) để UX ổn định và có reason từ AI.
+        var limitValue = NormalizeTopicSuggestionLimit(limit);
+        var poolSize = Math.Min(candidates.Count, Math.Max(limitValue, LlmCandidatePoolSize));
         var items = candidates
             .Select(topic => BuildTopicSuggestion(topic, groupSkillProfile))
             .Where(dto => dto is not null)
             .Select(dto => dto!)
             .OrderByDescending(dto => dto.Score)
-            .Take(limitValue)
+            .Take(poolSize)
             .ToList();
 
         if (items.Count == 0)
             return items;
 
-        return await HydrateTopicSuggestionsAsync(items, ct);
+        var queryText = BuildGroupQueryText(detail.Name, groupSkillProfile, null);
+        var context = BuildLlmContext(
+            ("semesterId", detail.SemesterId.ToString()),
+            ("groupId", groupId.ToString()),
+            ("majorId", detail.MajorId?.ToString()),
+            ("mode", "topic"),
+            ("topN", items.Count.ToString(CultureInfo.InvariantCulture)));
+
+        var reranked = await ApplyLlmRerankAsync(
+            "topic",
+            queryText,
+            items,
+            s => s.TopicId,
+            BuildTopicCandidate,
+            ApplyTopicRerank,
+            s => s.Score,
+            context,
+            requireAiReason: true,
+            ct);
+
+        var finalItems = reranked
+            .Take(limitValue)
+            .ToList();
+
+        if (finalItems.Count == 0)
+            return finalItems;
+
+        return await HydrateTopicSuggestionsAsync(finalItems, ct);
     }
 
     public async Task<IReadOnlyList<ProfilePostSuggestionDto>> SuggestProfilePostsForGroupAsync(
@@ -281,18 +347,55 @@ public sealed class AiMatchingService(
             return Array.Empty<ProfilePostSuggestionDto>();
 
         var limit = NormalizeLimit(request.Limit);
+        var poolSize = Math.Min(filteredPosts.Count, Math.Max(limit, LlmCandidatePoolSize));
         var suggestions = filteredPosts
             .Select(post => BuildProfilePostSuggestion(post, groupSkillProfile, mix))
             .Where(dto => dto is not null)
             .Select(dto => dto!)
             .OrderByDescending(dto => dto.Score)
-            .Take(limit)
+            .Take(poolSize)
             .ToList();
 
         if (suggestions.Count == 0)
             return suggestions;
 
-        return await HydrateProfilePostSuggestionsAsync(suggestions, currentUserId, ct);
+        var queryText = BuildGroupQueryText(detail.Name, groupSkillProfile, mix);
+        var context = BuildLlmContext(
+            ("semesterId", detail.SemesterId.ToString()),
+            ("groupId", detail.Id.ToString()),
+            ("majorId", detail.MajorId?.ToString()));
+
+        // Provide a structured payload for the AI gateway/host to understand the team context for personal-post rerank.
+        // This is sent via context so it remains backward compatible with the existing gateway contract.
+        var teamJson = BuildGroupPostTeamContext(detail.Name, maxMembers - activeCount, mix, groupSkillProfile);
+        context = BuildLlmContext(
+            ("semesterId", detail.SemesterId.ToString()),
+            ("groupId", detail.Id.ToString()),
+            ("majorId", detail.MajorId?.ToString()),
+            ("mode", "personal_post"),
+            ("topN", suggestions.Count.ToString(CultureInfo.InvariantCulture)),
+            ("team", teamJson));
+
+        var reranked = await ApplyLlmRerankAsync(
+            "profile_post",
+            queryText,
+            suggestions,
+            s => s.PostId,
+            BuildProfileCandidate,
+            ApplyProfileRerank,
+            s => s.Score,
+            context,
+                requireAiReason: true,
+            ct);
+
+        var finalSuggestions = reranked
+            .Take(limit)
+            .ToList();
+
+        if (finalSuggestions.Count == 0)
+            return finalSuggestions;
+
+        return await HydrateProfilePostSuggestionsAsync(finalSuggestions, currentUserId, ct);
     }
 
     public async Task<AutoAssignTeamsResultDto> AutoAssignTeamsAsync(Guid currentUserId, AutoAssignTeamsRequest? request, CancellationToken ct)
@@ -585,30 +688,44 @@ public sealed class AiMatchingService(
         foreach (var group in pageGroups)
         {
             var groupProfile = await GetGroupSkillProfileAsync(group.GroupId, ct);
+            var groupQueryText = BuildGroupQueryText(group.Name, groupProfile, null);
             var relevantTopics = group.MajorId.HasValue
                 ? topicList.Where(t => !t.MajorId.HasValue || t.MajorId.Value == group.MajorId.Value)
                 : topicList;
 
-            var suggestionItems = relevantTopics
-                .Select(topic =>
-                {
-                    var suggestion = BuildTopicSuggestion(topic, groupProfile);
-                    if (suggestion is null)
-                        return null;
+            // Build heuristic shortlist then ask AI to produce reasons (and optionally adjust ordering).
+            var shortlist = relevantTopics
+                .Select(topic => BuildTopicSuggestion(topic, groupProfile))
+                .Where(s => s is not null)
+                .Select(s => s!)
+                .OrderByDescending(s => s.Score)
+                .Take(LlmCandidatePoolSize)
+                .ToList();
 
-                    var reason = BuildTopicReason(topic, suggestion, group);
-                    return new TopicSuggestionDetailDto(
-                        topic.TopicId,
-                        topic.Title,
-                        topic.Description,
-                        suggestion.Score,
-                        suggestion.MatchingSkills,
-                        reason);
-                })
-                .Where(dto => dto is not null)
-                .Select(dto => dto!)
-                .OrderByDescending(dto => dto.Score)
+            var reranked = await ApplyLlmRerankAsync(
+                "topic_options",
+                groupQueryText,
+                shortlist,
+                s => s.TopicId,
+                BuildTopicCandidate,
+                ApplyTopicRerank,
+                s => s.Score,
+                context: BuildLlmContext(
+                    ("groupId", group.GroupId.ToString()),
+                    ("mode", "topic"),
+                    ("topN", shortlist.Count.ToString(CultureInfo.InvariantCulture))),
+                requireAiReason: true,
+                ct);
+
+            var suggestionItems = reranked
                 .Take(OptionSuggestionLimit)
+                .Select(s => new TopicSuggestionDetailDto(
+                    s.TopicId,
+                    s.Title,
+                    s.Description,
+                    s.Score,
+                    s.MatchingSkills,
+                    s.AiReason ?? BuildTopicReason(topics.First(t => t.TopicId == s.TopicId), s, group)))
                 .ToList();
 
             items.Add(new GroupTopicOptionDto(
@@ -1259,6 +1376,552 @@ public sealed class AiMatchingService(
         return string.Join("; ", parts.Where(part => !string.IsNullOrWhiteSpace(part)));
     }
 
+    private static string BuildStudentQueryText(StudentProfileSnapshot student, AiSkillProfile profile, Guid? targetMajorId)
+    {
+        var builder = new StringBuilder();
+        builder.Append(student.DisplayName);
+        builder.Append(" | Major: ").Append(targetMajorId?.ToString() ?? student.MajorId.ToString());
+        if (profile.PrimaryRole != AiPrimaryRole.Unknown)
+            builder.Append(" | Role: ").Append(AiRoleHelper.ToDisplayString(profile.PrimaryRole));
+        if (profile.HasTags)
+            builder.Append(" | Skills: ").Append(string.Join(", ", profile.Tags.Take(15)));
+        return builder.ToString();
+    }
+
+    private static string BuildGroupQueryText(string groupName, AiSkillProfile profile, GroupRoleMixSnapshot? mix)
+    {
+        var builder = new StringBuilder();
+        builder.Append(groupName);
+        if (profile.PrimaryRole != AiPrimaryRole.Unknown)
+            builder.Append(" | Primary need: ").Append(AiRoleHelper.ToDisplayString(profile.PrimaryRole));
+        if (profile.HasTags)
+            builder.Append(" | Skills: ").Append(string.Join(", ", profile.Tags.Take(15)));
+
+        if (mix is not null)
+        {
+            builder.Append(" | Current mix: ")
+                .Append($"FE {mix.FrontendCount}, BE {mix.BackendCount}, Other {mix.OtherCount}");
+        }
+
+        return builder.ToString();
+    }
+
+    private static AiLlmCandidate BuildRecruitmentCandidate(RecruitmentPostSuggestionDto suggestion)
+    {
+        var baselineSkills = suggestion.RequiredSkills ?? Array.Empty<string>();
+        var payload = BuildStructuredCandidateText(
+            suggestion.Title,
+            suggestion.Description,
+            baselineSkills,
+            suggestion.PositionNeeded,
+            null,
+            suggestion.MatchingSkills);
+
+        var metadata = BuildMetadata(
+            ("majorId", suggestion.MajorId?.ToString()),
+            ("groupId", suggestion.GroupId?.ToString()),
+            ("score", suggestion.Score.ToString(CultureInfo.InvariantCulture)),
+            ("position", suggestion.PositionNeeded),
+            ("neededRole", suggestion.PositionNeeded));
+
+        return new AiLlmCandidate(
+            string.Empty,
+            suggestion.PostId,
+            suggestion.Title,
+            suggestion.Description,
+            payload,
+            metadata);
+    }
+
+    private static AiLlmCandidate BuildTopicCandidate(TopicSuggestionDto suggestion)
+    {
+        var payload = BuildStructuredCandidateText(
+            suggestion.Title,
+            suggestion.Description,
+            suggestion.TopicSkills,
+            null,
+            suggestion.CanTakeMore,
+            suggestion.MatchingSkills);
+
+        var metadata = BuildMetadata(
+            ("score", suggestion.Score.ToString(CultureInfo.InvariantCulture)));
+
+        return new AiLlmCandidate(
+            string.Empty,
+            suggestion.TopicId,
+            suggestion.Title,
+            suggestion.Description,
+            payload,
+            metadata);
+    }
+
+    private static AiLlmCandidate BuildProfileCandidate(ProfilePostSuggestionDto suggestion)
+    {
+        var profileSkills = SplitSkillTokens(suggestion.SkillsText).Concat(suggestion.MatchingSkills);
+        var description = string.IsNullOrWhiteSpace(suggestion.Description)
+            ? suggestion.SkillsText
+            : suggestion.Description;
+
+        var payload = BuildStructuredCandidateText(
+            suggestion.Title,
+            description,
+            profileSkills,
+            suggestion.PrimaryRole,
+            null,
+            suggestion.MatchingSkills);
+
+        var metadata = BuildMetadata(
+            ("majorId", suggestion.MajorId?.ToString()),
+            ("score", suggestion.Score.ToString(CultureInfo.InvariantCulture)),
+            ("ownerUserId", suggestion.OwnerUserId.ToString()),
+            ("neededRole", suggestion.PrimaryRole));
+
+        return new AiLlmCandidate(
+            string.Empty,
+            suggestion.PostId,
+            suggestion.Title,
+            suggestion.Description,
+            payload,
+            metadata);
+    }
+
+    private static string BuildStructuredCandidateText(
+        string title,
+        string? description,
+        IEnumerable<string>? skills,
+        string? roleNeeded,
+        bool? canTakeMore,
+        IEnumerable<string>? matchingHighlights)
+    {
+        var normalizedSkills = NormalizeSkillTokens(skills).Take(35).ToList();
+        var normalizedMatches = NormalizeSkillTokens(matchingHighlights).Take(15).ToList();
+
+        var summary = string.IsNullOrWhiteSpace(description)
+            ? "Không có mô tả."
+            : description.Trim();
+
+        if (summary.Length > 1200)
+            summary = summary[..1200];
+
+        var summaryParts = new List<string>();  
+        if (!string.IsNullOrWhiteSpace(title))
+            summaryParts.Add(title.Trim());
+        if (!string.IsNullOrWhiteSpace(roleNeeded))
+            summaryParts.Add($"Role: {roleNeeded.Trim()}");
+        if (canTakeMore.HasValue)
+            summaryParts.Add(canTakeMore.Value ? "Slots available" : "At capacity");
+        summaryParts.Add(summary);
+        var combinedSummary = string.Join(" | ", summaryParts.Where(part => !string.IsNullOrWhiteSpace(part)));
+
+        var builder = new StringBuilder();
+        builder.AppendLine("SKILLS: " + (normalizedSkills.Count == 0 ? "n/a" : string.Join(", ", normalizedSkills)));
+        builder.AppendLine("MATCHING_SKILLS: " + (normalizedMatches.Count == 0 ? "n/a" : string.Join(", ", normalizedMatches)));
+        builder.Append("SUMMARY: ").Append(combinedSummary);
+        return builder.ToString();
+    }
+
+    private static string BuildGroupPostTeamContext(
+        string groupName,
+        int openSlots,
+        GroupRoleMixSnapshot mix,
+        AiSkillProfile profile)
+    {
+        var primaryNeed = InferPrimaryNeedFromMix(mix);
+        var prefer = string.IsNullOrWhiteSpace(primaryNeed) ? Array.Empty<string>() : new[] { primaryNeed };
+
+        var payload = new
+        {
+            name = groupName,
+            primaryNeed,
+            openSlots,
+            mix = new
+            {
+                fe = mix.FrontendCount,
+                be = mix.BackendCount,
+                ai = 0,
+                other = mix.OtherCount
+            },
+            preferRoles = prefer,
+            avoidRoles = Array.Empty<string>(),
+            teamTopSkills = profile.Tags.Take(15).ToList()
+        };
+
+        return JsonSerializer.Serialize(payload);
+    }
+
+    private static string? InferPrimaryNeedFromMix(GroupRoleMixSnapshot mix)
+    {
+        if (mix.FrontendCount == 0)
+            return "frontend";
+        if (mix.BackendCount == 0)
+            return "backend";
+        if (mix.OtherCount == 0)
+            return "other";
+        return null;
+    }
+
+    private static IEnumerable<string> NormalizeSkillTokens(IEnumerable<string>? source)
+    {
+        if (source is null)
+            yield break;
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var token in source)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+                continue;
+
+            var normalized = token.Trim();
+            if (normalized.Length == 0 || !seen.Add(normalized))
+                continue;
+
+            yield return normalized;
+        }
+    }
+
+    private static IEnumerable<string> SplitSkillTokens(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            yield break;
+
+        var parts = raw.Split(new[] { ',', ';', '|', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var part in parts)
+        {
+            var trimmed = part.Trim();
+            if (!string.IsNullOrWhiteSpace(trimmed))
+                yield return trimmed;
+        }
+    }
+
+    private static (RecruitmentPostSuggestionDto Updated, double? OverrideScore) ApplyRecruitmentRerank(
+        RecruitmentPostSuggestionDto suggestion,
+        AiLlmRerankedItem? reranked)
+    {
+        if (reranked is null)
+            return (suggestion, null);
+
+        var matches = ChooseMatches(suggestion.MatchingSkills, reranked.MatchedSkills);
+        var updated = suggestion with
+        {
+            Score = NormalizeLlmScore(reranked.FinalScore),
+            AiReason = reranked.Reason ?? suggestion.AiReason,
+            AiBalanceNote = reranked.BalanceNote ?? suggestion.AiBalanceNote,
+            MatchingSkills = matches
+        };
+
+        return (updated, reranked.FinalScore);
+    }
+
+    private static (TopicSuggestionDto Updated, double? OverrideScore) ApplyTopicRerank(
+        TopicSuggestionDto suggestion,
+        AiLlmRerankedItem? reranked)
+    {
+        if (reranked is null)
+            return (suggestion, null);
+
+        var matches = ChooseMatches(suggestion.MatchingSkills, reranked.MatchedSkills);
+        var updated = suggestion with
+        {
+            Score = NormalizeLlmScore(reranked.FinalScore),
+            AiReason = reranked.Reason ?? suggestion.AiReason,
+            AiBalanceNote = reranked.BalanceNote ?? suggestion.AiBalanceNote,
+            MatchingSkills = matches
+        };
+
+        return (updated, reranked.FinalScore);
+    }
+
+    private static (ProfilePostSuggestionDto Updated, double? OverrideScore) ApplyProfileRerank(
+        ProfilePostSuggestionDto suggestion,
+        AiLlmRerankedItem? reranked)
+    {
+        if (reranked is null)
+            return (suggestion, null);
+
+        var matches = ChooseMatches(suggestion.MatchingSkills, reranked.MatchedSkills);
+        var updated = suggestion with
+        {
+            Score = NormalizeLlmScore(reranked.FinalScore),
+            AiReason = reranked.Reason ?? suggestion.AiReason,
+            AiBalanceNote = reranked.BalanceNote ?? suggestion.AiBalanceNote,
+            MatchingSkills = matches
+        };
+
+        return (updated, reranked.FinalScore);
+    }
+
+    private async Task<List<TSuggestion>> ApplyLlmRerankAsync<TSuggestion>(
+        string queryType,
+        string queryText,
+        IReadOnlyList<TSuggestion> suggestions,
+        Func<TSuggestion, Guid> idSelector,
+        Func<TSuggestion, AiLlmCandidate> candidateFactory,
+        Func<TSuggestion, AiLlmRerankedItem?, (TSuggestion Updated, double? OverrideScore)> projector,
+        Func<TSuggestion, double> fallbackScoreSelector,
+        IReadOnlyDictionary<string, string>? context,
+        bool requireAiReason,
+        CancellationToken ct)
+    {
+        var suggestionList = suggestions.ToList();
+        if (suggestionList.Count == 0 || string.IsNullOrWhiteSpace(queryText))
+            return suggestionList;
+
+        var rerankPool = suggestionList.Take(LlmCandidatePoolSize).ToList();
+        if (rerankPool.Count == 0)
+            return suggestionList;
+
+        var candidates = rerankPool
+            .Select(candidateFactory)
+            .ToList();
+
+        if (candidates.Count == 0)
+            return suggestionList;
+
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            if (string.IsNullOrWhiteSpace(candidates[i].Key))
+                candidates[i] = candidates[i] with { Key = $"c{i + 1:00}" };
+        }
+
+        var candidateIdToKey = new Dictionary<Guid, string>(candidates.Count);
+        for (var i = 0; i < candidates.Count; i++)
+            candidateIdToKey[candidates[i].Id] = candidates[i].Key;
+
+        AiLlmRerankResponse response;
+        try
+        {
+            var request = new AiLlmRerankRequest(queryType, queryText, candidates, context);
+            response = await _llmClient.RerankAsync(request, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "LLM rerank failed for {QueryType}. Using heuristic scores.", queryType);
+            return suggestionList;
+        }
+
+        var rankedItems = response.Items ?? Array.Empty<AiLlmRerankedItem>();
+        if (rankedItems.Count == 0)
+        {
+            _logger.LogDebug("LLM rerank returned no items for {QueryType}. Using heuristic scores.", queryType);
+            return suggestionList;
+        }
+
+        var lookup = rankedItems
+            .Where(x => !string.IsNullOrWhiteSpace(x.Key))
+            .GroupBy(x => x.Key!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        var hasMatches = false;
+
+        var updatedList = suggestionList
+            .Select(suggestion =>
+            {
+                AiLlmRerankedItem? reranked = null;
+                var id = idSelector(suggestion);
+                if (candidateIdToKey.TryGetValue(id, out var key) && key is not null && lookup.TryGetValue(key, out var rr))
+                {
+                    reranked = rr;
+                    hasMatches = true;
+                }
+
+                var (updated, overrideScore) = projector(suggestion, reranked);
+                var rankScore = overrideScore ?? reranked?.FinalScore ?? fallbackScoreSelector(updated);
+                if (double.IsNaN(rankScore) || double.IsInfinity(rankScore))
+                    rankScore = fallbackScoreSelector(updated);
+
+                return new LlmRankResult<TSuggestion>(updated, rankScore);
+            })
+            .ToList();
+
+        if (!hasMatches)
+            return suggestionList;
+
+        if (requireAiReason)
+        {
+            // Only keep items that the gateway returned (so every item has AI reason).
+            updatedList = updatedList
+                .Where(item =>
+                {
+                    var id = idSelector(item.Item);
+                    return candidateIdToKey.TryGetValue(id, out var key)
+                           && key is not null
+                           && lookup.TryGetValue(key, out var rr)
+                           && !string.IsNullOrWhiteSpace(rr.Reason);
+                })
+                .ToList();
+        }
+
+        return updatedList
+            .OrderByDescending(item => item.Score)
+            .Select(item => item.Item)
+            .ToList();
+    }
+
+    private async Task<(PaginatedCollection<GroupStaffingOptionDto>? Staffing, PaginatedCollection<StudentPlacementOptionDto>? Students)>
+        EnrichStaffingOptionReasonsWithAiAsync(
+            PaginatedCollection<GroupStaffingOptionDto>? staffingPage,
+            PaginatedCollection<StudentPlacementOptionDto>? studentPage,
+            CancellationToken ct)
+    {
+        if (staffingPage is null || staffingPage.Items.Count == 0)
+            return (staffingPage, studentPage);
+
+        var updatedGroups = new List<GroupStaffingOptionDto>(staffingPage.Items.Count);
+        var studentReasonMap = new Dictionary<Guid, string>();
+
+        foreach (var group in staffingPage.Items)
+        {
+            if (group.SuggestedMembers.Count == 0)
+            {
+                updatedGroups.Add(group);
+                continue;
+            }
+
+            var queryText = BuildStructuredCandidateText(
+                group.Name,
+                group.Description,
+                skills: null,
+                roleNeeded: null,
+                canTakeMore: null,
+                matchingHighlights: null);
+
+            var candidates = group.SuggestedMembers
+                .Select(m => new AiLlmCandidate(
+                    string.Empty,
+                    m.StudentId,
+                    m.DisplayName,
+                    null,
+                    BuildStructuredCandidateText(
+                        m.DisplayName,
+                        null,
+                        m.SkillTags,
+                        m.PrimaryRole,
+                        null,
+                        null),
+                    Metadata: BuildMetadata(
+                        ("groupId", group.GroupId.ToString()),
+                        ("score", m.Score.ToString(CultureInfo.InvariantCulture)),
+                        ("majorId", m.MajorId.ToString()))))
+                .ToList();
+
+            for (var i = 0; i < candidates.Count; i++)
+            {
+                if (string.IsNullOrWhiteSpace(candidates[i].Key))
+                    candidates[i] = candidates[i] with { Key = $"c{i + 1:00}" };
+            }
+
+            AiLlmRerankResponse response;
+            try
+            {
+                response = await _llmClient.RerankAsync(
+                    new AiLlmRerankRequest("group_staffing_options", queryText, candidates, BuildLlmContext(("groupId", group.GroupId.ToString()))),
+                    ct);
+            }
+            catch
+            {
+                updatedGroups.Add(group);
+                continue;
+            }
+
+            var rrItems = response.Items ?? Array.Empty<AiLlmRerankedItem>();
+            var rrByKey = rrItems
+                .Where(x => !string.IsNullOrWhiteSpace(x.Key))
+                .GroupBy(x => x.Key!, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+            var keyByStudentId = candidates.ToDictionary(c => c.Id, c => c.Key);
+
+            var updatedMembers = group.SuggestedMembers
+                .Select(m =>
+                {
+                    if (keyByStudentId.TryGetValue(m.StudentId, out var key)
+                        && key is not null
+                        && rrByKey.TryGetValue(key, out var rrItem)
+                        && !string.IsNullOrWhiteSpace(rrItem.Reason))
+                    {
+                        studentReasonMap[m.StudentId] = rrItem.Reason!;
+                        return m with { Reason = rrItem.Reason! };
+                    }
+
+                    return m;
+                })
+                .ToList();
+
+            updatedGroups.Add(group with { SuggestedMembers = updatedMembers });
+        }
+
+        staffingPage = staffingPage with { Items = updatedGroups };
+
+        if (studentPage is not null && studentPage.Items.Count > 0)
+        {
+            var updatedStudents = studentPage.Items
+                .Select(s =>
+                {
+                    if (s.SuggestedGroup is null)
+                        return s;
+                    if (!studentReasonMap.TryGetValue(s.StudentId, out var reason) || string.IsNullOrWhiteSpace(reason))
+                        return s;
+                    return s with { SuggestedGroup = s.SuggestedGroup with { Reason = reason } };
+                })
+                .ToList();
+
+            studentPage = studentPage with { Items = updatedStudents };
+        }
+
+        return (staffingPage, studentPage);
+    }
+
+    private static IReadOnlyList<string> ChooseMatches(IReadOnlyList<string> fallback, IReadOnlyList<string>? overrides)
+    {
+        if (overrides is null || overrides.Count == 0)
+            return fallback;
+
+        var canonical = overrides
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Select(item => item.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(10)
+            .ToList();
+
+        return canonical.Count == 0 ? fallback : canonical;
+    }
+
+    private static IReadOnlyDictionary<string, string>? BuildLlmContext(params (string Key, string? Value)[] entries)
+    {
+        var buffer = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, rawValue) in entries)
+        {
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(rawValue))
+                continue;
+            buffer[key] = rawValue;
+        }
+
+        return buffer.Count == 0 ? null : buffer;
+    }
+
+    private static IReadOnlyDictionary<string, string>? BuildMetadata(params (string Key, string? Value)[] entries)
+    {
+        var buffer = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, rawValue) in entries)
+        {
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(rawValue))
+                continue;
+            buffer[key] = rawValue;
+        }
+
+        return buffer.Count == 0 ? null : buffer;
+    }
+
+    private static int NormalizeLlmScore(double value)
+    {
+        if (double.IsNaN(value) || double.IsInfinity(value))
+            return 0;
+        var clamped = Math.Clamp(value, 0, 100);
+        return (int)Math.Round(clamped, MidpointRounding.AwayFromZero);
+    }
+
+    private sealed record LlmRankResult<T>(T Item, double Score);
+
     private async Task<List<T>> ApplySemanticShortlistAsync<T>(
         string type,
         string queryText,
@@ -1644,6 +2307,14 @@ public sealed class AiMatchingService(
         if (!limit.HasValue || limit.Value <= 0)
             return DefaultSuggestionLimit;
         return Math.Min(limit.Value, MaxSuggestionLimit);
+    }
+
+    private static int NormalizeTopicSuggestionLimit(int? limit)
+    {
+        // Theo yêu cầu: đề xuất topic nên ổn định 4-6 (default 5)
+        if (!limit.HasValue || limit.Value <= 0)
+            return 5;
+        return Math.Clamp(limit.Value, 4, 6);
     }
 
     private sealed record CandidateSelection(StudentProfileSnapshot Profile, AiPrimaryRole Role)

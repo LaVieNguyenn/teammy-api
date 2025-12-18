@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using ClosedXML.Excel;
 using DocumentFormat.OpenXml.Packaging;
+using Teammy.Application.Ai.SkillExtraction;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Files;
 using Teammy.Application.Topics.Dtos;
@@ -33,6 +34,7 @@ public sealed class TopicRegistrationPackageImportService : ITopicImportService
     private readonly ITopicMentorService _topicMentors;
     private readonly IFileStorage _fileStorage;
     private readonly ISkillDictionaryReadOnlyQueries _skillDictionary;
+    private readonly IAiLlmClient _llmClient;
 
     public TopicRegistrationPackageImportService(
         ITopicWriteRepository repo,
@@ -41,7 +43,8 @@ public sealed class TopicRegistrationPackageImportService : ITopicImportService
         IMentorLookupService mentorLookup,
         ITopicMentorService topicMentors,
         IFileStorage fileStorage,
-        ISkillDictionaryReadOnlyQueries skillDictionary)
+        ISkillDictionaryReadOnlyQueries skillDictionary,
+        IAiLlmClient llmClient)
     {
         _repo = repo;
         _read = read;
@@ -50,6 +53,7 @@ public sealed class TopicRegistrationPackageImportService : ITopicImportService
         _topicMentors = topicMentors;
         _fileStorage = fileStorage;
         _skillDictionary = skillDictionary;
+        _llmClient = llmClient;
     }
 
     public async Task<byte[]> BuildTemplateAsync(CancellationToken ct)
@@ -243,7 +247,7 @@ public sealed class TopicRegistrationPackageImportService : ITopicImportService
                 fileBytes = ms.ToArray();
             }
 
-            var skillTags = ExtractSkillTags(fileBytes, entry.Name, skillTokens);
+            var skillTags = await BuildSkillTagsAsync(fileBytes, entry.Name, skillTokens, ct);
 
             await using var uploadStream = new MemoryStream(fileBytes);
             uploadStream.Position = 0;
@@ -550,10 +554,39 @@ public sealed class TopicRegistrationPackageImportService : ITopicImportService
         return results;
     }
 
-    private static IReadOnlyList<string> ExtractSkillTags(byte[] data, string fileName, IReadOnlyList<SkillDictionaryToken> dictionary)
+    private async Task<IReadOnlyList<string>> BuildSkillTagsAsync(
+        byte[] data,
+        string fileName,
+        IReadOnlyList<SkillDictionaryToken> dictionary,
+        CancellationToken ct)
     {
         var extension = Path.GetExtension(fileName);
         var text = ExtractDocumentText(data, extension);
+        if (string.IsNullOrWhiteSpace(text))
+            return Array.Empty<string>();
+
+        var dictionaryMatches = ExtractSkillTagsFromDictionary(text, dictionary);
+        IReadOnlyList<string> aiMatches = Array.Empty<string>();
+
+        try
+        {
+            aiMatches = await SkillExtractionPipeline.ExtractSkillsAsync(
+                _llmClient,
+                "topic_registration",
+                Guid.NewGuid(),
+                text,
+                ct);
+        }
+        catch
+        {
+            // ignore extraction failures; dictionary matches still returned
+        }
+
+        return MergeSkillTags(dictionaryMatches, aiMatches);
+    }
+
+    private static IReadOnlyList<string> ExtractSkillTagsFromDictionary(string text, IReadOnlyList<SkillDictionaryToken> dictionary)
+    {
         if (string.IsNullOrWhiteSpace(text))
             return Array.Empty<string>();
 
@@ -580,11 +613,30 @@ public sealed class TopicRegistrationPackageImportService : ITopicImportService
 
         foreach (var token in ExtractTechnologyTokens(text))
         {
-            if (!matches.Add(token) && matches.Count >= 30)
+            if (matches.Count >= 30)
                 break;
+            matches.Add(token);
         }
 
         return matches.Count == 0 ? Array.Empty<string>() : matches.Take(30).ToList();
+    }
+
+    private static IReadOnlyList<string> MergeSkillTags(IReadOnlyList<string> dictionaryMatches, IReadOnlyList<string> aiMatches)
+    {
+        var merged = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var skill in dictionaryMatches)
+        {
+            if (!string.IsNullOrWhiteSpace(skill))
+                merged.Add(skill.Trim());
+        }
+
+        foreach (var skill in aiMatches)
+        {
+            if (!string.IsNullOrWhiteSpace(skill))
+                merged.Add(skill.Trim());
+        }
+
+        return merged.Count == 0 ? Array.Empty<string>() : merged.Take(40).ToList();
     }
 
     private async Task<IReadOnlyList<SkillDictionaryToken>> LoadSkillDictionaryAsync(CancellationToken ct)

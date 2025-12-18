@@ -23,7 +23,7 @@ public sealed record AiSkillProfile(AiPrimaryRole PrimaryRole, IReadOnlyCollecti
             {
                 JsonValueKind.Object => BuildFromObject(doc.RootElement),
                 JsonValueKind.Array => BuildFromArray(doc.RootElement),
-                JsonValueKind.String => FromText(doc.RootElement.GetString()),
+                JsonValueKind.String => BuildFromPossiblyEmbeddedJson(doc.RootElement.GetString()),
                 _ => Empty
             };
         }
@@ -31,6 +31,33 @@ public sealed record AiSkillProfile(AiPrimaryRole PrimaryRole, IReadOnlyCollecti
         {
             return Empty;
         }
+    }
+
+    private static AiSkillProfile BuildFromPossiblyEmbeddedJson(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return Empty;
+
+        var trimmed = value.Trim();
+        if (LooksLikeJson(trimmed))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(trimmed);
+                return doc.RootElement.ValueKind switch
+                {
+                    JsonValueKind.Object => BuildFromObject(doc.RootElement),
+                    JsonValueKind.Array => BuildFromArray(doc.RootElement),
+                    _ => FromText(trimmed)
+                };
+            }
+            catch
+            {
+                // fall back to text parsing
+            }
+        }
+
+        return FromText(trimmed);
     }
 
     public static AiSkillProfile FromText(string? text)
@@ -155,10 +182,43 @@ public sealed record AiSkillProfile(AiPrimaryRole PrimaryRole, IReadOnlyCollecti
                 }
                 break;
             case JsonValueKind.String:
-                foreach (var token in SplitTerms(element.GetString()))
+                var raw = element.GetString();
+                if (!string.IsNullOrWhiteSpace(raw))
+                {
+                    var trimmed = raw.Trim();
+                    if (LooksLikeJson(trimmed))
+                    {
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(trimmed);
+                            switch (doc.RootElement.ValueKind)
+                            {
+                                case JsonValueKind.Array:
+                                case JsonValueKind.Object:
+                                    AddTags(doc.RootElement, tags);
+                                    return;
+                            }
+                        }
+                        catch
+                        {
+                            // ignore and fall back to text splitting
+                        }
+                    }
+                }
+
+                foreach (var token in SplitTerms(raw))
                     tags.Add(token);
                 break;
         }
+    }
+
+    private static bool LooksLikeJson(string value)
+    {
+        if (value.Length < 2)
+            return false;
+        var first = value[0];
+        var last = value[^1];
+        return (first == '{' && last == '}') || (first == '[' && last == ']');
     }
 
     private static IReadOnlyCollection<string> SplitTerms(string? value)
