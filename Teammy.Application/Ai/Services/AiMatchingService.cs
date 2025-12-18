@@ -332,6 +332,16 @@ public sealed class AiMatchingService(
         var memberProfiles = BuildMemberSkillProfiles(members);
         var groupSkillProfile = BuildGroupSkillProfile(detail.Skills, memberProfiles);
 
+        var openRecruitmentPosts = await aiQueries.ListOpenRecruitmentPostsAsync(detail.SemesterId, detail.MajorId, ct);
+        var now = DateTime.UtcNow;
+        var groupRecruitmentPosts = openRecruitmentPosts
+            .Where(p => p.GroupId.HasValue && p.GroupId.Value == request.GroupId)
+            .Where(p => p.ApplicationDeadline is null || p.ApplicationDeadline.Value >= now)
+            .OrderByDescending(p => p.CreatedAt)
+            .ToList();
+
+        var needsProfile = BuildRecruitmentNeedProfile(groupRecruitmentPosts);
+
         var mixes = await aiQueries.GetGroupRoleMixAsync(new[] { request.GroupId }, ct);
         var mix = mixes.TryGetValue(request.GroupId, out var snapshot)
             ? snapshot
@@ -341,7 +351,7 @@ public sealed class AiMatchingService(
         if (posts.Count == 0)
             return Array.Empty<ProfilePostSuggestionDto>();
 
-        var semanticQuery = BuildSemanticQuery(groupSkillProfile);
+        var semanticQuery = BuildSemanticQuery(needsProfile, groupSkillProfile);
         var filteredPosts = await ApplySemanticShortlistAsync("profile_post", semanticQuery, detail.SemesterId, detail.MajorId, posts, p => p.PostId, ct);
         if (filteredPosts.Count == 0)
             return Array.Empty<ProfilePostSuggestionDto>();
@@ -349,7 +359,7 @@ public sealed class AiMatchingService(
         var limit = NormalizeLimit(request.Limit);
         var poolSize = Math.Min(filteredPosts.Count, Math.Max(limit, LlmCandidatePoolSize));
         var suggestions = filteredPosts
-            .Select(post => BuildProfilePostSuggestion(post, groupSkillProfile, mix))
+            .Select(post => BuildProfilePostSuggestion(post, needsProfile, groupSkillProfile, mix))
             .Where(dto => dto is not null)
             .Select(dto => dto!)
             .OrderByDescending(dto => dto.Score)
@@ -359,7 +369,7 @@ public sealed class AiMatchingService(
         if (suggestions.Count == 0)
             return suggestions;
 
-        var queryText = BuildGroupQueryText(detail.Name, groupSkillProfile, mix);
+        var queryText = BuildGroupQueryText(detail.Name, needsProfile, groupSkillProfile, groupRecruitmentPosts, mix);
         var context = BuildLlmContext(
             ("semesterId", detail.SemesterId.ToString()),
             ("groupId", detail.Id.ToString()),
@@ -367,7 +377,8 @@ public sealed class AiMatchingService(
 
         // Provide a structured payload for the AI gateway/host to understand the team context for personal-post rerank.
         // This is sent via context so it remains backward compatible with the existing gateway contract.
-        var teamJson = BuildGroupPostTeamContext(detail.Name, maxMembers - activeCount, mix, groupSkillProfile);
+        var needsText = BuildRecruitmentNeedsText(groupRecruitmentPosts);
+        var teamJson = BuildGroupPostTeamContext(detail.Name, maxMembers - activeCount, mix, groupSkillProfile, needsProfile, needsText);
         context = BuildLlmContext(
             ("semesterId", detail.SemesterId.ToString()),
             ("groupId", detail.Id.ToString()),
@@ -396,6 +407,55 @@ public sealed class AiMatchingService(
             return finalSuggestions;
 
         return await HydrateProfilePostSuggestionsAsync(finalSuggestions, currentUserId, ct);
+    }
+
+    private static AiSkillProfile BuildRecruitmentNeedProfile(IReadOnlyList<RecruitmentPostSnapshot> posts)
+    {
+        if (posts.Count == 0)
+            return AiSkillProfile.Empty;
+
+        var sources = new List<AiSkillProfile>();
+        foreach (var post in posts)
+        {
+            var required = AiSkillProfile.FromJson(post.RequiredSkills);
+            var position = AiSkillProfile.FromText(post.PositionNeeded);
+
+            if (required.HasTags || required.PrimaryRole != AiPrimaryRole.Unknown)
+                sources.Add(required);
+            if (position.HasTags || position.PrimaryRole != AiPrimaryRole.Unknown)
+                sources.Add(position);
+        }
+
+        return sources.Count == 0 ? AiSkillProfile.Empty : AiSkillProfile.Combine(sources);
+    }
+
+    private static string BuildRecruitmentNeedsText(IReadOnlyList<RecruitmentPostSnapshot> posts)
+    {
+        if (posts.Count == 0)
+            return string.Empty;
+
+        var positions = posts
+            .Select(p => p.PositionNeeded)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(5)
+            .ToList();
+
+        var skillTags = posts
+            .Select(p => AiSkillProfile.FromJson(p.RequiredSkills))
+            .Where(p => p.HasTags)
+            .SelectMany(p => p.Tags)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(15)
+            .ToList();
+
+        var parts = new List<string>();
+        if (positions.Count > 0)
+            parts.Add("Position needed: " + string.Join(", ", positions));
+        if (skillTags.Count > 0)
+            parts.Add("Required skills: " + string.Join(", ", skillTags));
+        return string.Join(" | ", parts);
     }
 
     public async Task<AutoAssignTeamsResultDto> AutoAssignTeamsAsync(Guid currentUserId, AutoAssignTeamsRequest? request, CancellationToken ct)
@@ -1376,6 +1436,17 @@ public sealed class AiMatchingService(
         return string.Join("; ", parts.Where(part => !string.IsNullOrWhiteSpace(part)));
     }
 
+    private static string BuildSemanticQuery(AiSkillProfile primary, AiSkillProfile secondary)
+    {
+        var primaryText = BuildSemanticQuery(primary);
+        var secondaryText = BuildSemanticQuery(secondary);
+        if (string.IsNullOrWhiteSpace(primaryText))
+            return secondaryText;
+        if (string.IsNullOrWhiteSpace(secondaryText))
+            return primaryText;
+        return primaryText + "; " + secondaryText;
+    }
+
     private static string BuildStudentQueryText(StudentProfileSnapshot student, AiSkillProfile profile, Guid? targetMajorId)
     {
         var builder = new StringBuilder();
@@ -1396,6 +1467,38 @@ public sealed class AiMatchingService(
             builder.Append(" | Primary need: ").Append(AiRoleHelper.ToDisplayString(profile.PrimaryRole));
         if (profile.HasTags)
             builder.Append(" | Skills: ").Append(string.Join(", ", profile.Tags.Take(15)));
+
+        if (mix is not null)
+        {
+            builder.Append(" | Current mix: ")
+                .Append($"FE {mix.FrontendCount}, BE {mix.BackendCount}, Other {mix.OtherCount}");
+        }
+
+        return builder.ToString();
+    }
+
+    private static string BuildGroupQueryText(
+        string groupName,
+        AiSkillProfile needsProfile,
+        AiSkillProfile groupProfile,
+        IReadOnlyList<RecruitmentPostSnapshot> recruitmentPosts,
+        GroupRoleMixSnapshot? mix)
+    {
+        var builder = new StringBuilder();
+        builder.Append(groupName);
+
+        if (recruitmentPosts.Count > 0)
+        {
+            if (needsProfile.PrimaryRole != AiPrimaryRole.Unknown)
+                builder.Append(" | Hiring need: ").Append(AiRoleHelper.ToDisplayString(needsProfile.PrimaryRole));
+            if (needsProfile.HasTags)
+                builder.Append(" | Required skills: ").Append(string.Join(", ", needsProfile.Tags.Take(15)));
+        }
+
+        if (groupProfile.PrimaryRole != AiPrimaryRole.Unknown)
+            builder.Append(" | Team role: ").Append(AiRoleHelper.ToDisplayString(groupProfile.PrimaryRole));
+        if (groupProfile.HasTags)
+            builder.Append(" | Team skills: ").Append(string.Join(", ", groupProfile.Tags.Take(15)));
 
         if (mix is not null)
         {
@@ -1524,7 +1627,9 @@ public sealed class AiMatchingService(
         string groupName,
         int openSlots,
         GroupRoleMixSnapshot mix,
-        AiSkillProfile profile)
+        AiSkillProfile profile,
+        AiSkillProfile needsProfile,
+        string? needsText)
     {
         var primaryNeed = InferPrimaryNeedFromMix(mix);
         var prefer = string.IsNullOrWhiteSpace(primaryNeed) ? Array.Empty<string>() : new[] { primaryNeed };
@@ -1532,6 +1637,16 @@ public sealed class AiMatchingService(
         var payload = new
         {
             name = groupName,
+            requirements = string.IsNullOrWhiteSpace(needsText)
+                ? null
+                : new
+                {
+                    text = needsText,
+                    requiredSkills = needsProfile.Tags.Take(15).ToList(),
+                    requiredRole = needsProfile.PrimaryRole == AiPrimaryRole.Unknown
+                        ? null
+                        : AiRoleHelper.ToDisplayString(needsProfile.PrimaryRole)
+                },
             primaryNeed,
             openSlots,
             mix = new
@@ -2203,6 +2318,7 @@ public sealed class AiMatchingService(
 
     private static ProfilePostSuggestionDto? BuildProfilePostSuggestion(
         ProfilePostSnapshot post,
+        AiSkillProfile needsProfile,
         AiSkillProfile groupProfile,
         GroupRoleMixSnapshot mix)
     {
@@ -2210,7 +2326,14 @@ public sealed class AiMatchingService(
         if (!candidateProfile.HasTags && !string.IsNullOrWhiteSpace(post.SkillsText))
             candidateProfile = AiSkillProfile.FromText(post.SkillsText);
 
-        var matchingSkills = candidateProfile.FindMatches(groupProfile).ToList();
+        var primaryProfile = needsProfile.HasTags || needsProfile.PrimaryRole != AiPrimaryRole.Unknown
+            ? needsProfile
+            : groupProfile;
+
+        var matchingSkills = candidateProfile.FindMatches(primaryProfile).ToList();
+        if (matchingSkills.Count == 0 && primaryProfile != groupProfile)
+            matchingSkills = candidateProfile.FindMatches(groupProfile).ToList();
+
         if (matchingSkills.Count == 0 && candidateProfile.HasTags)
         {
             matchingSkills = candidateProfile.Tags
