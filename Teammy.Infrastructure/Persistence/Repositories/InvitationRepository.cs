@@ -42,12 +42,12 @@ public sealed class InvitationRepository(AppDbContext db) : IInvitationRepositor
         await db.SaveChangesAsync(ct);
     }
 
-    public async Task ExpirePendingAsync(DateTime utcNow, CancellationToken ct)
+    public async Task<IReadOnlyList<(Guid InvitationId, Guid GroupId, Guid? TopicId)>> ExpirePendingAsync(DateTime utcNow, CancellationToken ct)
     {
         var expired = await db.invitations
             .Where(i => i.status == "pending" && i.expires_at.HasValue && i.expires_at <= utcNow)
             .ToListAsync(ct);
-        if (expired.Count == 0) return;
+        if (expired.Count == 0) return Array.Empty<(Guid, Guid, Guid?)>();
 
         foreach (var inv in expired)
         {
@@ -56,6 +56,7 @@ public sealed class InvitationRepository(AppDbContext db) : IInvitationRepositor
         }
 
         await db.SaveChangesAsync(ct);
+        return expired.Select(i => (i.invitation_id, i.group_id, (Guid?)i.topic_id)).ToList();
     }
 
     public async Task ResetPendingAsync(Guid invitationId, DateTime newCreatedAt, DateTime expiresAt, CancellationToken ct)
@@ -82,5 +83,23 @@ public sealed class InvitationRepository(AppDbContext db) : IInvitationRepositor
         }
         await db.SaveChangesAsync(ct);
         return items.Count;
+    }
+
+    public async Task<IReadOnlyList<(Guid InvitationId, Guid InviteeUserId, Guid GroupId, Guid InvitedBy)>> RejectPendingMentorInvitesForTopicAsync(Guid topicId, Guid exceptInvitationId, CancellationToken ct)
+    {
+        var items = await db.invitations
+            .Where(i => i.topic_id == topicId && i.invitation_id != exceptInvitationId && i.status == "pending")
+            .ToListAsync(ct);
+        if (items.Count == 0) return Array.Empty<(Guid, Guid, Guid, Guid)>();
+        var now = DateTime.UtcNow;
+        foreach (var inv in items)
+        {
+            inv.status = "rejected";
+            inv.responded_at = now;
+        }
+        await db.SaveChangesAsync(ct);
+        return items
+            .Select(i => (i.invitation_id, i.invitee_user_id, i.group_id, i.invited_by))
+            .ToList();
     }
 }

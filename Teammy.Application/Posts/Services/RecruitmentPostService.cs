@@ -1,5 +1,6 @@
-using Teammy.Application.Common.Interfaces;
 using System.Text.Json;
+using Teammy.Application.Common.Interfaces;
+using Teammy.Application.Invitations.Dtos;
 using Teammy.Application.Posts.Dtos;
 using Teammy.Application.Posts.Templates;
 
@@ -12,12 +13,14 @@ public sealed class RecruitmentPostService(
     IGroupRepository groupRepo,
     IEmailSender emailSender,
     IUserReadOnlyQueries userQueries,
-    IAppUrlProvider urlProvider)
+    IAppUrlProvider urlProvider,
+    IInvitationNotifier invitationNotifier)
 {
     private const string AppName = "TEAMMY";
     private readonly IEmailSender _emailSender = emailSender;
     private readonly IUserReadOnlyQueries _userQueries = userQueries;
     private readonly IAppUrlProvider _urlProvider = urlProvider;
+    private readonly IInvitationNotifier _invitationNotifier = invitationNotifier;
 
     public async Task<Guid> CreateAsync(Guid currentUserId, CreateRecruitmentPostRequest req, CancellationToken ct)
     {
@@ -28,8 +31,8 @@ public sealed class RecruitmentPostService(
         var detail = await groupQueries.GetGroupAsync(req.GroupId, ct) ?? throw new KeyNotFoundException("Group not found");
         var isLeader = await groupQueries.IsLeaderAsync(req.GroupId, currentUserId, ct);
         if (!isLeader) throw new UnauthorizedAccessException("Leader only");
-        if (string.Equals(detail.Status, "active", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Active group cannot create recruitment posts");
+        if (string.Equals(detail.Status, "closed", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Closed group cannot create recruitment posts");
 
         var semesterId = detail.SemesterId;
         var targetMajorId = req.MajorId ?? detail.MajorId;
@@ -86,6 +89,8 @@ public sealed class RecruitmentPostService(
         return items.Where(x => x.GroupId != null).ToList();
     }
 
+    private const string RecruitmentApplicationType = "recruitment_post_application";
+
     public async Task ApplyAsync(Guid postId, Guid userId, string? message, CancellationToken ct)
     {
         var owner = await queries.GetPostOwnerAsync(postId, ct);
@@ -105,10 +110,14 @@ public sealed class RecruitmentPostService(
                 throw new InvalidOperationException($"Already accepted!!!");
             await repo.ReactivateApplicationAsync(appId, message, ct);
             await NotifyLeadersAboutApplicationAsync(postId, owner.GroupId.Value, userId, message, ct);
+            await BroadcastRecruitmentApplicationAsync(owner.GroupId.Value, userId, appId, ct);
+            await _invitationNotifier.NotifyGroupPendingAsync(owner.GroupId.Value, ct);
             return;
         }
-        await repo.CreateApplicationAsync(postId, userId, null, userId, message, ct);
+        var candidateId = await repo.CreateApplicationAsync(postId, userId, null, userId, message, ct);
         await NotifyLeadersAboutApplicationAsync(postId, owner.GroupId.Value, userId, message, ct);
+        await BroadcastRecruitmentApplicationAsync(owner.GroupId.Value, userId, candidateId, ct);
+        await _invitationNotifier.NotifyGroupPendingAsync(owner.GroupId.Value, ct);
     }
 
     public Task<IReadOnlyList<ApplicationDto>> ListApplicationsAsync(Guid postId, Guid currentUserId, CancellationToken ct)
@@ -141,10 +150,11 @@ public sealed class RecruitmentPostService(
             app.ApplicantUserId.Value,
             app.ApplicantEmail,
             app.ApplicantDisplayName,
-            owner.GroupId.Value,
+            owner.GroupId!.Value,
             postId,
             "accepted",
             ct);
+        await _invitationNotifier.NotifyGroupPendingAsync(owner.GroupId.Value, ct);
     }
 
     public async Task RejectAsync(Guid postId, Guid appId, Guid currentUserId, CancellationToken ct)
@@ -162,6 +172,7 @@ public sealed class RecruitmentPostService(
             postId,
             "rejected",
             ct);
+        await _invitationNotifier.NotifyGroupPendingAsync(owner.GroupId!.Value, ct);
     }
 
     public async Task WithdrawAsync(Guid postId, Guid appId, Guid currentUserId, CancellationToken ct)
@@ -319,6 +330,34 @@ public sealed class RecruitmentPostService(
             html,
             ct,
             fromDisplayName: groupName);
+    }
+
+    private async Task BroadcastRecruitmentApplicationAsync(Guid groupId, Guid applicantUserId, Guid applicationId, CancellationToken ct)
+    {
+        var leaders = await groupQueries.ListActiveMembersAsync(groupId, ct);
+        var leaderIds = leaders
+            .Where(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase))
+            .Select(m => m.UserId)
+            .ToList();
+        if (leaderIds.Count == 0) return;
+
+        var group = await groupQueries.GetGroupAsync(groupId, ct);
+        var groupName = group?.Name;
+        var dto = new InvitationRealtimeDto(
+            applicationId,
+            groupId,
+            groupName,
+            RecruitmentApplicationType,
+            "pending",
+            DateTime.UtcNow,
+            applicantUserId,
+            null,
+            null);
+
+        foreach (var leaderId in leaderIds)
+        {
+            await _invitationNotifier.NotifyInvitationCreatedAsync(leaderId, dto, ct);
+        }
     }
 
     private static string? SerializeSkills(List<string>? skills)

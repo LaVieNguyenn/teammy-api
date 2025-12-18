@@ -11,7 +11,8 @@ public sealed record InvitationListItemDto(
     Guid   GroupId,
     string? GroupName,
     Guid?  TopicId,
-    string? TopicTitle
+    string? TopicTitle,
+    string? Message
 );
 
 public sealed record InvitationDetailDto(
@@ -28,7 +29,8 @@ public sealed record InvitationDetailDto(
     string? GroupName,
     string? InviteeEmail,
     Guid?  TopicId,
-    string? TopicTitle
+    string? TopicTitle,
+    string? Message
 );
 
 public sealed record InvitationRealtimeDto(

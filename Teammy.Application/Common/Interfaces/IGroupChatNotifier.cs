@@ -6,4 +6,5 @@ public interface IGroupChatNotifier
 {
     Task NotifyMessageAsync(Guid groupId, ChatMessageDto message, CancellationToken ct);
     Task NotifySessionAsync(Guid sessionId, ChatMessageDto message, CancellationToken ct);
+    Task NotifyMessageUpdatedAsync(Guid? groupId, Guid sessionId, ChatMessageDto message, CancellationToken ct);
 }

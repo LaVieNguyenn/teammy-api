@@ -42,4 +42,30 @@ public sealed class ChatSessionsController(ChatSessionMessageService service) : 
         catch (ArgumentException ex) { return BadRequest(ex.Message); }
         catch (KeyNotFoundException) { return NotFound(); }
     }
+
+    [HttpPost("{sessionId:guid}/messages/{messageId:guid}/pin")]
+    public async Task<ActionResult> PinMessage(Guid sessionId, Guid messageId, [FromBody] PinChatMessageRequest request, CancellationToken ct)
+    {
+        try
+        {
+            var dto = await service.SetPinAsync(sessionId, messageId, GetUserId(), request?.Pin ?? true, ct);
+            return Ok(dto);
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    [HttpDelete("{sessionId:guid}/messages/{messageId:guid}")]
+    public async Task<ActionResult> DeleteMessage(Guid sessionId, Guid messageId, CancellationToken ct)
+    {
+        try
+        {
+            var dto = await service.DeleteMessageAsync(sessionId, messageId, GetUserId(), ct);
+            return Ok(dto);
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
 }

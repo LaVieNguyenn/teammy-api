@@ -87,6 +87,58 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 })
                 .ToListAsync(ct);
 
+            var topicIds = rows.Select(r => r.topic_id).Distinct().ToList();
+            var acceptedGroupMap = await _db.groups.AsNoTracking()
+                .Where(g => g.topic_id.HasValue && topicIds.Contains(g.topic_id.Value))
+                .Select(g => new
+                {
+                    g.topic_id,
+                    g.group_id,
+                    g.name
+                })
+                .ToListAsync(ct);
+            var pendingInviteMap = await (
+                    from inv in _db.invitations.AsNoTracking()
+                    join g in _db.groups.AsNoTracking() on inv.group_id equals g.group_id
+                    where inv.topic_id.HasValue
+                          && topicIds.Contains(inv.topic_id.Value)
+                          && inv.status == "pending"
+                    select new
+                    {
+                        inv.topic_id,
+                        g.group_id,
+                        g.name,
+                        Status = "Pending mentor invitation!!!"
+                    })
+                .ToListAsync(ct);
+
+            Dictionary<Guid, List<TopicGroupUsageDto>> BuildGroupDict(IEnumerable<dynamic> source)
+                => source
+                    .GroupBy(x => (Guid)x.topic_id!)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.Select(x => new TopicGroupUsageDto((Guid)x.group_id, (string)x.name, (string)x.Status)).ToList());
+
+            IReadOnlyDictionary<Guid, List<TopicGroupUsageDto>> acceptedByTopic =
+                BuildGroupDict(acceptedGroupMap.Select(x => new { topic_id = x.topic_id, group_id = x.group_id, name = x.name, Status = "accepted" }));
+            IReadOnlyDictionary<Guid, List<TopicGroupUsageDto>> pendingByTopic =
+                BuildGroupDict(pendingInviteMap.Select(x => new { topic_id = x.topic_id, group_id = x.group_id, name = x.name, Status = x.Status }));
+            IReadOnlyDictionary<Guid, List<TopicGroupUsageDto>> rejectedByTopic =
+                BuildGroupDict(await (
+                        from inv in _db.invitations.AsNoTracking()
+                        join g in _db.groups.AsNoTracking() on inv.group_id equals g.group_id
+                        where inv.topic_id.HasValue
+                              && topicIds.Contains(inv.topic_id.Value)
+                              && inv.status == "rejected"
+                        select new
+                        {
+                            inv.topic_id,
+                            g.group_id,
+                            g.name,
+                            Status = "rejected"
+                        })
+                    .ToListAsync(ct));
+
             return rows
                 .Select(r => new TopicListItemDto(
                     r.topic_id,
@@ -104,6 +156,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                     r.CreatedByName,
                     r.CreatedByEmail,
                     r.Mentors,
+                    CombineGroups(r.topic_id, acceptedByTopic, pendingByTopic, rejectedByTopic),
                     ParseSkills(r.skills),
                     r.created_at))
                 .ToList();
@@ -151,6 +204,27 @@ namespace Teammy.Infrastructure.Persistence.Repositories
             if (row is null)
                 return null;
 
+            var acceptedGroups = await _db.groups.AsNoTracking()
+                .Where(g => g.topic_id == topicId)
+                .Select(g => new TopicGroupUsageDto(g.group_id, g.name, "accepted"))
+                .ToListAsync(ct);
+            var pendingGroups = await (
+                    from inv in _db.invitations.AsNoTracking()
+                    join g in _db.groups.AsNoTracking() on inv.group_id equals g.group_id
+                    where inv.topic_id == topicId && inv.status == "pending"
+                    select new TopicGroupUsageDto(g.group_id, g.name, "pending_invitation"))
+                .ToListAsync(ct);
+            var rejectedGroups = await (
+                    from inv in _db.invitations.AsNoTracking()
+                    join g in _db.groups.AsNoTracking() on inv.group_id equals g.group_id
+                    where inv.topic_id == topicId && inv.status == "rejected"
+                    select new TopicGroupUsageDto(g.group_id, g.name, "rejected"))
+                .ToListAsync(ct);
+            var combinedGroups = acceptedGroups
+                .Concat(pendingGroups)
+                .Concat(rejectedGroups)
+                .ToList();
+
             return new TopicDetailDto(
                 row.topic_id,
                 row.semester_id,
@@ -167,8 +241,25 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 row.CreatedByName,
                 row.CreatedByEmail,
                 row.Mentors,
+                combinedGroups,
                 ParseSkills(row.skills),
                 row.created_at);
+        }
+
+        private static IReadOnlyList<TopicGroupUsageDto> CombineGroups(
+            Guid topicId,
+            IReadOnlyDictionary<Guid, List<TopicGroupUsageDto>> accepted,
+            IReadOnlyDictionary<Guid, List<TopicGroupUsageDto>> pending,
+            IReadOnlyDictionary<Guid, List<TopicGroupUsageDto>> rejected)
+        {
+            var list = new List<TopicGroupUsageDto>();
+            if (accepted.TryGetValue(topicId, out var acc))
+                list.AddRange(acc);
+            if (pending.TryGetValue(topicId, out var pend))
+                list.AddRange(pend);
+            if (rejected.TryGetValue(topicId, out var rej))
+                list.AddRange(rej);
+            return list;
         }
 
         public async Task<Guid?> FindSemesterIdByCodeAsync(string semesterCode, CancellationToken ct)

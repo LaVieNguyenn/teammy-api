@@ -223,6 +223,20 @@ public sealed class GroupsController : ControllerBase
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (KeyNotFoundException) { return NotFound(); }
     }
+
+    [HttpPost("{id:guid}/activate")]
+    [Authorize]
+    public async Task<ActionResult> Activate([FromRoute] Guid id, CancellationToken ct)
+    {
+        try
+        {
+            await _service.ConfirmActiveAsync(id, GetUserId(), ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
     [HttpPatch("{id:guid}")]
     [Authorize]
     public async Task<ActionResult> Update([FromRoute] Guid id, [FromBody] UpdateGroupRequestBody body, CancellationToken ct)

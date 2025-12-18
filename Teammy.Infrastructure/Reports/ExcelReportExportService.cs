@@ -76,6 +76,7 @@ public sealed class ExcelReportExportService(
                      (p.Group?.SemesterId == request.SemesterId.Value ||
                       p.Semester?.SemesterId == request.SemesterId.Value ||
                       p.SemesterId == request.SemesterId.Value)))
+                .Where(p => MatchesDate(p.CreatedAt, request))
                 .ToList();
 
             WriteRecruitmentSheet(workbook, filteredPosts);
@@ -86,7 +87,9 @@ public sealed class ExcelReportExportService(
             var logRequest = new ActivityLogListRequest
             {
                 GroupId = request.GroupId,
-                Limit = Math.Min(request.ActivityLogLimit, 200)
+                Limit = Math.Min(request.ActivityLogLimit, 200),
+                StartUtc = request.StartDateUtc,
+                EndUtc = request.EndDateUtc
             };
             var logs = await _activityLogRepository.ListAsync(logRequest, ct);
             WriteActivityLogSheet(workbook, logs);
@@ -197,6 +200,15 @@ public sealed class ExcelReportExportService(
         }
 
         ws.Columns().AdjustToContents();
+    }
+
+    private static bool MatchesDate(DateTime timestamp, ReportRequest request)
+    {
+        if (request.StartDateUtc.HasValue && timestamp < request.StartDateUtc.Value)
+            return false;
+        if (request.EndDateUtc.HasValue && timestamp >= request.EndDateUtc.Value)
+            return false;
+        return true;
     }
 
     private static void WriteActivityLogSheet(XLWorkbook workbook, IReadOnlyList<ActivityLogDto> logs)

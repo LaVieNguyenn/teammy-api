@@ -12,4 +12,7 @@ public interface IInvitationReadOnlyQueries
 
     // Check if any invitation exists for (groupId, invitee) and return id + status
     Task<(Guid InvitationId, string Status, Guid? TopicId)?> FindAnyAsync(Guid groupId, Guid inviteeUserId, CancellationToken ct);
+
+    // Check if group already has a pending mentor invite (topic)
+    Task<Guid?> GetPendingMentorTopicAsync(Guid groupId, CancellationToken ct);
 }
