@@ -56,6 +56,43 @@ public sealed class ProfilePostService(
     public Task<IReadOnlyList<ProfilePostSummaryDto>> ListAsync(string? skills, Guid? majorId, string? status, ExpandOptions expand, Guid? currentUserId, CancellationToken ct)
         => queries.ListProfilePostsAsync(skills, majorId, status, expand, currentUserId, ct);
 
+    public async Task UpdateAsync(Guid profilePostId, Guid currentUserId, UpdateProfilePostRequest req, CancellationToken ct)
+    {
+        var owner = await queries.GetPostOwnerAsync(profilePostId, ct);
+        if (owner == default)
+            throw new KeyNotFoundException("Profile post not found");
+        if (owner.OwnerUserId is null || owner.OwnerUserId.Value != currentUserId)
+            throw new UnauthorizedAccessException("Not your profile post");
+
+        string? status = null;
+        if (!string.IsNullOrWhiteSpace(req.Status))
+        {
+            var normalized = req.Status.Trim().ToLowerInvariant();
+            if (normalized is not ("open" or "closed" or "expired"))
+                throw new InvalidOperationException("Invalid status");
+            status = normalized;
+        }
+
+        await repo.UpdatePostAsync(
+            profilePostId,
+            req.Title,
+            req.Description,
+            req.Skills,
+            status,
+            requiredSkillsJson: null,
+            ct);
+    }
+
+    public async Task DeleteAsync(Guid profilePostId, Guid currentUserId, CancellationToken ct)
+    {
+        var owner = await queries.GetPostOwnerAsync(profilePostId, ct);
+        if (owner == default)
+            throw new KeyNotFoundException("Profile post not found");
+        if (owner.OwnerUserId is null || owner.OwnerUserId.Value != currentUserId)
+            throw new UnauthorizedAccessException("Not your profile post");
+        await repo.DeletePostAsync(profilePostId, ct);
+    }
+
    public async Task InviteAsync(Guid profilePostId, Guid currentUserId, CancellationToken ct)
     {
         var owner = await queries.GetPostOwnerAsync(profilePostId, ct);

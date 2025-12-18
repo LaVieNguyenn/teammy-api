@@ -162,7 +162,7 @@ public sealed class AiMatchingController : ControllerBase
             title = detail.Title,
             description = detail.Description,
             position_needed = detail.PositionNeeded,
-            skills = detail.Skills,
+            skills = detail.RequiredSkills,
             createdAt = detail.CreatedAt,
             applicationDeadline = detail.ApplicationDeadline,
             currentMembers = detail.CurrentMembers,

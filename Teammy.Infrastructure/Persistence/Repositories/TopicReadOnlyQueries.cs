@@ -108,7 +108,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                         inv.topic_id,
                         g.group_id,
                         g.name,
-                        Status = "Pending mentor invitation!!!"
+                        Status = "pending_invitation"
                     })
                 .ToListAsync(ct);
 
@@ -268,8 +268,6 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 return null;
 
             var code = semesterCode.Trim().ToUpperInvariant();
-
-            // Tách phần chữ (season) + phần số (year) từ ví dụ "FALL24"
             var seasonPart = new string(code.TakeWhile(c => !char.IsDigit(c)).ToArray());
             var yearPart   = new string(code.Skip(seasonPart.Length).ToArray());
 
@@ -286,8 +284,6 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                     .Select(s => (Guid?)s.semester_id)
                     .FirstOrDefaultAsync(ct);
             }
-
-            // fallback: code chỉ là season (FALL / SPRING / SUMMER)
             var seasonOnly = code.ToLowerInvariant();
             return await _db.semesters
                 .AsNoTracking()

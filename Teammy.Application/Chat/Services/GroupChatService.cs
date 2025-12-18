@@ -11,7 +11,7 @@ public sealed class GroupChatService(IChatRepository chatRepository, IGroupReadO
 
     public async Task<IReadOnlyList<ChatMessageDto>> ListMessagesAsync(Guid groupId, Guid currentUserId, int limit, int offset, CancellationToken ct)
     {
-        if (!await _groupQueries.IsActiveMemberAsync(groupId, currentUserId, ct))
+        if (!await IsMemberOrMentorAsync(groupId, currentUserId, ct))
             throw new UnauthorizedAccessException("Members only");
 
         var sessionId = await EnsureSessionAndSyncMembersAsync(groupId, ct);
@@ -25,7 +25,7 @@ public sealed class GroupChatService(IChatRepository chatRepository, IGroupReadO
         if (string.IsNullOrWhiteSpace(request.Content))
             throw new ArgumentException("Content is required");
 
-        if (!await _groupQueries.IsActiveMemberAsync(groupId, currentUserId, ct))
+        if (!await IsMemberOrMentorAsync(groupId, currentUserId, ct))
             throw new UnauthorizedAccessException("Members only");
 
         var sessionId = await EnsureSessionAndSyncMembersAsync(groupId, ct);
@@ -38,7 +38,16 @@ public sealed class GroupChatService(IChatRepository chatRepository, IGroupReadO
     {
         var sessionId = await _chatRepository.EnsureGroupSessionAsync(groupId, ct);
         var (_, activeCount) = await _groupQueries.GetGroupCapacityAsync(groupId, ct);
-        await _chatRepository.UpdateMembersCountAsync(sessionId, activeCount, ct);
+        var hasMentor = await _groupQueries.GetMentorAsync(groupId, ct) is not null;
+        await _chatRepository.UpdateMembersCountAsync(sessionId, hasMentor ? activeCount + 1 : activeCount, ct);
         return sessionId;
+    }
+
+    private async Task<bool> IsMemberOrMentorAsync(Guid groupId, Guid userId, CancellationToken ct)
+    {
+        if (await _groupQueries.IsActiveMemberAsync(groupId, userId, ct))
+            return true;
+        var mentor = await _groupQueries.GetMentorAsync(groupId, ct);
+        return mentor is not null && mentor.UserId == userId;
     }
 }

@@ -26,6 +26,7 @@ public sealed class GroupService(
     private readonly IEmailSender _emailSender = emailSender;
     private readonly ISemesterReadOnlyQueries _semesterQueries = semesterQueries;
     private readonly Dictionary<Guid, SemesterPolicyDto?> _semesterPolicyCache = new();
+    private readonly Dictionary<Guid, SemesterDetailDto?> _semesterDetailCache = new();
 
     public async Task<Guid> CreateGroupAsync(Guid creatorUserId, CreateGroupRequest req, CancellationToken ct)
     {
@@ -69,16 +70,28 @@ public sealed class GroupService(
     public async Task<IReadOnlyList<GroupSummaryDto>> ListGroupsAsync(string? status, Guid? majorId, Guid? topicId, CancellationToken ct)
     {
         var list = await queries.ListGroupsAsync(status, majorId, topicId, ct);
-        var activated = await AutoActivateEligibleGroupsAsync(
-            list.Select(x => new ActivationSnapshot(
+        var snapshots = list.Select(x => new ActivationSnapshot(
+            x.Id,
+            x.Semester.SemesterId,
+            x.Status,
+            x.Topic is not null,
+            x.Mentor is not null,
+            x.CurrentMembers,
+            x.MaxMembers)).ToList();
+        var closed = await AutoCloseExpiredGroupsAsync(snapshots, ct);
+        if (closed)
+        {
+            list = await queries.ListGroupsAsync(status, majorId, topicId, ct);
+            snapshots = list.Select(x => new ActivationSnapshot(
                 x.Id,
                 x.Semester.SemesterId,
                 x.Status,
                 x.Topic is not null,
                 x.Mentor is not null,
                 x.CurrentMembers,
-                x.MaxMembers)),
-            ct);
+                x.MaxMembers)).ToList();
+        }
+        var activated = await AutoActivateEligibleGroupsAsync(snapshots, ct);
         if (activated)
             list = await queries.ListGroupsAsync(status, majorId, topicId, ct);
         return list;
@@ -88,6 +101,20 @@ public sealed class GroupService(
     {
         var detail = await queries.GetGroupAsync(id, ct);
         if (detail is null) return null;
+        var closeSnapshot = new ActivationSnapshot(
+            detail.Id,
+            detail.SemesterId,
+            detail.Status,
+            detail.TopicId.HasValue,
+            false,
+            detail.CurrentMembers,
+            detail.MaxMembers);
+        var closed = await MaybeAutoCloseGroupAsync(closeSnapshot, ct);
+        if (closed)
+        {
+            detail = await queries.GetGroupAsync(id, ct);
+            if (detail is null) return null;
+        }
         var mentor = await queries.GetMentorAsync(id, ct);
         var activated = await AutoActivateGroupAsync(
             new ActivationSnapshot(
@@ -113,6 +140,12 @@ public sealed class GroupService(
         var isLeader = await queries.IsLeaderAsync(groupId, userId, ct);
         if (isLeader)
         {
+            if (detail.TopicId.HasValue)
+            {
+                var confirmedMentor = await queries.GetMentorAsync(groupId, ct);
+                if (confirmedMentor is not null)
+                    throw new InvalidOperationException("Leader cannot leave after mentor confirmation. Transfer leadership first.");
+            }
             var (_, activeCount) = await queries.GetGroupCapacityAsync(groupId, ct);
             if (activeCount > 1)
                 throw new InvalidOperationException("Change Leaderfirst");
@@ -403,6 +436,17 @@ public sealed class GroupService(
         return activatedAny;
     }
 
+    private async Task<bool> AutoCloseExpiredGroupsAsync(IEnumerable<ActivationSnapshot> snapshots, CancellationToken ct)
+    {
+        var closedAny = false;
+        foreach (var s in snapshots)
+        {
+            if (await MaybeAutoCloseGroupAsync(s, ct))
+                closedAny = true;
+        }
+        return closedAny;
+    }
+
     private async Task<bool> AutoActivateGroupAsync(ActivationSnapshot snapshot, CancellationToken ct)
     {
         if (!string.Equals(snapshot.Status, "recruiting", StringComparison.OrdinalIgnoreCase))
@@ -451,6 +495,41 @@ public sealed class GroupService(
         var policy = await _semesterQueries.GetPolicyAsync(semesterId, ct);
         _semesterPolicyCache[semesterId] = policy;
         return policy;
+    }
+
+    private async Task<SemesterDetailDto?> GetSemesterDetailAsync(Guid semesterId, CancellationToken ct)
+    {
+        if (_semesterDetailCache.TryGetValue(semesterId, out var cached))
+            return cached;
+        var detail = await _semesterQueries.GetByIdAsync(semesterId, ct);
+        _semesterDetailCache[semesterId] = detail;
+        return detail;
+    }
+
+    private async Task<bool> MaybeAutoCloseGroupAsync(ActivationSnapshot snapshot, CancellationToken ct)
+    {
+        if (string.Equals(snapshot.Status, "closed", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var semester = await GetSemesterDetailAsync(snapshot.SemesterId, ct);
+        if (semester is null)
+            return false;
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        if (today <= semester.EndDate)
+            return false;
+
+        await repo.CloseGroupAsync(snapshot.GroupId, ct);
+        var actorId = await TryResolveDefaultActorAsync(snapshot.GroupId, ct);
+        if (actorId.HasValue)
+        {
+            await LogAsync(new ActivityLogCreateRequest(actorId.Value, "group", "GROUP_AUTO_CLOSED")
+            {
+                GroupId = snapshot.GroupId,
+                EntityId = snapshot.GroupId,
+                Message = "Group automatically closed after semester ended",
+                Metadata = new { reason = "semester_end" }
+            }, ct);
+        }
+        return true;
     }
 
     private async Task<Guid?> TryResolveDefaultActorAsync(Guid groupId, CancellationToken ct)

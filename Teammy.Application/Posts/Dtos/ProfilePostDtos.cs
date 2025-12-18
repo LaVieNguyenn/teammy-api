@@ -8,6 +8,14 @@ public sealed class CreateProfilePostRequest
     public Guid? MajorId { get; set; }
 }
 
+public sealed class UpdateProfilePostRequest
+{
+    public string? Title { get; set; }
+    public string? Description { get; set; }
+    public string? Skills { get; set; }
+    public string? Status { get; set; }
+}
+
 public sealed record ProfilePostUserDto(
     Guid   UserId,
     string Email,
