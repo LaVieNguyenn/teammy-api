@@ -151,25 +151,51 @@ public sealed class ChatRepository(AppDbContext db) : IChatRepository
 
     public async Task<IReadOnlyList<ConversationSummaryDto>> ListConversationsAsync(Guid userId, CancellationToken ct)
     {
-        var groupQuery =
-        from gm in db.group_members.AsNoTracking()
-        where gm.user_id == userId && (gm.status == "member" || gm.status == "leader")
-        join g in db.groups.AsNoTracking() on gm.group_id equals g.group_id
-        join s in db.chat_sessions.AsNoTracking() on g.group_id equals s.group_id
-        select new
-        {
-            SessionId = s.chat_session_id,
-            Type = "group",
-            GroupId = (Guid?)g.group_id,
-            GroupName = g.name,
-            PartnerId = (Guid?)null,
-            PartnerName = (string?)null,
-            PartnerAvatar = (string?)null,
-            s.last_message,
-            s.updated_at
-        };
+        var memberGroups =
+            from gm in db.group_members.AsNoTracking()
+            where gm.user_id == userId && (gm.status == "member" || gm.status == "leader")
+            join g in db.groups.AsNoTracking() on gm.group_id equals g.group_id
+            join s in db.chat_sessions.AsNoTracking() on g.group_id equals s.group_id
+            select new
+            {
+                SessionId = s.chat_session_id,
+                Type = "group",
+                GroupId = (Guid?)g.group_id,
+                GroupName = g.name,
+                PartnerId = (Guid?)null,
+                PartnerName = (string?)null,
+                PartnerAvatar = (string?)null,
+                s.last_message,
+                s.updated_at
+            };
 
-        var dmQuery =
+        var mentorGroups =
+            from g in db.groups.AsNoTracking()
+            where g.mentor_id == userId
+            join s in db.chat_sessions.AsNoTracking() on g.group_id equals s.group_id
+            select new
+            {
+                SessionId = s.chat_session_id,
+                Type = "group",
+                GroupId = (Guid?)g.group_id,
+                GroupName = g.name,
+                PartnerId = (Guid?)null,
+                PartnerName = (string?)null,
+                PartnerAvatar = (string?)null,
+                s.last_message,
+                s.updated_at
+            };
+
+        var groupRows = await memberGroups
+            .Concat(mentorGroups)
+            .ToListAsync(ct);
+
+        var distinctGroupRows = groupRows
+            .GroupBy(x => x.SessionId)
+            .Select(g => g.OrderByDescending(x => x.updated_at).First())
+            .ToList();
+
+        var dmRows = await (
             from s in db.chat_sessions.AsNoTracking()
             where s.type == "dm"
             join me in db.chat_session_participants.AsNoTracking() on s.chat_session_id equals me.chat_session_id
@@ -188,10 +214,11 @@ public sealed class ChatRepository(AppDbContext db) : IChatRepository
                 PartnerAvatar = u.avatar_url,
                 s.last_message,
                 s.updated_at
-            };
+            }
+        ).ToListAsync(ct);
 
-        var combined = await groupQuery
-            .Concat(dmQuery)
+        var combined = distinctGroupRows
+            .Concat(dmRows)
             .OrderByDescending(x => x.updated_at)
             .Select(x => new ConversationSummaryDto(
                 x.SessionId,
@@ -203,10 +230,9 @@ public sealed class ChatRepository(AppDbContext db) : IChatRepository
                 x.PartnerAvatar,
                 x.last_message,
                 x.updated_at))
-            .ToListAsync(ct);
+            .ToList();
 
         return combined;
-
     }
 
     public Task<(string Type, Guid? GroupId)?> GetSessionInfoAsync(Guid chatSessionId, CancellationToken ct)

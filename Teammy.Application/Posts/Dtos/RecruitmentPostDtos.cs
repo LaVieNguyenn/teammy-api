@@ -8,18 +8,12 @@ public sealed class CreateRecruitmentPostRequest
     public Guid GroupId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string? Description { get; set; }
-    public List<string>? Skills { get; set; }
+    [JsonPropertyName("required_skills")]
+    public List<string>? RequiredSkills { get; set; }
     public Guid? MajorId { get; set; }
     public DateTime? ExpiresAt { get; set; }
     [JsonPropertyName("position_needed")]
     public string? PositionNeeded { get; set; }
-
-    [JsonPropertyName("positionNeeded")]
-    public string? PositionNeededCamel
-    {
-        get => PositionNeeded;
-        set => PositionNeeded = value;
-    }
 }
 
 public sealed record RecruitmentPostSummaryDto(
@@ -37,7 +31,7 @@ public sealed record RecruitmentPostSummaryDto(
     string? MajorName,
     PostMajorDto? Major,
     string? PositionNeeded,
-    IReadOnlyList<string>? Skills,
+    [property: JsonPropertyName("required_skills")] IReadOnlyList<string>? RequiredSkills,
     int CurrentMembers,
     string? Description,
     DateTime CreatedAt,
@@ -64,7 +58,7 @@ public sealed record RecruitmentPostDetailDto(
     PostMajorDto? Major,
     string? Description,
     string? PositionNeeded,
-    IReadOnlyList<string>? Skills,
+    [property: JsonPropertyName("required_skills")] IReadOnlyList<string>? RequiredSkills,
     DateTime CreatedAt,
     int CurrentMembers,
     DateTime? ApplicationDeadline,
@@ -92,16 +86,10 @@ public sealed class UpdateRecruitmentPostRequest
     public string? Status { get; set; } // open | closed | full
     public string? Title { get; set; }
     public string? Description { get; set; }
-    public List<string>? Skills { get; set; }
+    [JsonPropertyName("required_skills")]
+    public List<string>? RequiredSkills { get; set; }
 
     [JsonPropertyName("position_needed")]
     public string? PositionNeeded { get; set; }
-
-    [JsonPropertyName("positionNeeded")]
-    public string? PositionNeededCamel
-    {
-        get => PositionNeeded;
-        set => PositionNeeded = value;
-    }
     
 }

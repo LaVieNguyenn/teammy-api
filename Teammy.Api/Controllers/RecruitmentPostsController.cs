@@ -123,7 +123,7 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
                 title = d.Title,
                 description = d.Description,
                 position_needed = d.PositionNeeded,
-                skills = d.Skills,
+                skills = d.RequiredSkills,
                 createdAt = d.CreatedAt,
                 applicationDeadline = d.ApplicationDeadline,
                 currentMembers = d.CurrentMembers,
@@ -194,7 +194,7 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
             title = d.Title,
             description = d.Description,
             position_needed = d.PositionNeeded,
-            skills = d.Skills,
+            skills = d.RequiredSkills,
             createdAt = d.CreatedAt,
             applicationDeadline = d.ApplicationDeadline,
             currentMembers = d.CurrentMembers,
@@ -250,7 +250,7 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
                 title = d.Title,
                 description = d.Description,
                 position_needed = d.PositionNeeded,
-                skills = d.Skills,
+                skills = d.RequiredSkills,
                 createdAt = d.CreatedAt,
                 applicationDeadline = d.ApplicationDeadline,
                 currentMembers = d.CurrentMembers,
@@ -360,7 +360,7 @@ public sealed class RecruitmentPostsController(RecruitmentPostService service, I
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
-    [HttpPatch("{id:guid}")]
+    [HttpPut("{id:guid}")]
     [Authorize]
     public async Task<ActionResult> UpdateRecruitmentPost([FromRoute] Guid id, [FromBody] UpdateRecruitmentPostRequest req, CancellationToken ct)
     {
