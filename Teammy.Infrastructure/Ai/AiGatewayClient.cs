@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json.Serialization;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -103,6 +104,32 @@ public sealed class AiGatewayClient
         return new AiGatewaySearchResponse(normalized);
     }
 
+    public async Task<AiGatewayProxyResult> GenerateGroupPostDraftAsync(AiGatewayGenerateGroupPostRequest req, CancellationToken ct)
+    {
+        if (req is null)
+            throw new ArgumentNullException(nameof(req));
+
+        using var request = CreateRequest(HttpMethod.Post, "llm/generate-post/group");
+        request.Content = JsonContent.Create(req);
+        using var response = await _httpClient.SendAsync(request, ct);
+        var body = response.Content is null ? null : await response.Content.ReadAsStringAsync(ct);
+
+        return new AiGatewayProxyResult(response.IsSuccessStatusCode, (int)response.StatusCode, body);
+    }
+
+    public async Task<AiGatewayProxyResult> GeneratePersonalPostDraftAsync(AiGatewayGeneratePersonalPostRequest req, CancellationToken ct)
+    {
+        if (req is null)
+            throw new ArgumentNullException(nameof(req));
+
+        using var request = CreateRequest(HttpMethod.Post, "llm/generate-post/personal");
+        request.Content = JsonContent.Create(req);
+        using var response = await _httpClient.SendAsync(request, ct);
+        var body = response.Content is null ? null : await response.Content.ReadAsStringAsync(ct);
+
+        return new AiGatewayProxyResult(response.IsSuccessStatusCode, (int)response.StatusCode, body);
+    }
+
     private HttpRequestMessage CreateRequest(HttpMethod method, string path)
     {
         var request = new HttpRequestMessage(method, path);
@@ -136,3 +163,47 @@ public sealed record AiGatewaySearchPayload(string type, string entityId, string
 public sealed record AiGatewaySearchHit(double score, AiGatewaySearchPayload payload);
 
 public sealed record AiGatewaySearchResponse(IReadOnlyList<AiGatewaySearchHit> result);
+
+public sealed record AiGatewayProxyResult(bool IsSuccess, int StatusCode, string? Body);
+
+// ============================================================================
+// DTOs for /llm/generate-post/* (passed-through to AiGateway)
+// ============================================================================
+
+public sealed record AiGatewayGenerateGroupPostRequest(
+    [property: JsonPropertyName("group")] AiGatewayGroupInfo Group,
+    [property: JsonPropertyName("project")] AiGatewayProjectInfo? Project,
+    [property: JsonPropertyName("options")] AiGatewayPostOptions? Options);
+
+public sealed record AiGatewayGeneratePersonalPostRequest(
+    [property: JsonPropertyName("user")] AiGatewayPersonalUser User,
+    [property: JsonPropertyName("options")] AiGatewayPostOptions? Options);
+
+public sealed record AiGatewayGroupInfo(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("primaryNeed")] string? PrimaryNeed,
+    [property: JsonPropertyName("currentMix")] AiGatewayMix? CurrentMix,
+    [property: JsonPropertyName("openSlots")] AiGatewayMix? OpenSlots,
+    [property: JsonPropertyName("teamTopSkills")] IReadOnlyList<string>? TeamTopSkills,
+    [property: JsonPropertyName("preferRoles")] IReadOnlyList<string>? PreferRoles,
+    [property: JsonPropertyName("avoidRoles")] IReadOnlyList<string>? AvoidRoles);
+
+public sealed record AiGatewayMix(
+    [property: JsonPropertyName("fe")] int Fe,
+    [property: JsonPropertyName("be")] int Be,
+    [property: JsonPropertyName("other")] int Other);
+
+public sealed record AiGatewayProjectInfo(
+    [property: JsonPropertyName("title")] string? Title,
+    [property: JsonPropertyName("summary")] string? Summary);
+
+public sealed record AiGatewayPersonalUser(
+    [property: JsonPropertyName("displayName")] string DisplayName,
+    [property: JsonPropertyName("skills")] IReadOnlyList<string>? Skills,
+    [property: JsonPropertyName("goal")] string? Goal,
+    [property: JsonPropertyName("availability")] string? Availability);
+
+public sealed record AiGatewayPostOptions(
+    [property: JsonPropertyName("language")] string? Language,
+    [property: JsonPropertyName("maxWords")] int? MaxWords,
+    [property: JsonPropertyName("tone")] string? Tone);
