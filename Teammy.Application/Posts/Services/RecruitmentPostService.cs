@@ -42,7 +42,7 @@ public sealed class RecruitmentPostService(
                      .ToUniversalTime();
         if (expiresAt <= DateTime.UtcNow)
             throw new ArgumentException("Expiration time must be in the future");
-        var requiredSkillsJson = SerializeSkills(req.Skills);
+        var requiredSkillsJson = SerializeSkills(req.RequiredSkills);
         var postId = await repo.CreateRecruitmentPostAsync(
             semesterId,
             postType: "group_hiring",
@@ -126,7 +126,7 @@ public sealed class RecruitmentPostService(
     public Task UpdateAsync(Guid postId, Guid currentUserId, UpdateRecruitmentPostRequest req, CancellationToken ct)
         => EnsureOwner(postId, currentUserId, ct, () =>
         {
-            var requiredSkillsJson = SerializeSkills(req.Skills);
+            var requiredSkillsJson = SerializeSkills(req.RequiredSkills);
             return repo.UpdatePostAsync(postId, req.Title, req.Description, req.PositionNeeded, req.Status, requiredSkillsJson, ct);
         });
 
@@ -267,7 +267,7 @@ public sealed class RecruitmentPostService(
             postTitle,
             postDetail?.Description,
             postDetail?.PositionNeeded,
-            postDetail?.Skills);
+            postDetail?.RequiredSkills);
 
         foreach (var leader in recipients)
         {
@@ -321,7 +321,7 @@ public sealed class RecruitmentPostService(
             postDetail?.Title ?? groupName,
             postDetail?.Description,
             postDetail?.PositionNeeded,
-            postDetail?.Skills,
+            postDetail?.RequiredSkills,
             actionUrl);
 
         await _emailSender.SendAsync(

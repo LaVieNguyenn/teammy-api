@@ -165,6 +165,33 @@ public sealed class ProfilePostsController(ProfilePostService service, IConfigur
         return Ok(items);
     }
 
+    [HttpPut("{id:guid}")]
+    [Authorize]
+    public async Task<ActionResult> Update([FromRoute] Guid id, [FromBody] UpdateProfilePostRequest req, CancellationToken ct)
+    {
+        try
+        {
+            await service.UpdateAsync(id, GetUserId(), req, ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    [HttpDelete("{id:guid}")]
+    [Authorize]
+    public async Task<ActionResult> Delete([FromRoute] Guid id, CancellationToken ct)
+    {
+        try
+        {
+            await service.DeleteAsync(id, GetUserId(), ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
     [HttpPost("{postId:guid}/invitations/{candidateId:guid}/accept")]
     [Authorize]
     public async Task<ActionResult> AcceptInvitation([FromRoute] Guid postId, [FromRoute] Guid candidateId, CancellationToken ct)

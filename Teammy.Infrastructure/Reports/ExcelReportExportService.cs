@@ -192,7 +192,7 @@ public sealed class ExcelReportExportService(
             ws.Cell(row, 6).Value = post.SemesterName ?? $"{post.Semester?.Season} {post.Semester?.Year}";
             ws.Cell(row, 7).Value = post.MajorName ?? post.Major?.MajorName ?? "-";
             ws.Cell(row, 8).Value = post.PositionNeeded ?? "-";
-            ws.Cell(row, 9).Value = post.Skills is null ? string.Empty : string.Join(", ", post.Skills);
+            ws.Cell(row, 9).Value = post.RequiredSkills is null ? string.Empty : string.Join(", ", post.RequiredSkills);
             ws.Cell(row, 10).Value = post.ApplicationsCount;
             ws.Cell(row, 11).Value = post.CreatedAt.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
             ws.Cell(row, 12).Value = post.ApplicationDeadline?.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
