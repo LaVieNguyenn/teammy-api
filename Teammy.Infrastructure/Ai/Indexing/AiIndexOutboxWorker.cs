@@ -67,6 +67,8 @@ public sealed class AiIndexOutboxWorker : BackgroundService
         if (items.Count == 0)
             return 0;
 
+        var hadFailures = false;
+
         foreach (var item in items)
         {
             ct.ThrowIfCancellationRequested();
@@ -86,6 +88,7 @@ public sealed class AiIndexOutboxWorker : BackgroundService
                 {
                     item.RetryCount++;
                     item.LastError = "Source not found";
+                    hadFailures = true;
                     continue;
                 }
 
@@ -97,11 +100,17 @@ public sealed class AiIndexOutboxWorker : BackgroundService
             {
                 item.RetryCount++;
                 item.LastError = ex.Message;
+                hadFailures = true;
                 _logger.LogWarning(ex, "Failed to process AI index outbox item {ItemId} (type={Type}, entity={Entity})", item.Id, item.Type, item.EntityId);
             }
         }
 
         await db.SaveChangesAsync(ct);
+
+        // If there were failures, avoid a tight retry loop that spams logs and hammers the DB/gateway.
+        if (hadFailures)
+            await Task.Delay(ErrorDelay, ct);
+
         return items.Count;
     }
 

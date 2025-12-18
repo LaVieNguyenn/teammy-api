@@ -104,10 +104,10 @@ public sealed class AiIndexSourceQueries : IAiIndexSourceQueries
                     post.major_id,
                     post.title,
                     post.description,
-                    OwnerDisplayName = owner != null ? owner.display_name ?? owner.email : null,
-                    SkillsJson = pool != null ? pool.skills : owner != null ? owner.skills : null,
+                    OwnerDisplayName = owner.display_name ?? owner.email,
+                    SkillsJson = pool.skills ?? owner.skills,
                     SkillsText = post.position_needed,
-                    PrimaryRole = pool != null ? pool.primary_role : null
+                    PrimaryRole = pool.primary_role
                 })
             .FirstOrDefaultAsync(ct);
 
