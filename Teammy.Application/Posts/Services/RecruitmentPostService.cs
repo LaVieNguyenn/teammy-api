@@ -127,7 +127,15 @@ public sealed class RecruitmentPostService(
         => EnsureOwner(postId, currentUserId, ct, () =>
         {
             var requiredSkillsJson = SerializeSkills(req.RequiredSkills);
-            return repo.UpdatePostAsync(postId, req.Title, req.Description, req.PositionNeeded, req.Status, requiredSkillsJson, ct);
+            DateTime? expiresAt = null;
+            if (req.ExpiresAt.HasValue)
+            {
+                var normalized = DateTime.SpecifyKind(req.ExpiresAt.Value, DateTimeKind.Local).ToUniversalTime();
+                if (normalized <= DateTime.UtcNow)
+                    throw new ArgumentException("Expiration time must be in the future");
+                expiresAt = normalized;
+            }
+            return repo.UpdatePostAsync(postId, req.Title, req.Description, req.PositionNeeded, req.Status, requiredSkillsJson, expiresAt, ct);
         });
 
     public Task DeleteAsync(Guid postId, Guid currentUserId, CancellationToken ct)
@@ -225,7 +233,7 @@ public sealed class RecruitmentPostService(
 
         if (owner.ApplicationDeadline.HasValue && owner.ApplicationDeadline.Value <= DateTime.UtcNow)
         {
-            await repo.UpdatePostAsync(postId, null, null, null, "expired", null, ct);
+            await repo.UpdatePostAsync(postId, null, null, null, "expired", null, null, ct);
             throw new InvalidOperationException("Recruitment post expired");
         }
     }

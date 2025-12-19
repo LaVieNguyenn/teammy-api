@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
-using System.Text.Json;
 using Teammy.Application.Activity.Dtos;
 using Teammy.Application.Activity.Services;
 using Teammy.Application.Common.Interfaces;
@@ -32,8 +31,8 @@ public sealed class GroupService(
     {
         if (string.IsNullOrWhiteSpace(req.Name))
             throw new ArgumentException("Name is required");
-        var semesterId = req.SemesterId ?? await queries.GetActiveSemesterIdAsync(ct)
-            ?? throw new InvalidOperationException("No active semester and no semesterId provided");
+        var semesterId = await queries.GetActiveSemesterIdAsync(ct)
+            ?? throw new InvalidOperationException("No active semester available");
 
         var (minSize, maxSize) = await queries.GetGroupSizePolicyAsync(semesterId, ct);
         if (req.MaxMembers < minSize || req.MaxMembers > maxSize)
@@ -45,15 +44,11 @@ public sealed class GroupService(
 
         var creator = await _userQueries.GetAdminDetailAsync(creatorUserId, ct)
             ?? throw new InvalidOperationException("User not found");
-        var majorId = creator.MajorId ?? req.MajorId;
+        var majorId = creator.MajorId;
         if (!majorId.HasValue)
             throw new InvalidOperationException("User hasn't major");
 
-        if (req.TopicId.HasValue)
-            throw new InvalidOperationException("Topic will be assigned after mentor confirmation");
-
-        var skillsJson = req.Skills is null ? null : SerializeSkills(req.Skills);
-        var groupId = await repo.CreateGroupAsync(semesterId, null, majorId, req.Name, req.Description, req.MaxMembers, skillsJson, ct);
+        var groupId = await repo.CreateGroupAsync(semesterId, null, majorId, req.Name, req.Description, req.MaxMembers, null, ct);
         await repo.AddMembershipAsync(groupId, creatorUserId, semesterId, "leader", ct);
         await _postRepo.DeleteProfilePostsForUserAsync(creatorUserId, semesterId, ct);
         await _postRepo.WithdrawPendingApplicationsForUserInSemesterAsync(creatorUserId, semesterId, ct);
@@ -265,8 +260,7 @@ public sealed class GroupService(
                 throw new InvalidOperationException($"MaxMembers cannot be less than current active members ({activeCount})");
         }
 
-        string? skillsJson = req.Skills is null ? null : SerializeSkills(req.Skills);
-        await repo.UpdateGroupAsync(groupId, req.Name, req.Description, req.MaxMembers, req.MajorId, null, null, skillsJson, ct);
+        await repo.UpdateGroupAsync(groupId, req.Name, req.Description, req.MaxMembers, req.MajorId, null, null, null, ct);
     }
     public async Task ForceRemoveMemberAsync(Guid groupId, Guid leaderUserId, Guid targetUserId, CancellationToken ct)
     {
@@ -334,16 +328,6 @@ public sealed class GroupService(
 
     private Task LogAsync(ActivityLogCreateRequest request, CancellationToken ct)
         => _activityLog.LogAsync(request, ct);
-
-    private static string SerializeSkills(IReadOnlyCollection<string> skills)
-    {
-        var normalized = skills
-            .Select(s => s?.Trim())
-            .Where(s => !string.IsNullOrWhiteSpace(s))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        return JsonSerializer.Serialize(normalized);
-    }
 
     private async Task SendRemovalEmailAsync(Guid groupId, Guid removedUserId, Guid actedByUserId, CancellationToken ct)
     {

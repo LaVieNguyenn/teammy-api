@@ -8,7 +8,8 @@ namespace Teammy.Application.Users.Services;
 public sealed class UserProfileService(
     IUserReadOnlyQueries read,
     IUserWriteRepository write,
-    IFileStorage storage)
+    IFileStorage storage,
+    IGroupRepository groupRepository)
 {
     public async Task<UserProfileDto> GetProfileAsync(Guid userId, CancellationToken ct)
     {
@@ -41,6 +42,8 @@ public sealed class UserProfileService(
             request.SkillsCompleted,
             NormalizePortfolio(request.PortfolioUrl),
             ct);
+
+        await groupRepository.RefreshSkillsForMemberAsync(userId, ct);
 
         return await GetProfileAsync(userId, ct);
     }
