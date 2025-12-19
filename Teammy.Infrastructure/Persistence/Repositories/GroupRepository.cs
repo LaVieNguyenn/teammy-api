@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Groups.Dtos;
@@ -45,16 +46,23 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
         };
         db.group_members.Add(m);
         await db.SaveChangesAsync(ct);
+
+        if (IsActiveStatus(status))
+            await UpdateGroupSkillsFromActiveMembersAsync(groupId, ct);
     }
 
     public async Task UpdateMembershipStatusAsync(Guid groupMemberId, string newStatus, CancellationToken ct)
     {
         var m = await db.group_members.FirstOrDefaultAsync(x => x.group_member_id == groupMemberId, ct)
             ?? throw new KeyNotFoundException("Join request not found");
+        var wasActive = IsActiveStatus(m.status);
         m.status = newStatus;
         if (newStatus is "member" or "leader")
             m.joined_at = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
+
+        if (wasActive != IsActiveStatus(newStatus))
+            await UpdateGroupSkillsFromActiveMembersAsync(m.group_id, ct);
     }
 
     public async Task DeleteMembershipAsync(Guid groupMemberId, CancellationToken ct)
@@ -63,6 +71,9 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
             ?? throw new KeyNotFoundException("Join request not found");
         db.group_members.Remove(m);
         await db.SaveChangesAsync(ct);
+
+        if (IsActiveStatus(m.status))
+            await UpdateGroupSkillsFromActiveMembersAsync(m.group_id, ct);
     }
 
     public async Task<bool> LeaveGroupAsync(Guid groupId, Guid userId, CancellationToken ct)
@@ -71,9 +82,13 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
         var m = await db.group_members
             .FirstOrDefaultAsync(x => x.group_id == groupId && x.user_id == userId, ct);
         if (m is null) return false;
+        var wasActive = IsActiveStatus(m.status);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         db.group_members.Remove(m);
         await db.SaveChangesAsync(ct);
+
+        if (wasActive)
+            await UpdateGroupSkillsFromActiveMembersAsync(groupId, ct);
 
         // Cleanup user-related applications and invitations for this group's posts
         var postIds = await db.recruitment_posts.AsNoTracking()
@@ -151,6 +166,8 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
         }
 
         await db.SaveChangesAsync(ct);
+
+        await UpdateGroupSkillsFromActiveMembersAsync(groupId, ct);
     }
 
     public async Task TransferLeadershipAsync(Guid groupId, Guid currentLeaderUserId, Guid newLeaderUserId, CancellationToken ct)
@@ -309,4 +326,115 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
 
     private static string NormalizeRole(string roleName)
         => roleName?.Trim() ?? string.Empty;
+
+    private static bool IsActiveStatus(string status)
+        => string.Equals(status, "member", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(status, "leader", StringComparison.OrdinalIgnoreCase);
+
+    private async Task UpdateGroupSkillsFromActiveMembersAsync(Guid groupId, CancellationToken ct)
+    {
+        var skillJsons = await (
+            from m in db.group_members.AsNoTracking()
+            join u in db.users.AsNoTracking() on m.user_id equals u.user_id
+            where m.group_id == groupId && (m.status == "member" || m.status == "leader")
+            select u.skills
+        ).ToListAsync(ct);
+
+        var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in skillJsons)
+        {
+            foreach (var token in ExtractSkillTokens(raw))
+                tokens.Add(token);
+        }
+
+        var group = await db.groups.FirstOrDefaultAsync(x => x.group_id == groupId, ct);
+        if (group is null) return;
+
+        var ordered = tokens
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        group.skills = ordered.Count > 0 ? JsonSerializer.Serialize(ordered) : null;
+        group.updated_at = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+    }
+
+    private static IReadOnlyList<string> ExtractSkillTokens(string? rawJson)
+    {
+        var tokens = new List<string>();
+        if (string.IsNullOrWhiteSpace(rawJson))
+            return tokens;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(rawJson);
+            var root = doc.RootElement;
+            switch (root.ValueKind)
+            {
+                case JsonValueKind.Array:
+                    foreach (var el in root.EnumerateArray())
+                    {
+                        if (el.ValueKind == JsonValueKind.String)
+                            tokens.AddRange(TokenizeString(el.GetString()));
+                    }
+                    break;
+                case JsonValueKind.String:
+                    tokens.AddRange(TokenizeString(root.GetString()));
+                    break;
+                case JsonValueKind.Object:
+                    if (root.TryGetProperty("skill_tags", out var skillTags) && skillTags.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var el in skillTags.EnumerateArray())
+                            if (el.ValueKind == JsonValueKind.String)
+                                tokens.AddRange(TokenizeString(el.GetString()));
+                    }
+                    else if (root.TryGetProperty("skills", out var skillsArr) && skillsArr.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var el in skillsArr.EnumerateArray())
+                            if (el.ValueKind == JsonValueKind.String)
+                                tokens.AddRange(TokenizeString(el.GetString()));
+                    }
+                    else if (root.TryGetProperty("primary_role", out var primaryRole) && primaryRole.ValueKind == JsonValueKind.String)
+                    {
+                        tokens.AddRange(TokenizeString(primaryRole.GetString()));
+                    }
+                    break;
+            }
+        }
+        catch (JsonException)
+        {
+            return tokens;
+        }
+
+        return tokens;
+    }
+
+    private static IEnumerable<string> TokenizeString(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            yield break;
+
+        var separators = new[] { ',', ';', '/', '|', '\n', '\r' };
+        var segments = value.Split(separators, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var segment in segments)
+        {
+            var trimmed = segment.Trim();
+            if (!string.IsNullOrWhiteSpace(trimmed))
+                yield return trimmed;
+        }
+    }
+
+    public async Task RefreshSkillsForMemberAsync(Guid userId, CancellationToken ct)
+    {
+        var groupIds = await db.group_members.AsNoTracking()
+            .Where(m => m.user_id == userId && (m.status == "member" || m.status == "leader"))
+            .Select(m => m.group_id)
+            .Distinct()
+            .ToListAsync(ct);
+
+        foreach (var groupId in groupIds)
+        {
+            await UpdateGroupSkillsFromActiveMembersAsync(groupId, ct);
+        }
+    }
 }

@@ -28,4 +28,6 @@ public interface IGroupRepository
     Task AddMemberRoleAsync(Guid groupId, Guid memberUserId, Guid assignedByUserId, string roleName, CancellationToken ct);
     Task RemoveMemberRoleAsync(Guid groupId, Guid memberUserId, string roleName, CancellationToken ct);
     Task ReplaceMemberRolesAsync(Guid groupId, Guid memberUserId, Guid assignedByUserId, IReadOnlyCollection<string> roleNames, CancellationToken ct);
+
+    Task RefreshSkillsForMemberAsync(Guid userId, CancellationToken ct);
 }

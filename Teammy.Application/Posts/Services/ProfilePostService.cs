@@ -80,6 +80,7 @@ public sealed class ProfilePostService(
             req.Skills,
             status,
             requiredSkillsJson: null,
+            applicationDeadline: null,
             ct);
     }
 
@@ -104,7 +105,7 @@ public sealed class ProfilePostService(
 
         if (owner.ApplicationDeadline.HasValue && owner.ApplicationDeadline.Value <= DateTime.UtcNow)
         {
-            await repo.UpdatePostAsync(profilePostId, null, null, null, "expired", null, ct);
+            await repo.UpdatePostAsync(profilePostId, null, null, null, "expired", null, null, ct);
             throw new InvalidOperationException("Profile post expired");
         }
 

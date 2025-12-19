@@ -357,13 +357,53 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
         if (string.IsNullOrWhiteSpace(json)) return null;
         try
         {
-            var list = JsonSerializer.Deserialize<List<string>>(json);
-            if (list is null || list.Count == 0) return null;
-            return list;
+            using var doc = JsonDocument.Parse(json);
+            var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            CollectSkillTokens(doc.RootElement, tokens);
+            if (tokens.Count == 0) return null;
+            return tokens
+                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
         catch
         {
             return null;
+        }
+    }
+
+    private static void CollectSkillTokens(JsonElement element, HashSet<string> tokens)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Array:
+                foreach (var el in element.EnumerateArray())
+                    CollectSkillTokens(el, tokens);
+                break;
+            case JsonValueKind.String:
+                foreach (var token in Tokenize(el: element.GetString()))
+                    tokens.Add(token);
+                break;
+            case JsonValueKind.Object:
+                if (element.TryGetProperty("skill_tags", out var skillTags))
+                    CollectSkillTokens(skillTags, tokens);
+                if (element.TryGetProperty("skills", out var skills))
+                    CollectSkillTokens(skills, tokens);
+                if (element.TryGetProperty("primary_role", out var primary))
+                    CollectSkillTokens(primary, tokens);
+                break;
+        }
+    }
+
+    private static IEnumerable<string> Tokenize(string? el)
+    {
+        if (string.IsNullOrWhiteSpace(el))
+            yield break;
+        var separators = new[] { ',', ';', '/', '|', '\n', '\r' };
+        foreach (var part in el.Split(separators, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var trimmed = part.Trim();
+            if (!string.IsNullOrWhiteSpace(trimmed))
+                yield return trimmed;
         }
     }
 
