@@ -1699,7 +1699,9 @@ public sealed class AiMatchingService(
         if (reranked is null)
             return (suggestion, null);
 
-        var matches = ChooseMatches(suggestion.MatchingSkills, reranked.MatchedSkills);
+        // IMPORTANT: recruitment-post matching skills are deterministic overlap between
+        // student skills and post requirements. Do not allow the LLM to overwrite them.
+        var matches = suggestion.MatchingSkills;
         var updated = suggestion with
         {
             Score = NormalizeLlmScore(reranked.FinalScore),

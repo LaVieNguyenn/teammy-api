@@ -32,7 +32,7 @@ var rerankBase = "http://127.0.0.1:8090";
 var apiKey = "THIS_IS_THE_STRONGEST_API_KEY_EVER_ON_THIS_WORLD_123_321_203";
 
 // SQLite + sqlite-vec
-var dbPath = @"C:\Users\PhiHung\Teammy.AiGateway\data\teammy_ai.db";
+var dbPath = @"C:\Users\PhiHung\Teammy.AiGateway\teammy_ai.db";
 Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
 
 // ABSOLUTE PATH (your request)
@@ -780,9 +780,7 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
             Math.Round(FinalScore(i), 2)
         ))
         .OrderByDescending(x => x.FinalScore)
-        // Topic suggestions should respect a minimum quality bar.
-        // Post suggestions should return multiple candidates; the UI can display lower scores.
-        .Where(x => !IsTopicMode(mode) || x.FinalScore >= minScore)
+        .Where(x => x.FinalScore >= minScore)
         .Take(topN)
         .ToList();
 
@@ -832,7 +830,7 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
         // Local models frequently violate word-count/format heuristics; rejecting them causes excessive fallbacks.
         if (extracted is not null && TryParseSingleSummary(extracted, out info) && !string.IsNullOrWhiteSpace(info.Summary))
         {
-            info = NormalizeReasonSoft(info);
+            info = NormalizeReasonSoft(info, s.Text);
         }
         else
         {
@@ -840,27 +838,27 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
             var plain = CleanReasonText(content);
             if (!string.IsNullOrWhiteSpace(plain) && finish != "length")
             {
-                info = NormalizeReasonSoft(new SummaryInfo(plain, FallbackMatchedSkillsFromSnippet(s.Text)));
+                info = NormalizeReasonSoft(new SummaryInfo(plain, FallbackMatchedSkillsFromSnippet(s.Text)), s.Text);
             }
             else
             {
-            var sysRetry = sysOne + "\n\nIMPORTANT: Return EXACTLY ONE JSON object. No markdown, no commentary.\n" +
-                           "If you previously echoed the input, DO NOT do that.\n" +
-                           "If summary is too long, rewrite it shorter (do NOT truncate with '...').\n" +
-                           "Summary must be ONE sentence (<= 180 characters), end with a period, and include 1-2 technologies.";
-            (content, finish) = await LlamaChatAsync(llm, sysRetry, userOne, temperature: 0.2, maxTokens: 520, req.HttpContext.RequestAborted);
-            extracted = ExtractFirstCompleteJsonObject(content);
+                var sysRetry = sysOne + "\n\nIMPORTANT: Return EXACTLY ONE JSON object. No markdown, no commentary.\n" +
+                               "If you previously echoed the input, DO NOT do that.\n" +
+                               "If summary is too long, rewrite it shorter (do NOT truncate with '...').\n" +
+                               "Summary must be ONE sentence (<= 180 characters), end with a period, and include 1-2 technologies.";
+                (content, finish) = await LlamaChatAsync(llm, sysRetry, userOne, temperature: 0.2, maxTokens: 520, req.HttpContext.RequestAborted);
+                extracted = ExtractFirstCompleteJsonObject(content);
 
-            if (extracted is not null && TryParseSingleSummary(extracted, out var info2) && !string.IsNullOrWhiteSpace(info2.Summary))
-                info = NormalizeReasonSoft(info2);
-            else
-            {
-                var plain2 = CleanReasonText(content);
-                if (!string.IsNullOrWhiteSpace(plain2) && finish != "length")
-                    info = NormalizeReasonSoft(new SummaryInfo(plain2, FallbackMatchedSkillsFromSnippet(s.Text)));
+                if (extracted is not null && TryParseSingleSummary(extracted, out var info2) && !string.IsNullOrWhiteSpace(info2.Summary))
+                    info = NormalizeReasonSoft(info2, s.Text);
                 else
-                    info = new SummaryInfo(FallbackReasonFromSnippet(s.Title, s.Text), FallbackMatchedSkillsFromSnippet(s.Text));
-            }
+                {
+                    var plain2 = CleanReasonText(content);
+                    if (!string.IsNullOrWhiteSpace(plain2) && finish != "length")
+                        info = NormalizeReasonSoft(new SummaryInfo(plain2, FallbackMatchedSkillsFromSnippet(s.Text)), s.Text);
+                    else
+                        info = new SummaryInfo(FallbackReasonFromSnippet(s.Title, s.Text), FallbackMatchedSkillsFromSnippet(s.Text));
+                }
             }
         }
 
@@ -873,7 +871,7 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
             var (cS, fS) = await LlamaChatAsync(llm, sysShort, userShort, temperature: 0.2, maxTokens: 260, req.HttpContext.RequestAborted);
             var jS = ExtractFirstCompleteJsonObject(cS);
             if (jS is not null && TryParseSingleSummary(jS, out var infoS) && !string.IsNullOrWhiteSpace(infoS.Summary))
-                info = NormalizeReasonSoft(infoS);
+                info = NormalizeReasonSoft(infoS, s.Text);
         }
 
         // If the model simply copies the candidate summary/detail verbatim, reprompt once for a paraphrase.
@@ -887,7 +885,7 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
             var j4 = ExtractFirstCompleteJsonObject(c4);
 
             if (j4 is not null && TryParseSingleSummary(j4, out var info4) && !string.IsNullOrWhiteSpace(info4.Summary) && !IsLikelyEchoReason(info4.Summary, s.Text))
-                info = NormalizeReasonSoft(info4);
+                info = NormalizeReasonSoft(info4, s.Text);
             else if (enableDebug && last.RawResponsePreview is null)
                 last.RawResponsePreview = Clip(c4, 1600);
 
@@ -904,7 +902,7 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
             var (cD, fD) = await LlamaChatAsync(llm, sysDistinct, userOne, temperature: 0.35, maxTokens: 260, req.HttpContext.RequestAborted);
             var jD = ExtractFirstCompleteJsonObject(cD);
             if (jD is not null && TryParseSingleSummary(jD, out var infoD) && !string.IsNullOrWhiteSpace(infoD.Summary))
-                info = NormalizeReasonSoft(infoD);
+                info = NormalizeReasonSoft(infoD, s.Text);
         }
 
         if (string.IsNullOrWhiteSpace(info.Summary))
@@ -1074,9 +1072,67 @@ static string? CleanReasonText(string raw)
 
 static SummaryInfo NormalizeReasonSoft(SummaryInfo info)
 {
+    return NormalizeReasonSoft(info, snippet: null);
+}
+
+static SummaryInfo NormalizeReasonSoft(SummaryInfo info, string? snippet)
+{
     var summary = NormalizeWhitespace(info.Summary ?? string.Empty);
     summary = EnsureTrailingPeriod(summary);
-    return new SummaryInfo(summary, info.MatchedSkills);
+
+    // Hard-guard against hallucinated matchedSkills: only allow tokens that appear
+    // in MATCHING_SKILLS (preferred) / SKILLS from the snippet.
+    var matched = info.MatchedSkills ?? Array.Empty<string>();
+    if (!string.IsNullOrWhiteSpace(snippet))
+    {
+        var allowed = GetAllowedMatchedSkillsFromSnippet(snippet);
+        if (allowed.Count > 0)
+        {
+            var filtered = matched
+                .Select(x => (x ?? "").Trim())
+                .Where(x => x.Length > 0)
+                .Where(x => allowed.Contains(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(3)
+                .ToArray();
+
+            matched = filtered.Length > 0
+                ? filtered
+                : allowed.Take(3).ToArray();
+        }
+        else
+        {
+            matched = Array.Empty<string>();
+        }
+    }
+
+    return new SummaryInfo(summary, matched);
+}
+
+static IReadOnlyList<string> GetAllowedMatchedSkillsFromSnippet(string snippet)
+{
+    var (_, matching) = ExtractSkillsLines(snippet);
+    var source = matching;
+
+    // If MATCHING_SKILLS isn't present/usable, fall back to SKILLS.
+    if (string.IsNullOrWhiteSpace(source) || string.Equals(source.Trim(), "n/a", StringComparison.OrdinalIgnoreCase))
+    {
+        var (skills, _) = ExtractSkillsLines(snippet);
+        source = skills;
+    }
+
+    if (string.IsNullOrWhiteSpace(source) || string.Equals(source.Trim(), "n/a", StringComparison.OrdinalIgnoreCase))
+        return Array.Empty<string>();
+
+    var list = new List<string>();
+    foreach (var part in source.Split(',', StringSplitOptions.RemoveEmptyEntries))
+    {
+        var p = part.Trim();
+        if (p.Length is < 2 or > 30) continue;
+        if (!list.Contains(p, StringComparer.OrdinalIgnoreCase))
+            list.Add(p);
+    }
+    return list;
 }
 
 static string NormalizeForCompare(string? s)
@@ -1329,7 +1385,9 @@ Write ONE short justification sentence:
 - End with a period.
 
 matchedSkills:
-- 1 to 3 skills that appear in the snippet (exact tokens).
+- 0 to 3 skills.
+- If MATCHING_SKILLS exists, matchedSkills MUST be a subset of MATCHING_SKILLS (exact tokens).
+- Otherwise, use tokens from SKILLS.
 
 Schema:
 {"summary":"...","matchedSkills":["..."]}
@@ -1341,6 +1399,12 @@ Schema:
 
 Focus: Team gap matching.
 Prioritize NEEDED_ROLE and TEAM_MIX. Use MATCHING_SKILLS when present.
+
+Interpretation:
+- queryText describes the requester's profile (student/team).
+- snippet describes the candidate item (profile post / recruitment post).
+- Do NOT claim the requester has technologies that only appear in the snippet.
+- Base any skill overlap strictly on MATCHING_SKILLS.
 
 Good examples:
 - {"summary":"Score high because team needs backend and candidate matches C# and ASP.NET Core.","matchedSkills":["C#","ASP.NET Core"]}
@@ -2152,3 +2216,5 @@ sealed class LastDebug
     public string? UserPreview { get; set; }
     public string? RawResponsePreview { get; set; }
 }
+
+

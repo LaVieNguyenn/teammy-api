@@ -50,7 +50,7 @@ public sealed class RecruitmentPostRepository(AppDbContext db) : IRecruitmentPos
         return c.candidate_id;
     }
 
-    public async Task UpdatePostAsync(Guid postId, string? title, string? description, string? positionNeeded, string? status, string? requiredSkillsJson, CancellationToken ct)
+    public async Task UpdatePostAsync(Guid postId, string? title, string? description, string? positionNeeded, string? status, string? requiredSkillsJson, DateTime? applicationDeadline, CancellationToken ct)
     {
         var post = await db.recruitment_posts.FirstOrDefaultAsync(x => x.post_id == postId, ct)
             ?? throw new KeyNotFoundException("Post not found");
@@ -59,6 +59,7 @@ public sealed class RecruitmentPostRepository(AppDbContext db) : IRecruitmentPos
         if (positionNeeded is not null) post.position_needed = positionNeeded;
         if (requiredSkillsJson is not null) post.required_skills = requiredSkillsJson;
         if (!string.IsNullOrWhiteSpace(status)) post.status = status!;
+        if (applicationDeadline.HasValue) post.application_deadline = applicationDeadline;
         post.updated_at = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
     }

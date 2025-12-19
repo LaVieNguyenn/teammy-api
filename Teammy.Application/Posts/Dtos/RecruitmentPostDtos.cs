@@ -91,5 +91,6 @@ public sealed class UpdateRecruitmentPostRequest
 
     [JsonPropertyName("position_needed")]
     public string? PositionNeeded { get; set; }
-    
+    [JsonPropertyName("expires_at")]
+    public DateTime? ExpiresAt { get; set; }
 }
