@@ -18,7 +18,9 @@ public sealed class InvitationReadOnlyQueries(AppDbContext db) : IInvitationRead
                 i.invitation_id,
                 i.invitee_user_id,
                 i.invited_by,
-                i.topic_id != null ? "mentor" : "member",
+                i.topic_id != null
+                    ? (i.invited_by == i.invitee_user_id ? "mentor_request" : "mentor")
+                    : "member",
                 i.status,
                 i.created_at,
                 i.responded_at,
@@ -44,7 +46,9 @@ public sealed class InvitationReadOnlyQueries(AppDbContext db) : IInvitationRead
                 orderby i.created_at descending
                 select new InvitationListItemDto(
                     i.invitation_id,
-                    i.topic_id != null ? "mentor" : "member",
+                    i.topic_id != null
+                        ? (i.invited_by == i.invitee_user_id ? "mentor_request" : "mentor")
+                        : "member",
                     i.status,
                     i.created_at,
                 i.expires_at,

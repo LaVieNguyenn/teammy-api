@@ -36,8 +36,9 @@ namespace Teammy.Application.Topics.Services
             Guid? semesterId,
             string? status,
             Guid? majorId,
+            Guid? ownerUserId,
             CancellationToken ct)
-            => _read.GetAllAsync(q, semesterId, status, majorId, ct);
+            => _read.GetAllAsync(q, semesterId, status, majorId, ownerUserId, ct);
 
         public Task<TopicDetailDto?> GetByIdAsync(Guid id, CancellationToken ct)
             => _read.GetByIdAsync(id, ct);

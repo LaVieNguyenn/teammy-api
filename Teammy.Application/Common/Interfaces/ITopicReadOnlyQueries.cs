@@ -9,6 +9,7 @@ public interface ITopicReadOnlyQueries
         Guid? semesterId,
         string? status,
         Guid? majorId,
+        Guid? ownerUserId,
         CancellationToken ct);
 
     Task<TopicDetailDto?> GetByIdAsync(Guid topicId, CancellationToken ct);

@@ -194,6 +194,7 @@ public sealed class GroupsController : ControllerBase
     public sealed record UpdateGroupRequestBody(string? Name, string? Description, int? MaxMembers, Guid? MajorId, IReadOnlyList<string>? Skills);
     public sealed record InviteUserRequest(Guid UserId);
     public sealed record InviteMentorRequest(Guid TopicId, Guid MentorUserId, string? Message);
+    public sealed record MentorSelfRequest(Guid TopicId, string? Message);
     public sealed record AssignRoleRequest(string RoleName);
     public sealed record ReplaceRolesRequest(IReadOnlyList<string> Roles);
 
@@ -399,6 +400,9 @@ public sealed class GroupsController : ControllerBase
                     if (!body.PostId.HasValue) return BadRequest("postId is required for application");
                     await _postService.AcceptAsync(body.PostId.Value, pendingId, GetUserId(), ct);
                     return NoContent();
+                case "mentor_invitation":
+                    await _invitations.ApproveMentorInvitationAsync(pendingId, GetUserId(), ct);
+                    return NoContent();
                 default:
                     return BadRequest("Supported types: application");
             }
@@ -422,8 +426,10 @@ public sealed class GroupsController : ControllerBase
                     await _postService.RejectAsync(body.PostId.Value, pendingId, GetUserId(), ct);
                     return NoContent();
                 case "invitation":
-                case "mentor_invitation":
                     await _invitations.CancelAsync(pendingId, GetUserId(), ct);
+                    return NoContent();
+                case "mentor_invitation":
+                    await _invitations.RejectMentorInvitationAsync(pendingId, GetUserId(), ct);
                     return NoContent();
                 default:
                     return BadRequest("Supported types: application, invitation");
@@ -471,5 +477,19 @@ public sealed class GroupsController : ControllerBase
         }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (ArgumentException ex) { return BadRequest(ex.Message); }
+    }
+
+    [HttpPost("{id:guid}/mentor-requests")]
+    [Authorize]
+    public async Task<ActionResult> RequestMentor([FromRoute] Guid id, [FromBody] MentorSelfRequest req, CancellationToken ct)
+    {
+        try
+        {
+            var invitationId = await _invitations.RequestMentorAsync(id, req.TopicId, GetUserId(), req.Message, ct);
+            return Accepted(new { invitationId });
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
     }
 }

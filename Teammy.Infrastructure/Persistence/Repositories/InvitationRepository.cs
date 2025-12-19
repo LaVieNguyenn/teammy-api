@@ -69,6 +69,13 @@ public sealed class InvitationRepository(AppDbContext db) : IInvitationRepositor
         inv.expires_at = expiresAt;
         await db.SaveChangesAsync(ct);
     }
+    public async Task MarkMentorAwaitingLeaderAsync(Guid invitationId, DateTime respondedAt, CancellationToken ct)
+    {
+        var inv = await db.invitations.FirstOrDefaultAsync(x => x.invitation_id == invitationId, ct)
+            ?? throw new KeyNotFoundException("Invitation not found");
+        inv.responded_at = respondedAt;
+        await db.SaveChangesAsync(ct);
+    }
 
     public async Task<int> RevokePendingMentorInvitesAsync(Guid groupId, Guid exceptInvitationId, CancellationToken ct)
     {

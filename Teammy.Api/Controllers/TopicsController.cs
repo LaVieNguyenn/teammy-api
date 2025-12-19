@@ -37,13 +37,33 @@ namespace Teammy.Api.Controllers
         // GET /api/topics
         [HttpGet]
         [AllowAnonymous]
-        public Task<IReadOnlyList<TopicListItemDto>> GetAll(
+        public async Task<ActionResult<IReadOnlyList<TopicListItemDto>>> GetAll(
             [FromQuery] string? q,
             [FromQuery] Guid? semesterId,
             [FromQuery] string? status,
             [FromQuery] Guid? majorId,
+            [FromQuery] string? ownedBy,
             CancellationToken ct)
-            => _service.GetAllAsync(q, semesterId, status, majorId, ct);
+        {
+            Guid? ownerId = null;
+            if (!string.IsNullOrWhiteSpace(ownedBy))
+            {
+                var normalized = ownedBy.Trim().ToLowerInvariant();
+                if (normalized == "me")
+                {
+                    if (!User.Identity?.IsAuthenticated ?? true)
+                        return Unauthorized();
+                    ownerId = GetUserId();
+                }
+                else if (normalized != "all")
+                {
+                    return BadRequest("ownedBy must be 'me', 'all', or omitted.");
+                }
+            }
+
+            var list = await _service.GetAllAsync(q, semesterId, status, majorId, ownerId, ct);
+            return Ok(list);
+        }
 
         // GET /api/topics/{id}
         [HttpGet("{id:guid}")]

@@ -25,6 +25,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories
             Guid? semesterId,
             string? status,
             Guid? majorId,
+            Guid? ownerUserId,
             CancellationToken ct)
         {
             var src = _db.topics
@@ -54,6 +55,12 @@ namespace Teammy.Infrastructure.Persistence.Repositories
 
             if (majorId is not null)
                 src = src.Where(t => t.major_id == majorId);
+
+            if (ownerUserId.HasValue)
+            {
+                var ownerId = ownerUserId.Value;
+                src = src.Where(t => t.created_by == ownerId || t.mentors.Any(m => m.user_id == ownerId));
+            }
 
             var rows = await src
                 .OrderByDescending(t => t.created_at)

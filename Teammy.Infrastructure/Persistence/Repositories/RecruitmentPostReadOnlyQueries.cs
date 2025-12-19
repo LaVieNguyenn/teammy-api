@@ -100,11 +100,7 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
         var q = db.recruitment_posts.AsNoTracking().AsQueryable();
         if (!string.IsNullOrWhiteSpace(status)) q = q.Where(p => p.status == status);
         if (majorId.HasValue) q = q.Where(p => p.major_id == majorId);
-        if (!string.IsNullOrWhiteSpace(skills))
-        {
-            var term = skills.Trim();
-            q = q.Where(p => (p.position_needed ?? "").Contains(term) || p.title.Contains(term));
-        }
+        // skill filtering moved to service layer to avoid case-sensitivity issues in JSON storage
 
         return await q
             .OrderByDescending(p => p.created_at)
@@ -480,11 +476,7 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                             && (m.status == "member" || m.status == "leader")));
         if (!string.IsNullOrWhiteSpace(status)) q = q.Where(p => p.status == status);
         if (majorId.HasValue) q = q.Where(p => p.major_id == majorId);
-        if (!string.IsNullOrWhiteSpace(skills))
-        {
-            var term = skills.Trim();
-            q = q.Where(p => (p.position_needed ?? "").Contains(term) || p.title.Contains(term));
-        }
+        // skill filtering handled in service layer
 
         return await q
             .OrderByDescending(p => p.created_at)

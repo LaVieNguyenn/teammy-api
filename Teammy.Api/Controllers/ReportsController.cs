@@ -51,6 +51,7 @@ public sealed class ReportsController(
             semesterId,
             status: null,
             majorId,
+            ownerUserId: null,
             ct);
 
         var metrics = BuildSummaryMetrics(filtered, topics.Count);
