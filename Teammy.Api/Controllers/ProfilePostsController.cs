@@ -56,8 +56,6 @@ public sealed class ProfilePostsController(ProfilePostService service, IConfigur
         var currentUserId = TryGetUserId();
         var items = await service.ListAsync(skills, majorId, status, exp, currentUserId, ct);
         if (!objectOnly) return Ok(items);
-
-        // Build sequentially to avoid concurrent DbContext usage
         var shaped = new List<object>(items.Count);
         foreach (var d in items)
         {

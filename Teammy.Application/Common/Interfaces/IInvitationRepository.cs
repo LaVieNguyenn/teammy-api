@@ -9,6 +9,7 @@ public interface IInvitationRepository
     Task UpdateExpirationAsync(Guid invitationId, DateTime expiresAt, CancellationToken ct);
     Task<IReadOnlyList<(Guid InvitationId, Guid GroupId, Guid? TopicId)>> ExpirePendingAsync(DateTime utcNow, CancellationToken ct);
     Task ResetPendingAsync(Guid invitationId, DateTime newCreatedAt, DateTime expiresAt, CancellationToken ct);
+    Task MarkMentorAwaitingLeaderAsync(Guid invitationId, DateTime respondedAt, CancellationToken ct);
     Task<int> RevokePendingMentorInvitesAsync(Guid groupId, Guid exceptInvitationId, CancellationToken ct);
     Task<IReadOnlyList<(Guid InvitationId, Guid InviteeUserId, Guid GroupId, Guid InvitedBy)>> RejectPendingMentorInvitesForTopicAsync(Guid topicId, Guid exceptInvitationId, CancellationToken ct);
 }
