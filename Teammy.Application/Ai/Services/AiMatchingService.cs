@@ -145,26 +145,10 @@ public sealed class AiMatchingService(
         if (filteredPosts.Count == 0)
             return Array.Empty<RecruitmentPostSuggestionDto>();
 
-        var groupIds = filteredPosts
-            .Where(p => p.GroupId.HasValue)
-            .Select(p => p.GroupId!.Value)
-            .Distinct()
-            .ToArray();
-
-        var mixes = groupIds.Length == 0
-            ? new Dictionary<Guid, GroupRoleMixSnapshot>()
-            : await aiQueries.GetGroupRoleMixAsync(groupIds, ct);
-
         var limit = NormalizeLimit(request.Limit);
         var poolSize = Math.Min(filteredPosts.Count, Math.Max(limit, LlmCandidatePoolSize));
         var suggestions = filteredPosts
-            .Select(post =>
-            {
-                GroupRoleMixSnapshot? mix = null;
-                if (post.GroupId is Guid gid && mixes.TryGetValue(gid, out var snapshot))
-                    mix = snapshot;
-                return BuildPostSuggestion(studentSkills, profile.MajorId, post, mix);
-            })
+            .Select(post => BuildPostSuggestion(studentSkills, profile.MajorId, post))
             .Where(dto => dto is not null)
             .Select(dto => dto!)
             .OrderByDescending(dto => dto.Score)
@@ -2180,8 +2164,7 @@ public sealed class AiMatchingService(
     private static RecruitmentPostSuggestionDto? BuildPostSuggestion(
         AiSkillProfile studentProfile,
         Guid studentMajorId,
-        RecruitmentPostSnapshot post,
-        GroupRoleMixSnapshot? mix)
+        RecruitmentPostSnapshot post)
     {
         var requiredProfile = AiSkillProfile.FromJson(post.RequiredSkills);
         var requiredSkillTags = requiredProfile.HasTags
@@ -2206,8 +2189,7 @@ public sealed class AiMatchingService(
         var majorBoost = post.MajorId.HasValue && post.MajorId.Value == studentMajorId ? 15 : 5;
         var recencyDays = Math.Clamp((int)(DateTime.UtcNow - post.CreatedAt).TotalDays, 0, 30);
         var recencyBoost = Math.Max(5, 30 - recencyDays);
-        var needAdjustment = CalculateRoleNeedAdjustment(studentProfile.PrimaryRole, mix);
-        var totalScore = overlapScore + roleScore + majorBoost + recencyBoost + needAdjustment;
+        var totalScore = overlapScore + roleScore + majorBoost + recencyBoost;
 
         if (totalScore <= RecruitmentScoreThreshold)
             return null;
