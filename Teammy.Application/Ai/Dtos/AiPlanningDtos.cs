@@ -30,7 +30,26 @@ public sealed record AiOptionListDto(
     AiOptionSection Section,
     PaginatedCollection<GroupTopicOptionDto>? GroupsWithoutTopic,
     PaginatedCollection<GroupStaffingOptionDto>? GroupsNeedingMembers,
-    PaginatedCollection<StudentPlacementOptionDto>? StudentsWithoutGroup
+    PaginatedCollection<StudentPlacementOptionDto>? StudentsWithoutGroup,
+    IReadOnlyList<NewGroupCreationOptionDto>? NewGroupPlans
+);
+
+public sealed record NewGroupCreationOptionDto(
+    Guid MajorId,
+    string? MajorName,
+    int PolicyMinSize,
+    int PolicyMaxSize,
+    IReadOnlyList<PlannedNewGroupDto> Groups,
+    IReadOnlyList<StudentAssignmentIssueDto> UnresolvedStudents
+);
+
+public sealed record PlannedNewGroupDto(
+    string Key,
+    Guid MajorId,
+    string? MajorName,
+    int MemberCount,
+    IReadOnlyList<Guid> StudentIds,
+    string Reason
 );
 
 public sealed record GroupTopicOptionDto(

@@ -75,6 +75,7 @@ public sealed class AiMatchingService(
         PaginatedCollection<GroupTopicOptionDto>? topicPage = null;
         PaginatedCollection<GroupStaffingOptionDto>? staffingPage = null;
         PaginatedCollection<StudentPlacementOptionDto>? studentPage = null;
+        IReadOnlyList<NewGroupCreationOptionDto>? newGroupPlans = null;
 
         var section = request.Section;
 
@@ -102,6 +103,74 @@ public sealed class AiMatchingService(
             if (section is AiOptionSection.All or AiOptionSection.StudentsWithoutGroup)
                 studentPage = Paginate(studentOptions, page, pageSize);
 
+            // Preview-only: propose how to create new groups for unassigned students (balanced by policy).
+            // This must NOT write to DB.
+            if (section is AiOptionSection.All or AiOptionSection.StudentsWithoutGroup)
+            {
+                var minSize = Math.Max(semesterCtx.Policy.DesiredGroupSizeMin, 1);
+                var policyMax = semesterCtx.Policy.DesiredGroupSizeMax;
+                if (policyMax <= 0)
+                    policyMax = minSize;
+                var maxSize = Math.Max(minSize, policyMax);
+
+                var plans = new List<NewGroupCreationOptionDto>();
+                foreach (var majorGroup in students.GroupBy(s => s.MajorId).OrderBy(g => g.Key))
+                {
+                    var ordered = majorGroup
+                        .OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+
+                    var sizes = ComputeBalancedGroupSizes(ordered.Count, minSize, maxSize);
+                    var plannedGroups = new List<PlannedNewGroupDto>();
+                    var unresolved = new List<StudentAssignmentIssueDto>();
+
+                    var majorId = majorGroup.Key;
+                    majorLookup.TryGetValue(majorId, out var majorName);
+
+                    if (sizes.Count == 0)
+                    {
+                        foreach (var s in ordered)
+                        {
+                            unresolved.Add(new StudentAssignmentIssueDto(
+                                s.UserId,
+                                $"Không đủ sinh viên để tạo nhóm mới (policy min {minSize}, max {maxSize})."));
+                        }
+                    }
+                    else
+                    {
+                        var total = ordered.Count;
+                        var splitText = string.Join("+", sizes);
+                        var baseReason = $"Đề xuất chia {total} sinh viên thành {sizes.Count} nhóm ({splitText}) để mọi nhóm đều nằm trong policy min {minSize}, max {maxSize}.";
+
+                        var offset = 0;
+                        for (var i = 0; i < sizes.Count; i++)
+                        {
+                            var size = sizes[i];
+                            var batch = ordered.Skip(offset).Take(size).ToList();
+                            offset += size;
+
+                            plannedGroups.Add(new PlannedNewGroupDto(
+                                Key: $"major_{majorId:N}_group_{i + 1}",
+                                MajorId: majorId,
+                                MajorName: majorName,
+                                MemberCount: batch.Count,
+                                StudentIds: batch.Select(x => x.UserId).ToList(),
+                                Reason: baseReason));
+                        }
+                    }
+
+                    plans.Add(new NewGroupCreationOptionDto(
+                        majorId,
+                        majorName,
+                        minSize,
+                        maxSize,
+                        plannedGroups,
+                        unresolved));
+                }
+
+                newGroupPlans = plans;
+            }
+
             // Enrich option reasons using AI (required for suggestions UX).
             (staffingPage, studentPage) = await EnrichStaffingOptionReasonsWithAiAsync(staffingPage, studentPage, ct);
         }
@@ -112,7 +181,8 @@ public sealed class AiMatchingService(
             section,
             topicPage,
             staffingPage,
-            studentPage);
+            studentPage,
+            newGroupPlans);
     }
 
     public async Task<IReadOnlyList<RecruitmentPostSuggestionDto>> SuggestRecruitmentPostsForStudentAsync(
@@ -453,15 +523,6 @@ public sealed class AiMatchingService(
 
         var combinedAssignments = phase.Assignments.Concat(newGroups.Assignments).ToList();
 
-        // Auto-assign teams only groups members. If a group becomes full AND already has topic+mentor,
-        // it can be activated (topic assignment is handled by AutoAssignTopic/AutoResolve).
-        var touchedGroupIds = combinedAssignments
-            .Select(a => a.GroupId)
-            .Distinct()
-            .ToList();
-        foreach (var groupId in touchedGroupIds)
-            await TryActivateGroupIfReadyAsync(groupId, ct);
-
         if (combinedAssignments.Count > 0)
             await RefreshAssignmentCachesAsync(ct);
 
@@ -509,10 +570,6 @@ public sealed class AiMatchingService(
         await aiQueries.RefreshStudentsPoolAsync(ct);
         var semesterCtx = await ResolveSemesterAsync(request.SemesterId, ct);
 
-        // Auto-resolve runs:
-        // 1) auto-assign teams (memberships only)
-        // 2) auto-assign topics (topic + mentor)
-        // 3) activate groups only when full + topic + mentor
         var studentPhase = await AssignStudentsToGroupsAsync(semesterCtx, request.MajorId, null, ct);
         var majorLookup = (await majorQueries.ListAsync(ct)).ToDictionary(x => x.MajorId, x => x.MajorName);
         var newGroupsPhase = await CreateNewGroupsForStudentsAsync(studentPhase.RemainingStudents, semesterCtx, currentUserId, request.MajorId, majorLookup, ct);
@@ -522,28 +579,7 @@ public sealed class AiMatchingService(
         var totalTopics = topicPhase.Assignments.Count;
         var combinedAssignments = studentPhase.Assignments.Concat(newGroupsPhase.Assignments).ToList();
         var combinedTopicAssignments = topicPhase.Assignments.ToList();
-        var skippedTopics = topicPhase.SkippedGroupIds.Distinct().ToList();
-
-        var topicByGroupId = combinedTopicAssignments
-            .GroupBy(x => x.GroupId)
-            .Select(g => g.First())
-            .ToDictionary(x => x.GroupId, x => x);
-
-        var resolvedNewGroups = newGroupsPhase.Groups
-            .Select(g => topicByGroupId.TryGetValue(g.GroupId, out var t)
-                ? g with { TopicId = t.TopicId, TopicTitle = t.TopicTitle }
-                : g)
-            .ToList();
-
-        var activationCandidates = combinedAssignments
-            .Select(a => a.GroupId)
-            .Concat(combinedTopicAssignments.Select(a => a.GroupId))
-            .Concat(resolvedNewGroups.Select(g => g.GroupId))
-            .Distinct()
-            .ToList();
-
-        foreach (var groupId in activationCandidates)
-            await TryActivateGroupIfReadyAsync(groupId, ct);
+        var skippedTopics = topicPhase.SkippedGroupIds.ToList();
 
         if (totalAssignments > 0)
             await RefreshAssignmentCachesAsync(ct);
@@ -553,12 +589,12 @@ public sealed class AiMatchingService(
             semesterCtx.Name,
             totalAssignments,
             totalTopics,
-            resolvedNewGroups.Count,
+            newGroupsPhase.Groups.Count,
             combinedAssignments,
             combinedTopicAssignments,
             skippedTopics,
             studentPhase.GroupIssues,
-            resolvedNewGroups,
+            newGroupsPhase.Groups,
             newGroupsPhase.UnresolvedStudents.Select(x => x.StudentId).ToList(),
             newGroupsPhase.UnresolvedStudents);
     }
@@ -703,6 +739,16 @@ public sealed class AiMatchingService(
         foreach (var state in capacityChanges)
         {
             await groupRepository.UpdateGroupAsync(state.GroupId, null, null, state.MaxMembers, null, null, null, null, ct);
+        }
+
+        // Auto-assign team DOES NOT pick topic/mentor. It may only activate groups
+        // that are already full AND already have topic+mentor.
+        foreach (var state in states)
+        {
+            if (state.CurrentMembers < state.MaxMembers)
+                continue;
+
+            await TryActivateGroupIfReadyAsync(state.GroupId, state.CurrentMembers, state.MaxMembers, ct);
         }
 
         return new StudentAssignmentPhaseResult(assignments, remainingSnapshots, openGroups, groupIssues);
@@ -1055,8 +1101,6 @@ public sealed class AiMatchingService(
 
         var groups = new List<AutoResolveNewGroupDto>();
         var assignments = new List<AutoAssignmentRecordDto>();
-        // IMPORTANT: group creation here is membership-only.
-        // Topic assignment is handled by AutoAssignTopic/AutoResolve.
         var topicAssignments = new List<AutoAssignTopicResultDto>();
         var topicFailures = new List<Guid>();
         var unresolved = new List<StudentAssignmentIssueDto>();
@@ -1066,47 +1110,6 @@ public sealed class AiMatchingService(
             .GroupBy(s => s.MajorId)
             .OrderBy(g => g.Key)
             .ToList();
-
-        static List<int> ComputeBalancedGroupSizes(int total, int minSize, int maxSize)
-        {
-            if (total <= 0)
-                return new List<int>();
-
-            if (total < minSize)
-                return new List<int>();
-
-            if (maxSize < minSize)
-                maxSize = minSize;
-
-            var minGroups = (int)Math.Ceiling(total / (double)maxSize);
-            var maxGroups = total / minSize;
-            if (maxGroups < minGroups)
-                return new List<int>();
-
-            for (var groupsCount = minGroups; groupsCount <= maxGroups; groupsCount++)
-            {
-                var baseSize = total / groupsCount;
-                var remainder = total % groupsCount;
-
-                // Sizes differ by at most 1: (base+1) repeated remainder times.
-                var sizes = new List<int>(groupsCount);
-                for (var i = 0; i < groupsCount; i++)
-                {
-                    var size = i < remainder ? baseSize + 1 : baseSize;
-                    if (size < minSize || size > maxSize)
-                    {
-                        sizes.Clear();
-                        break;
-                    }
-                    sizes.Add(size);
-                }
-
-                if (sizes.Count == groupsCount)
-                    return sizes;
-            }
-
-            return new List<int>();
-        }
 
         async Task CreateGroupFromBatchAsync(List<StudentProfileSnapshot> batch, Guid? enforcedMajorId)
         {
@@ -1140,7 +1143,6 @@ public sealed class AiMatchingService(
                     groupName,
                     AiRoleHelper.ToDisplayString(AiRoleHelper.Parse(batch[i].PrimaryRole))));
             }
-
             groups.Add(new AutoResolveNewGroupDto(
                 groupId,
                 groupName,
@@ -1183,15 +1185,58 @@ public sealed class AiMatchingService(
         return new NewGroupCreationResult(groups, assignments, topicAssignments, topicFailures, unresolved);
     }
 
-    private async Task<bool> TryActivateGroupIfReadyAsync(Guid groupId, CancellationToken ct)
+    private static List<int> ComputeBalancedGroupSizes(int total, int minSize, int maxSize)
+    {
+        if (total <= 0)
+            return new List<int>();
+
+        if (total < minSize)
+            return new List<int>();
+
+        if (maxSize < minSize)
+            maxSize = minSize;
+
+        var minGroups = (int)Math.Ceiling(total / (double)maxSize);
+        var maxGroups = total / minSize;
+        if (maxGroups < minGroups)
+            return new List<int>();
+
+        for (var groupsCount = minGroups; groupsCount <= maxGroups; groupsCount++)
+        {
+            var baseSize = total / groupsCount;
+            var remainder = total % groupsCount;
+
+            // Sizes differ by at most 1: (base+1) repeated remainder times.
+            var sizes = new List<int>(groupsCount);
+            for (var i = 0; i < groupsCount; i++)
+            {
+                var size = i < remainder ? baseSize + 1 : baseSize;
+                if (size < minSize || size > maxSize)
+                {
+                    sizes.Clear();
+                    break;
+                }
+                sizes.Add(size);
+            }
+
+            if (sizes.Count == groupsCount)
+                return sizes;
+        }
+
+        return new List<int>();
+    }
+
+    private async Task<bool> TryActivateGroupIfReadyAsync(
+        Guid groupId,
+        int? activeCount,
+        int? maxMembers,
+        CancellationToken ct)
     {
         var detail = await groupQueries.GetGroupAsync(groupId, ct);
         if (detail is null)
             return false;
 
         if (string.Equals(detail.Status, "active", StringComparison.OrdinalIgnoreCase))
-            return false;
-        if (string.Equals(detail.Status, "closed", StringComparison.OrdinalIgnoreCase))
             return false;
 
         if (!detail.TopicId.HasValue)
@@ -1201,8 +1246,22 @@ public sealed class AiMatchingService(
         if (mentor is null)
             return false;
 
-        var (maxMembers, activeCount) = await groupQueries.GetGroupCapacityAsync(groupId, ct);
-        if (activeCount < maxMembers)
+        int max;
+        int count;
+
+        if (activeCount.HasValue && maxMembers.HasValue)
+        {
+            max = maxMembers.Value;
+            count = activeCount.Value;
+        }
+        else
+        {
+            var cap = await groupQueries.GetGroupCapacityAsync(groupId, ct);
+            max = cap.MaxMembers;
+            count = cap.ActiveCount;
+        }
+
+        if (count < max)
             return false;
 
         await groupRepository.SetStatusAsync(groupId, "active", ct);
@@ -1469,12 +1528,10 @@ public sealed class AiMatchingService(
             return FailTopicAssignment("Topic chưa cấu hình mentor.", throwIfUnavailable);
 
         await groupRepository.UpdateGroupAsync(groupId, null, null, null, null, chosen.TopicId, mentorId, null, ct);
-
-        // Reserve the topic immediately after assignment.
         await topicWriteRepository.SetStatusAsync(chosen.TopicId, "closed", ct);
 
-        // Activate only when the group is ready: full + topic + mentor.
-        await TryActivateGroupIfReadyAsync(groupId, ct);
+        // Only activate when the group is full AND already has topic+mentor.
+        await TryActivateGroupIfReadyAsync(groupId, null, null, ct);
 
         return TopicAssignmentAttemptResult.FromSuccess(new AutoAssignTopicResultDto(groupId, chosen.TopicId, chosen.Title, chosen.Score));
     }
@@ -2116,7 +2173,13 @@ public sealed class AiMatchingService(
             try
             {
                 response = await _llmClient.RerankAsync(
-                    new AiLlmRerankRequest("group_staffing_options", queryText, candidates, BuildLlmContext(("groupId", group.GroupId.ToString()))),
+                    new AiLlmRerankRequest(
+                        "group_staffing_options",
+                        queryText,
+                        candidates,
+                        BuildLlmContext(
+                            ("mode", "auto_assign_team"),
+                            ("groupId", group.GroupId.ToString()))),
                     ct);
             }
             catch
@@ -2142,7 +2205,11 @@ public sealed class AiMatchingService(
                         && !string.IsNullOrWhiteSpace(rrItem.Reason))
                     {
                         studentReasonMap[m.StudentId] = rrItem.Reason!;
-                        return m with { Reason = rrItem.Reason! };
+                        return m with
+                        {
+                            Score = NormalizeLlmScore(rrItem.FinalScore),
+                            Reason = rrItem.Reason!
+                        };
                     }
 
                     return m;
