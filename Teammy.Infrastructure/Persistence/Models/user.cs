@@ -78,4 +78,8 @@ public partial class user
     public virtual ICollection<topic> topicsNavigation { get; set; } = new List<topic>();
 
     public virtual ICollection<chat_session_participant> chat_session_participants { get; set; } = new List<chat_session_participant>();
+
+    public virtual ICollection<group_feedback> group_feedbackmentor_users { get; set; } = new List<group_feedback>();
+
+    public virtual ICollection<group_feedback> group_feedbackacknowledged_bies { get; set; } = new List<group_feedback>();
 }

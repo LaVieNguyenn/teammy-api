@@ -198,6 +198,33 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_group_unique_topic
   ON teammy.groups(topic_id)
   WHERE topic_id IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS teammy.group_feedback (
+  feedback_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  group_id UUID NOT NULL REFERENCES teammy.groups(group_id) ON DELETE CASCADE,
+  semester_id UUID NOT NULL REFERENCES teammy.semesters(semester_id),
+  mentor_id UUID NOT NULL REFERENCES teammy.users(user_id) ON DELETE CASCADE,
+  category TEXT,
+  summary TEXT NOT NULL,
+  details TEXT,
+  rating INT,
+  blockers TEXT,
+  next_steps TEXT,
+  requires_admin_attention BOOLEAN NOT NULL DEFAULT FALSE,
+  status TEXT NOT NULL DEFAULT 'submitted'
+    CHECK (status IN ('submitted','acknowledged','follow_up_requested','resolved')),
+  acknowledged_by UUID REFERENCES teammy.users(user_id) ON DELETE SET NULL,
+  acknowledged_note TEXT,
+  acknowledged_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ix_group_feedback_group
+  ON teammy.group_feedback(group_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS ix_group_feedback_mentor
+  ON teammy.group_feedback(mentor_id, created_at DESC);
+
 -- trigger: topic & group cùng semester + topic phải open
 CREATE OR REPLACE FUNCTION teammy.fn_enforce_group_topic_rules()
 RETURNS trigger LANGUAGE plpgsql AS $$

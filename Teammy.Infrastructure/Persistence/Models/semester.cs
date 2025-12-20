@@ -30,4 +30,6 @@ public partial class semester
     public virtual ICollection<topic> topics { get; set; } = new List<topic>();
 
     public virtual ICollection<user_report> user_reports { get; set; } = new List<user_report>();
+
+    public virtual ICollection<group_feedback> group_feedbacks { get; set; } = new List<group_feedback>();
 }
