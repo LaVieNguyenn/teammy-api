@@ -15,6 +15,7 @@ using Teammy.Application.Posts.Services;
 using Teammy.Application.Invitations.Services;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Infrastructure;
+using Teammy.Application.Feedback.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -83,6 +84,7 @@ builder.Services.AddScoped<IGroupChatNotifier, GroupChatNotifier>();
 builder.Services.AddScoped<IInvitationNotifier, InvitationNotifier>();
 builder.Services.AddScoped<IAnnouncementNotifier, AnnouncementNotifier>();
 builder.Services.AddScoped<IActivityLogNotifier, ActivityLogNotifier>();
+builder.Services.AddScoped<MentorFeedbackService>();
 builder.Services.AddSingleton<IAppUrlProvider, Teammy.Api.App.AppUrlProvider>();
 builder.Services.AddSingleton<IChatPresenceTracker, ChatPresenceTracker>();
 

@@ -59,4 +59,6 @@ public partial class group
 
     public virtual topic? topic { get; set; }
 
+    public virtual ICollection<group_feedback> group_feedbacks { get; set; } = new List<group_feedback>();
+
 }
