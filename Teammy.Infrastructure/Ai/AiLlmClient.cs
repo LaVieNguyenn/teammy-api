@@ -63,6 +63,13 @@ public sealed class AiLlmClient : IAiLlmClient
             topN = topNValue;
         }
 
+        bool? withReasons = null;
+        if (request.Context is not null && request.Context.TryGetValue("withReasons", out var wrRaw)
+            && !string.IsNullOrWhiteSpace(wrRaw) && bool.TryParse(wrRaw, out var wr))
+        {
+            withReasons = wr;
+        }
+
         JsonElement? team = null;
         if (request.Context is not null && request.Context.TryGetValue("team", out var teamJson)
             && !string.IsNullOrWhiteSpace(teamJson))
@@ -107,7 +114,7 @@ public sealed class AiLlmClient : IAiLlmClient
         object upstreamPayload;
         var normalizedMode = (mode ?? string.Empty).Trim().ToLowerInvariant();
 
-        if (normalizedMode is "group_post" or "personal_post")
+        if (normalizedMode is "group_post" or "personal_post" or "auto_assign_team")
         {
             // Post modes: include team (optional) + neededRole.
             var postCandidates = request.Candidates.Select((c, i) =>
@@ -140,6 +147,7 @@ public sealed class AiLlmClient : IAiLlmClient
             {
                 mode = normalizedMode,
                 topN,
+                withReasons,
                 queryText = request.QueryText,
                 policy,
                 team,
@@ -153,6 +161,7 @@ public sealed class AiLlmClient : IAiLlmClient
             {
                 mode = string.IsNullOrWhiteSpace(normalizedMode) ? "topic" : normalizedMode,
                 topN,
+                withReasons,
                 queryText = request.QueryText,
                 policy,
                 candidates = candidatePayload
