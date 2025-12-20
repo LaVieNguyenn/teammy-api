@@ -61,8 +61,9 @@ public sealed class RecruitmentPostService(
     public async Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListAsync(string? skills, Guid? majorId, string? status, ExpandOptions expand, Guid? currentUserId, CancellationToken ct)
     {
         await repo.ExpireOpenPostsAsync(DateTime.UtcNow, ct);
-        var items = await queries.ListAsync(skills, majorId, status, expand, currentUserId, ct);
-        return items.Where(x => x.GroupId != null).ToList();
+        var items = await queries.ListAsync(null, majorId, status, expand, currentUserId, ct);
+        var filtered = FilterBySkills(items, skills);
+        return filtered.Where(x => x.GroupId != null).ToList();
     }
 
     public async Task<IReadOnlyList<RecruitmentPostSummaryDto>> ListByGroupAsync(Guid groupId, Guid currentUserId, ExpandOptions expand, CancellationToken ct)
@@ -87,6 +88,41 @@ public sealed class RecruitmentPostService(
         await repo.ExpireOpenPostsAsync(DateTime.UtcNow, ct);
         var items = await queries.ListAppliedByUserAsync(currentUserId, expand, ct);
         return items.Where(x => x.GroupId != null).ToList();
+    }
+
+    private static IReadOnlyList<RecruitmentPostSummaryDto> FilterBySkills(IReadOnlyList<RecruitmentPostSummaryDto> posts, string? skills)
+    {
+        if (string.IsNullOrWhiteSpace(skills))
+            return posts;
+
+        var tokens = skills
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (tokens.Length == 0)
+            return posts;
+
+        bool Contains(string? source, string token)
+            => !string.IsNullOrWhiteSpace(source) &&
+               source.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0;
+
+        bool Matches(RecruitmentPostSummaryDto post)
+        {
+            foreach (var token in tokens)
+            {
+                if (Contains(post.Title, token) ||
+                    Contains(post.PositionNeeded, token) ||
+                    (post.RequiredSkills?.Any(skill => Contains(skill, token)) ?? false))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        return posts.Where(Matches).ToList();
     }
 
     private const string RecruitmentApplicationType = "recruitment_post_application";
@@ -374,7 +410,8 @@ public sealed class RecruitmentPostService(
         var normalized = skills
             .Select(s => s?.Trim())
             .Where(s => !string.IsNullOrWhiteSpace(s))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(s => s!.ToLowerInvariant())
+            .Distinct(StringComparer.Ordinal)
             .ToList();
         if (normalized.Count == 0) return null;
         return JsonSerializer.Serialize(normalized);

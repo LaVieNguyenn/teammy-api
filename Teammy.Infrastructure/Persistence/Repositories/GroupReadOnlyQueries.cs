@@ -105,6 +105,13 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
     public Task<bool> IsLeaderAsync(Guid groupId, Guid userId, CancellationToken ct)
         => db.group_members.AsNoTracking().AnyAsync(x => x.group_id == groupId && x.user_id == userId && x.status == "leader", ct);
 
+    public Task<Guid?> GetGroupLeaderUserIdAsync(Guid groupId, CancellationToken ct)
+        => db.group_members.AsNoTracking()
+            .Where(x => x.group_id == groupId && x.status == "leader")
+            .OrderByDescending(x => x.joined_at)
+            .Select(x => (Guid?)x.user_id)
+            .FirstOrDefaultAsync(ct);
+
     public Task<bool> HasActiveMembershipInSemesterAsync(Guid userId, Guid semesterId, CancellationToken ct)
         => db.group_members.AsNoTracking().AnyAsync(x => x.user_id == userId && x.semester_id == semesterId && (x.status == "pending" || x.status == "member" || x.status == "leader"), ct);
 
@@ -314,6 +321,7 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
                 c.created_at,
                 c.message,
                 null,
+                null,
                 null)
         ).ToListAsync(ct);
 
@@ -336,7 +344,8 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
                 i.created_at,
                 i.message,
                 i.topic_id,
-                t != null ? t.title : null)
+                t != null ? t.title : null,
+                i.responded_at)
         ).ToListAsync(ct);
 
         var combined = apps
@@ -449,6 +458,7 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
             info.updated_at,
             message,
             info.topic_id,
-            topicTitle);
+            topicTitle,
+            null);
     }
 }

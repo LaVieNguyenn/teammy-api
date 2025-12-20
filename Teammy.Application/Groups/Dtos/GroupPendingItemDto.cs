@@ -11,5 +11,6 @@ public sealed record GroupPendingItemDto(
     DateTime CreatedAt,
     string? Message,
     Guid? TopicId,
-    string? TopicTitle
+    string? TopicTitle,
+    DateTime? RespondedAt
 );
