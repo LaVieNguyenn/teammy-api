@@ -161,7 +161,8 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
             return Array.Empty<MyGroupDto>();
 
         var activeStatuses = new[] { "member", "leader" };
-        var memberGroup = await (
+
+        var memberGroups = await (
             from m in db.group_members.AsNoTracking()
             join g in db.groups.AsNoTracking() on m.group_id equals g.group_id
             where m.user_id == userId && g.semester_id == semId.Value
@@ -174,11 +175,9 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
                 db.group_members.Count(x => x.group_id == g.group_id && activeStatuses.Contains(x.status)),
                 m.status
             )
-        ).FirstOrDefaultAsync(ct);
+        ).ToListAsync(ct);
 
-        if (memberGroup is not null)
-            return new[] { memberGroup };
-        var mentorGroup = await (
+        var mentorGroups = await (
             from g in db.groups.AsNoTracking()
             where g.mentor_id == userId && g.semester_id == semId.Value
             select new MyGroupDto(
@@ -190,11 +189,16 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
                 db.group_members.Count(x => x.group_id == g.group_id && activeStatuses.Contains(x.status)),
                 "mentor"
             )
-        ).FirstOrDefaultAsync(ct);
+        ).ToListAsync(ct);
 
-        if (mentorGroup is not null)
-            return new[] { mentorGroup };
-        return Array.Empty<MyGroupDto>();
+        if (memberGroups.Count == 0 && mentorGroups.Count == 0)
+            return Array.Empty<MyGroupDto>();
+
+        return memberGroups
+            .Concat(mentorGroups)
+            .GroupBy(x => x.GroupId)
+            .Select(g => g.First())
+            .ToList();
     }
     public async Task<GroupMentorDto?> GetMentorAsync(Guid groupId, CancellationToken ct)
     {
@@ -332,6 +336,7 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
             join t in db.topics.AsNoTracking() on i.topic_id equals t.topic_id into tt
             from t in tt.DefaultIfEmpty()
             where i.group_id == groupId && i.status == "pending"
+                  && (i.topic_id == null || i.responded_at != null)
             orderby i.created_at descending
             select new Teammy.Application.Groups.Dtos.GroupPendingItemDto(
                 i.topic_id != null ? "mentor_invitation" : "invitation",

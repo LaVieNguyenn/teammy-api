@@ -16,6 +16,7 @@ public sealed class ProfilePostService(
     IUserReadOnlyQueries userQueries,
     IEmailSender emailSender,
     IAppUrlProvider urlProvider,
+    IInvitationRepository invitationRepo,
     IInvitationNotifier invitationNotifier)
 {
     private readonly IGroupReadOnlyQueries _groupQueries = groupQueries;
@@ -23,6 +24,7 @@ public sealed class ProfilePostService(
     private readonly IUserReadOnlyQueries _userQueries = userQueries;
     private readonly IEmailSender _emailSender = emailSender;
     private readonly IAppUrlProvider _urlProvider = urlProvider;
+    private readonly IInvitationRepository _invitationRepo = invitationRepo;
     private readonly IInvitationNotifier _invitationNotifier = invitationNotifier;
     private const string AppName = "TEAMMY";
 
@@ -191,6 +193,13 @@ public sealed class ProfilePostService(
         await repo.UpdateApplicationStatusAsync(candidateId, "accepted", ct);
         await repo.RejectPendingProfileInvitationsAsync(currentUserId, invitation.SemesterId, candidateId, ct);
         await repo.DeleteProfilePostsForUserAsync(currentUserId, invitation.SemesterId, ct);
+        await repo.WithdrawPendingApplicationsForUserInSemesterAsync(currentUserId, invitation.SemesterId, ct);
+        var revoked = await _invitationRepo.RevokePendingForUserInSemesterAsync(currentUserId, invitation.SemesterId, null, ct);
+        foreach (var (revokedId, revokedGroupId) in revoked)
+        {
+            await _invitationNotifier.NotifyInvitationStatusAsync(currentUserId, revokedId, "revoked", ct);
+            await _invitationNotifier.NotifyGroupPendingAsync(revokedGroupId, ct);
+        }
         await SendProfileInvitationStatusEmailAsync(invitation, userDetail.DisplayName ?? userDetail.Email ?? "Student", "accepted", ct);
         await _invitationNotifier.NotifyInvitationStatusAsync(currentUserId, candidateId, "accepted", ct);
         await _invitationNotifier.NotifyGroupPendingAsync(invitation.GroupId, ct);

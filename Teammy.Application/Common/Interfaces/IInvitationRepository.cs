@@ -11,5 +11,6 @@ public interface IInvitationRepository
     Task ResetPendingAsync(Guid invitationId, DateTime newCreatedAt, DateTime expiresAt, CancellationToken ct);
     Task MarkMentorAwaitingLeaderAsync(Guid invitationId, DateTime respondedAt, CancellationToken ct);
     Task<int> RevokePendingMentorInvitesAsync(Guid groupId, Guid exceptInvitationId, CancellationToken ct);
+    Task<IReadOnlyList<(Guid InvitationId, Guid GroupId)>> RevokePendingForUserInSemesterAsync(Guid userId, Guid semesterId, Guid? exceptInvitationId, CancellationToken ct);
     Task<IReadOnlyList<(Guid InvitationId, Guid InviteeUserId, Guid GroupId, Guid InvitedBy)>> RejectPendingMentorInvitesForTopicAsync(Guid topicId, Guid exceptInvitationId, CancellationToken ct);
 }

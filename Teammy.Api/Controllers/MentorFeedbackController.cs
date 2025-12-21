@@ -58,4 +58,33 @@ public sealed class MentorFeedbackController(MentorFeedbackService service) : Co
         catch (ArgumentException ex) { return BadRequest(ex.Message); }
         catch (InvalidOperationException ex) { return Conflict(ex.Message); }
     }
+
+    [HttpPut("{feedbackId:guid}")]
+    [Authorize]
+    public async Task<ActionResult> Update([FromRoute] Guid groupId, [FromRoute] Guid feedbackId, [FromBody] UpdateGroupFeedbackRequest req, CancellationToken ct)
+    {
+        try
+        {
+            await service.UpdateAsync(groupId, feedbackId, GetUserId(), req, ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+    }
+
+    [HttpDelete("{feedbackId:guid}")]
+    [Authorize]
+    public async Task<ActionResult> Delete([FromRoute] Guid groupId, [FromRoute] Guid feedbackId, CancellationToken ct)
+    {
+        try
+        {
+            await service.DeleteAsync(groupId, feedbackId, GetUserId(), ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+    }
 }
