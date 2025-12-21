@@ -13,7 +13,6 @@ public sealed class SubmitGroupFeedbackRequest
     public int? Rating { get; init; }
     public string? Blockers { get; init; }
     public string? NextSteps { get; init; }
-    public bool RequiresAdminAttention { get; init; }
 }
 
 public sealed record GroupFeedbackDto(
@@ -29,16 +28,19 @@ public sealed record GroupFeedbackDto(
     int? Rating,
     string? Blockers,
     string? NextSteps,
-    bool RequiresAdminAttention,
     string Status,
     string? AcknowledgedNote,
     DateTime CreatedAt,
     DateTime UpdatedAt,
     DateTime? AcknowledgedAt);
 
-public sealed record UpdateGroupFeedbackStatusRequest(
-    [property: Required] string Status,
-    string? Note);
+public sealed class UpdateGroupFeedbackStatusRequest
+{
+    [Required]
+    public string Status { get; init; } = string.Empty;
+
+    public string? Note { get; init; }
+}
 
 public sealed record GroupFeedbackCreateModel(
     Guid GroupId,
@@ -49,5 +51,4 @@ public sealed record GroupFeedbackCreateModel(
     string? Details,
     int? Rating,
     string? Blockers,
-    string? NextSteps,
-    bool RequiresAdminAttention);
+    string? NextSteps);

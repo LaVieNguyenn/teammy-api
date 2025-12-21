@@ -209,7 +209,6 @@ CREATE TABLE IF NOT EXISTS teammy.group_feedback (
   rating INT,
   blockers TEXT,
   next_steps TEXT,
-  requires_admin_attention BOOLEAN NOT NULL DEFAULT FALSE,
   status TEXT NOT NULL DEFAULT 'submitted'
     CHECK (status IN ('submitted','acknowledged','follow_up_requested','resolved')),
   acknowledged_by UUID REFERENCES teammy.users(user_id) ON DELETE SET NULL,

@@ -44,7 +44,6 @@ public sealed class GroupFeedbackReadOnlyQueries(AppDbContext db) : IGroupFeedba
             f.rating,
             f.blockers,
             f.next_steps,
-            f.requires_admin_attention,
             f.status,
             f.acknowledged_note,
             f.created_at,

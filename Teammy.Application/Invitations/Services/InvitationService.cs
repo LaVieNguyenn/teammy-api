@@ -1,5 +1,6 @@
 using Teammy.Application.Activity.Dtos;
 using Teammy.Application.Activity.Services;
+using Teammy.Application.Common.Email;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Invitations.Dtos;
 using Teammy.Application.Posts.Dtos;
@@ -368,12 +369,14 @@ public sealed class InvitationService(
         var topicTitle = inv.TopicTitle ?? "topic";
         var actionUrl = urlProvider.GetInvitationUrl(inv.InvitationId, inv.GroupId);
         var subject = $"{AppName} - {mentorName} accepted the mentor invitation";
-        var html = $@"<!doctype html>
-<html><body style=""font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#0f172a"">
-<p><strong>{System.Net.WebUtility.HtmlEncode(mentorName)}</strong> agreed to mentor <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong> for topic <strong>{System.Net.WebUtility.HtmlEncode(topicTitle)}</strong>.</p>
-<p>Please review and <b>approve or reject</b> this mentor in TEAMMY.</p>
-<p><a href=""{System.Net.WebUtility.HtmlEncode(actionUrl)}"" style=""padding:10px 16px;background:#2563eb;color:#fff;text-decoration:none;border-radius:4px;"">Open TEAMMY</a></p>
-</body></html>";
+        var messageHtml = $@"<p><strong>{System.Net.WebUtility.HtmlEncode(mentorName)}</strong> agreed to mentor <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong> for topic <strong>{System.Net.WebUtility.HtmlEncode(topicTitle)}</strong>.</p>
+<p style=""margin-top:8px;color:#475569;"">Please review and approve or reject this mentor in TEAMMY.</p>";
+        var html = EmailTemplateBuilder.Build(
+            subject,
+            "Mentor waiting for approval",
+            messageHtml,
+            "Review mentor",
+            actionUrl);
 
         await emailSender.SendAsync(
             leader.Email,
@@ -395,12 +398,16 @@ public sealed class InvitationService(
         var reason = approved
             ? $"You are now the mentor of <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong>."
             : $"The leader of <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong> has rejected the mentor request.";
-        var html = $@"<!doctype html>
-<html><body style=""font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#0f172a"">
-<p>{reason}</p>
-<p>Topic: <strong>{System.Net.WebUtility.HtmlEncode(topicTitle)}</strong></p>
-<p>Please login to TEAMMY for details.</p>
-</body></html>";
+        var actionUrl = urlProvider.GetInvitationUrl(inv.InvitationId, inv.GroupId);
+        var messageHtml = $@"<p>{reason}</p>
+<p style=""margin-top:8px;"">Topic: <strong>{System.Net.WebUtility.HtmlEncode(topicTitle)}</strong></p>
+<p style=""margin-top:8px;color:#475569;"">Please login to TEAMMY for details.</p>";
+        var html = EmailTemplateBuilder.Build(
+            subject,
+            "Mentor decision update",
+            messageHtml,
+            "Open Teammy",
+            actionUrl);
 
         await emailSender.SendAsync(
             mentor.Email,
@@ -443,11 +450,15 @@ public sealed class InvitationService(
         var groupName = group?.Name ?? "your group";
         var topicTitle = inv.TopicTitle ?? "topic";
         var subject = $"{AppName} - Mentor invitation rejected";
-        var html = $@"<!doctype html>
-<html><body style=""font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#0f172a"">
-<p>Your mentor invitation for topic <strong>{System.Net.WebUtility.HtmlEncode(topicTitle)}</strong> was rejected because another group has already assigned this topic.</p>
-<p>You can consider choosing another topic.</p>
-</body></html>";
+        var actionUrl = urlProvider.GetInvitationUrl(inv.InvitationId, inv.GroupId);
+        var messageHtml = $@"<p>Your mentor invitation for topic <strong>{System.Net.WebUtility.HtmlEncode(topicTitle)}</strong> was rejected because another group has already assigned this topic.</p>
+<p style=""margin-top:8px;color:#475569;"">You can consider choosing another topic.</p>";
+        var html = EmailTemplateBuilder.Build(
+            subject,
+            "Mentor invitation update",
+            messageHtml,
+            "Open Teammy",
+            actionUrl);
         await emailSender.SendAsync(
             inviter.Email,
             subject,
@@ -467,11 +478,15 @@ public sealed class InvitationService(
         var groupName = group?.Name ?? "your group";
         var statusText = status.Equals("accepted", StringComparison.OrdinalIgnoreCase) ? "accepted" : "rejected";
         var subject = $"{AppName} - {inviteeName} {statusText} your invitation";
-        var html = $@"<!doctype html>
-<html><body style=""font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#0f172a"">
-<p>{System.Net.WebUtility.HtmlEncode(inviteeName)} has <strong>{statusText}</strong> the invitation for group <b>{System.Net.WebUtility.HtmlEncode(groupName)}</b>.</p>
-<p>You can review group members in TEAMMY.</p>
-</body></html>";
+        var actionUrl = urlProvider.GetInvitationUrl(inv.InvitationId, inv.GroupId);
+        var messageHtml = $@"<p>{System.Net.WebUtility.HtmlEncode(inviteeName)} has <strong>{statusText}</strong> the invitation for group <b>{System.Net.WebUtility.HtmlEncode(groupName)}</b>.</p>
+<p style=""margin-top:8px;color:#475569;"">You can review group members in TEAMMY.</p>";
+        var html = EmailTemplateBuilder.Build(
+            subject,
+            "Invitation status update",
+            messageHtml,
+            "Open Teammy",
+            actionUrl);
 
         await emailSender.SendAsync(
             inviter.Email,

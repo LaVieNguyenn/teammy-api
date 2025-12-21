@@ -21,7 +21,6 @@ public sealed class GroupFeedbackRepository(AppDbContext db) : IGroupFeedbackRep
             rating = model.Rating,
             blockers = model.Blockers,
             next_steps = model.NextSteps,
-            requires_admin_attention = model.RequiresAdminAttention,
             status = "submitted",
             created_at = DateTime.UtcNow,
             updated_at = DateTime.UtcNow

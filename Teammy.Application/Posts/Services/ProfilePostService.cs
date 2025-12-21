@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Net;
+using Teammy.Application.Common.Email;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Invitations.Dtos;
 using Teammy.Application.Invitations.Templates;
@@ -282,10 +283,14 @@ public sealed class ProfilePostService(
         var groupName = group?.Name ?? "your group";
         var statusText = status.Equals("accepted", StringComparison.OrdinalIgnoreCase) ? "accepted" : "rejected";
         var subject = $"{AppName} - {applicantName} {statusText} your invitation";
-        var html = $@"<!doctype html>
-<html><body style=""font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#0f172a"">
-<p>{WebUtility.HtmlEncode(applicantName)} has <strong>{statusText}</strong> the invitation to join <b>{WebUtility.HtmlEncode(groupName)}</b>.</p>
-</body></html>";
+        var actionUrl = _urlProvider.GetProfilePostUrl(invitation.PostId);
+        var messageHtml = $@"<p>{WebUtility.HtmlEncode(applicantName)} has <strong>{statusText}</strong> the invitation to join <b>{WebUtility.HtmlEncode(groupName)}</b>.</p>";
+        var html = EmailTemplateBuilder.Build(
+            subject,
+            "Profile invitation update",
+            messageHtml,
+            "View details",
+            actionUrl);
 
         foreach (var leader in leaderRecipients)
         {

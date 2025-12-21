@@ -1,6 +1,7 @@
 using System.Text;
 using Teammy.Application.Activity.Dtos;
 using Teammy.Application.Activity.Services;
+using Teammy.Application.Common.Email;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Feedback.Dtos;
 using Teammy.Application.Groups.Dtos;
@@ -17,6 +18,8 @@ public sealed class MentorFeedbackService(
     IEmailSender emailSender,
     ActivityLogService activityLog)
 {
+    private const string DefaultAppUrl = "https://teammy.vercel.app/login";
+
     private static readonly HashSet<string> AllowedStatusUpdates = new(StringComparer.OrdinalIgnoreCase)
     {
         "acknowledged",
@@ -45,8 +48,7 @@ public sealed class MentorFeedbackService(
             req.Details?.Trim(),
             req.Rating,
             req.Blockers?.Trim(),
-            req.NextSteps?.Trim(),
-            req.RequiresAdminAttention);
+            req.NextSteps?.Trim());
 
         var feedbackId = await feedbackRepository.CreateAsync(createModel, ct);
         await activityLog.LogAsync(new ActivityLogCreateRequest(mentorUserId, "group", "MENTOR_FEEDBACK_SUBMITTED")
@@ -54,7 +56,7 @@ public sealed class MentorFeedbackService(
             GroupId = groupId,
             EntityId = feedbackId,
             Message = $"Mentor submitted feedback ({req.Category ?? "general"})",
-            Metadata = new { groupId, feedbackId, req.RequiresAdminAttention }
+            Metadata = new { groupId, feedbackId }
         }, ct);
 
         await NotifyLeadersAsync(groupId, group.Name, mentorUserId, req, ct);
@@ -63,11 +65,12 @@ public sealed class MentorFeedbackService(
 
     public async Task<IReadOnlyList<GroupFeedbackDto>> ListAsync(Guid groupId, Guid currentUserId, CancellationToken ct)
     {
-        var group = await groupQueries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
+        _ = await groupQueries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
+        var isMember = await groupAccess.IsMemberAsync(groupId, currentUserId, ct);
         var isLeader = await groupAccess.IsLeaderAsync(groupId, currentUserId, ct);
         var isMentor = await groupAccess.IsMentorAsync(groupId, currentUserId, ct);
-        if (!isLeader && !isMentor)
-            throw new UnauthorizedAccessException("Only leaders or mentors can view mentor feedback");
+        if (!isLeader && !isMentor && !isMember)
+            throw new UnauthorizedAccessException("Only members, leaders, or mentors can view mentor feedback");
 
         var list = await feedbackQueries.ListForGroupAsync(groupId, ct);
         return list;
@@ -99,17 +102,19 @@ public sealed class MentorFeedbackService(
 
         if (!string.IsNullOrWhiteSpace(feedback.MentorEmail))
         {
-            var note = string.IsNullOrWhiteSpace(req.Note) ? "Không có ghi chú bổ sung." : req.Note;
-            var html = $@"<!doctype html>
-<html><body style=""font-family:Segoe UI,Arial,sans-serif;color:#0f172a"">
-<p>Leader đã cập nhật phản hồi của bạn cho nhóm <strong>{System.Net.WebUtility.HtmlEncode(group.Name)}</strong>.</p>
-<p>Trạng thái mới: <strong>{System.Net.WebUtility.HtmlEncode(req.Status)}</strong></p>
-<p>Ghi chú: {System.Net.WebUtility.HtmlEncode(note)}</p>
-<p>Vui lòng đăng nhập vào TEAMMY để xem chi tiết.</p>
-</body></html>";
+            var note = string.IsNullOrWhiteSpace(req.Note) ? "No additional note." : req.Note;
+            var messageHtml = $@"<p>The leader updated your feedback for <strong>{System.Net.WebUtility.HtmlEncode(group.Name)}</strong>.</p>
+<p style=""margin-top:8px;"">New status: <strong>{System.Net.WebUtility.HtmlEncode(req.Status)}</strong></p>
+<p style=""margin-top:8px;"">Note: {System.Net.WebUtility.HtmlEncode(note)}</p>";
+            var html = EmailTemplateBuilder.Build(
+                $"TEAMMY - Feedback updated ({req.Status})",
+                "Feedback status updated",
+                messageHtml,
+                "Open Teammy",
+                DefaultAppUrl);
             await emailSender.SendAsync(
                 feedback.MentorEmail!,
-                $"TEAMMY - Feedback được cập nhật ({req.Status})",
+                $"TEAMMY - Feedback updated ({req.Status})",
                 html,
                 ct);
         }
@@ -126,23 +131,25 @@ public sealed class MentorFeedbackService(
         var summary = req.Summary.Length > 200 ? req.Summary[..200] + "..." : req.Summary;
 
         var sb = new StringBuilder();
-        sb.AppendLine("<!doctype html><html><body style=\"font-family:Segoe UI,Arial,sans-serif;color:#0f172a\">");
-        sb.AppendLine($"<p><strong>{System.Net.WebUtility.HtmlEncode(mentorName)}</strong> vừa gửi đánh giá cho nhóm <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong>.</p>");
+        sb.AppendLine($"<p><strong>{System.Net.WebUtility.HtmlEncode(mentorName)}</strong> submitted feedback for <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong>.</p>");
         sb.AppendLine($"<p><em>{System.Net.WebUtility.HtmlEncode(summary)}</em></p>");
         if (!string.IsNullOrWhiteSpace(req.Blockers))
         {
             sb.AppendLine("<p><strong>Blockers:</strong></p>");
             sb.AppendLine($"<p>{System.Net.WebUtility.HtmlEncode(req.Blockers)}</p>");
         }
-        sb.AppendLine("<p>Vui lòng đăng nhập TEAMMY để xem chi tiết và phản hồi.</p>");
-        sb.AppendLine("</body></html>");
-        var html = sb.ToString();
+        var html = EmailTemplateBuilder.Build(
+            "TEAMMY - Mentor submitted feedback",
+            "Mentor feedback received",
+            sb.ToString(),
+            "Open Teammy",
+            DefaultAppUrl);
 
         foreach (var leader in leaders)
         {
             await emailSender.SendAsync(
                 leader.Email!,
-                "TEAMMY - Mentor vừa gửi feedback cho nhóm bạn",
+                "TEAMMY - Mentor submitted feedback",
                 html,
                 ct);
         }

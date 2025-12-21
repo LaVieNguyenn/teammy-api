@@ -24,8 +24,6 @@ public partial class group_feedback
 
     public string? next_steps { get; set; }
 
-    public bool requires_admin_attention { get; set; }
-
     public string status { get; set; } = null!;
 
     public Guid? acknowledged_by { get; set; }

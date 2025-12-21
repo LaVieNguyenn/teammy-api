@@ -423,7 +423,6 @@ public partial class AppDbContext : DbContext
             entity.Property(e => e.created_at).HasDefaultValueSql("now()");
             entity.Property(e => e.updated_at).HasDefaultValueSql("now()");
             entity.Property(e => e.status).HasDefaultValueSql("'submitted'::text");
-            entity.Property(e => e.requires_admin_attention).HasDefaultValue(false);
 
             entity.HasOne(d => d.group).WithMany(p => p.group_feedbacks)
                 .HasForeignKey(d => d.group_id)
