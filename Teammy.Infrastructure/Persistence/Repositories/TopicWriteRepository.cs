@@ -108,6 +108,36 @@ namespace Teammy.Infrastructure.Persistence.Repositories
             await _db.SaveChangesAsync(ct);
         }
 
+        public Task<string?> GetRegistrationFileUrlAsync(Guid topicId, CancellationToken ct)
+            => _db.topics.AsNoTracking()
+                .Where(t => t.topic_id == topicId)
+                .Select(t => t.source)
+                .FirstOrDefaultAsync(ct);
+
+        public async Task SetRegistrationFileAsync(
+            Guid topicId,
+            string fileUrl,
+            string fileName,
+            string? fileType,
+            long? fileSize,
+            CancellationToken ct)
+        {
+            if (string.IsNullOrWhiteSpace(fileUrl))
+                throw new ArgumentException("FileUrl is required.", nameof(fileUrl));
+            if (string.IsNullOrWhiteSpace(fileName))
+                throw new ArgumentException("FileName is required.", nameof(fileName));
+
+            var entity = await _db.topics
+                .FirstOrDefaultAsync(x => x.topic_id == topicId, ct)
+                ?? throw new KeyNotFoundException("Topic not found");
+
+            entity.source = fileUrl.Trim();
+            entity.source_file_name = fileName.Trim();
+            entity.source_file_type = string.IsNullOrWhiteSpace(fileType) ? null : fileType.Trim();
+            entity.source_file_size = fileSize;
+            await _db.SaveChangesAsync(ct);
+        }
+
         public async Task<(Guid topicId, bool created)> UpsertAsync(
             Guid semesterId,
             string title,

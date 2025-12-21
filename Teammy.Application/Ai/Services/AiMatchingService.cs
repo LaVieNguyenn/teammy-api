@@ -469,10 +469,20 @@ public sealed class AiMatchingService(
         if (posts.Count == 0)
             return Array.Empty<ProfilePostSuggestionDto>();
 
-        var semanticQuery = BuildSemanticQuery(needsProfile, groupSkillProfile);
-        var filteredPosts = await ApplySemanticShortlistAsync("profile_post", semanticQuery, detail.SemesterId, detail.MajorId, posts, p => p.PostId, ct);
-        if (filteredPosts.Count == 0)
-            return Array.Empty<ProfilePostSuggestionDto>();
+        // If the group has no recruitment posts, we should still compare all profile posts
+        // against the group's current needs (role mix + skills), not a recruitment-only signal.
+        IReadOnlyList<ProfilePostSnapshot> filteredPosts;
+        if (groupRecruitmentPosts.Count == 0)
+        {
+            filteredPosts = posts;
+        }
+        else
+        {
+            var semanticQuery = BuildSemanticQuery(needsProfile, groupSkillProfile);
+            filteredPosts = await ApplySemanticShortlistAsync("profile_post", semanticQuery, detail.SemesterId, detail.MajorId, posts, p => p.PostId, ct);
+            if (filteredPosts.Count == 0)
+                return Array.Empty<ProfilePostSuggestionDto>();
+        }
 
         var limit = NormalizeLimit(request.Limit);
         var poolSize = Math.Min(filteredPosts.Count, Math.Max(limit, LlmCandidatePoolSize));
@@ -517,9 +527,9 @@ public sealed class AiMatchingService(
                 requireAiReason: true,
             ct);
 
-        var finalSuggestions = reranked
-            .Take(limit)
-            .ToList();
+            var finalSuggestions = reranked
+                .Take(limit)
+                .ToList();
 
         if (finalSuggestions.Count == 0)
             return finalSuggestions;
@@ -573,7 +583,7 @@ public sealed class AiMatchingService(
             parts.Add("Position needed: " + string.Join(", ", positions));
         if (skillTags.Count > 0)
             parts.Add("Required skills: " + string.Join(", ", skillTags));
-        return string.Join(" | ", parts);
+        return string.Join(" - ", parts);
     }
 
     public async Task<AutoAssignTeamsResultDto> AutoAssignTeamsAsync(Guid currentUserId, AutoAssignTeamsRequest? request, CancellationToken ct)
@@ -749,7 +759,8 @@ public sealed class AiMatchingService(
                         groupState.Name,
                         AiRoleHelper.ToDisplayString(candidate.Role)));
 
-                    groupState.Apply(candidate.Role);
+                    var isHighGpa = pools.IsHighGpa(candidate.Profile);
+                    groupState.Apply(candidate.Role, isHighGpa);
                     limitRemaining--;
                     if (limitConfigured && limitRemaining == 0)
                         limitHit = true;
@@ -850,17 +861,32 @@ public sealed class AiMatchingService(
         if (pool.Count == 0)
             return null;
 
+        // GPA balancing: if this group already got a "high GPA" member,
+        // try to avoid selecting another high-GPA member when alternatives exist.
+        if (groupState.HighGpaAssignedCount > 0 && pools.HighGpaThreshold.HasValue)
+        {
+            var threshold = pools.HighGpaThreshold.Value;
+            var hasNonHigh = pool.Any(c => c.Profile.Gpa.HasValue && c.Profile.Gpa.Value < threshold);
+            if (hasNonHigh)
+                pool = pool.Where(c => !c.Profile.Gpa.HasValue || c.Profile.Gpa.Value < threshold).ToList();
+        }
+
         var candidates = pool.Select((c, i) =>
         {
             var tags = BuildSkillProfile(c.Profile).Tags.Take(8).ToList();
             var title = c.Profile.DisplayName;
+            var gpaText = BuildGpa10Line(c.Profile.Gpa);
+            var desiredPositionText = string.IsNullOrWhiteSpace(c.Profile.DesiredPositionName)
+                ? null
+                : $"Desired position: {c.Profile.DesiredPositionName}.";
             var text = BuildStructuredCandidateText(
                 title,
                 $"Role: {AiRoleHelper.ToDisplayString(AiRoleHelper.Parse(c.Profile.PrimaryRole))}.",
                 tags,
                 null,
                 null,
-                null);
+                null,
+                extraLines: new[] { gpaText, desiredPositionText });
 
             // neededRole is what the group needs next.
             var neededRole = needFe ? "frontend" : (needBe ? "backend" : "other");
@@ -1075,6 +1101,8 @@ public sealed class AiMatchingService(
         if (groups.Count == 0 && students.Count == 0)
             return (Array.Empty<GroupStaffingOptionDto>(), Array.Empty<StudentPlacementOptionDto>(), Array.Empty<StudentProfileSnapshot>());
 
+        var highGpaThresholdByMajor = ComputeHighGpaThresholdByMajor(students);
+
         var candidateStates = students
             .Select(s => new StudentCandidate(s, BuildSkillProfile(s), GetMajorName(s.MajorId, majors)))
             .ToDictionary(c => c.Snapshot.UserId, c => c);
@@ -1093,14 +1121,32 @@ public sealed class AiMatchingService(
             var slots = group.RemainingSlots;
             var suggestions = new List<GroupCandidateSuggestionDto>();
 
+            double? highThreshold = group.MajorId.HasValue && highGpaThresholdByMajor.TryGetValue(group.MajorId.Value, out var threshold)
+                ? threshold
+                : null;
+            var assignedHighCount = 0;
+
             while (slots > 0 && availablePool.Count > 0)
             {
-                var (index, score) = FindBestCandidate(availablePool, group, mutableMix);
+                var (index, score) = (assignedHighCount > 0 && highThreshold.HasValue)
+                    ? FindBestCandidate(
+                        availablePool,
+                        group,
+                        mutableMix,
+                        extraFilter: c => !c.Snapshot.Gpa.HasValue || c.Snapshot.Gpa.Value < highThreshold.Value)
+                    : FindBestCandidate(availablePool, group, mutableMix);
+
+                // If we filtered out high GPA but there was no eligible candidate, fallback to normal selection.
+                if (index < 0 && assignedHighCount > 0 && highThreshold.HasValue)
+                    (index, score) = FindBestCandidate(availablePool, group, mutableMix);
                 if (index < 0)
                     break;
 
                 var candidate = availablePool[index];
                 availablePool.RemoveAt(index);
+
+                if (highThreshold.HasValue && candidate.Snapshot.Gpa.HasValue && candidate.Snapshot.Gpa.Value >= highThreshold.Value)
+                    assignedHighCount++;
 
                 var reason = BuildCandidateReason(group, mutableMix, candidate.Profile, candidate.Snapshot, score);
                 suggestions.Add(new GroupCandidateSuggestionDto(
@@ -1108,6 +1154,8 @@ public sealed class AiMatchingService(
                     candidate.Snapshot.DisplayName,
                     candidate.Snapshot.MajorId,
                     candidate.MajorName,
+                    candidate.Snapshot.Gpa,
+                    candidate.Snapshot.DesiredPositionName,
                     AiRoleHelper.ToDisplayString(candidate.Profile.PrimaryRole),
                     candidate.Profile.Tags.Take(5).ToList(),
                     score,
@@ -1154,6 +1202,8 @@ public sealed class AiMatchingService(
                     student.DisplayName,
                     student.MajorId,
                     candidate.MajorName,
+                    student.Gpa,
+                    student.DesiredPositionName,
                     AiRoleHelper.ToDisplayString(candidate.Profile.PrimaryRole),
                     tags,
                     placement?.Score ?? 0,
@@ -1358,6 +1408,15 @@ public sealed class AiMatchingService(
         GroupOverviewSnapshot group,
         GroupRoleMixSnapshot mix)
     {
+        return FindBestCandidate(pool, group, mix, extraFilter: null);
+    }
+
+    private static (int Index, int Score) FindBestCandidate(
+        List<StudentCandidate> pool,
+        GroupOverviewSnapshot group,
+        GroupRoleMixSnapshot mix,
+        Func<StudentCandidate, bool>? extraFilter)
+    {
         var bestIndex = -1;
         var bestScore = int.MinValue;
 
@@ -1365,6 +1424,8 @@ public sealed class AiMatchingService(
         {
             var candidate = pool[i];
             if (group.MajorId.HasValue && candidate.Snapshot.MajorId != group.MajorId.Value)
+                continue;
+            if (extraFilter is not null && !extraFilter(candidate))
                 continue;
             var score = ScoreCandidateForGroup(candidate.Profile, candidate.Snapshot.MajorId, group, mix);
             if (score > bestScore)
@@ -1375,6 +1436,36 @@ public sealed class AiMatchingService(
         }
 
         return (bestIndex, bestScore);
+    }
+
+    private static Dictionary<Guid, double> ComputeHighGpaThresholdByMajor(IReadOnlyList<StudentProfileSnapshot> students)
+    {
+        // "High GPA" = 75th percentile within the major.
+        return students
+            .GroupBy(s => s.MajorId)
+            .Select(g => new
+            {
+                MajorId = g.Key,
+                Threshold = ComputeHighGpaThreshold(g.Select(s => s.Gpa))
+            })
+            .Where(x => x.Threshold.HasValue)
+            .ToDictionary(x => x.MajorId, x => x.Threshold!.Value);
+    }
+
+    private static double? ComputeHighGpaThreshold(IEnumerable<double?> gpas)
+    {
+        var list = gpas
+            .Where(x => x.HasValue)
+            .Select(x => x!.Value)
+            .OrderBy(x => x)
+            .ToList();
+
+        if (list.Count < 6)
+            return null;
+
+        var idx = (int)Math.Floor((list.Count - 1) * 0.75);
+        idx = Math.Clamp(idx, 0, list.Count - 1);
+        return list[idx];
     }
 
     private static int ScoreCandidateForGroup(
@@ -1408,7 +1499,7 @@ public sealed class AiMatchingService(
             reasons.Add("Kỹ năng: " + string.Join(", ", profile.Tags.Take(3)));
 
         // Heuristic baseline only; AI rerank will provide final score/reason.
-        return string.Join(" | ", reasons);
+        return string.Join(". ", reasons);
     }
 
     private static string BuildGroupIssueReason(
@@ -1489,7 +1580,7 @@ public sealed class AiMatchingService(
             reasons.Add("Topic còn trống");
         if (reasons.Count == 0)
             reasons.Add("Điểm AI " + suggestion.Score + "%");
-        return string.Join(" | ", reasons);
+        return string.Join(". ", reasons);
     }
 
     private static PaginatedCollection<T> Paginate<T>(IReadOnlyList<T> source, int page, int pageSize)
@@ -1769,11 +1860,11 @@ public sealed class AiMatchingService(
     {
         var builder = new StringBuilder();
         builder.Append(student.DisplayName);
-        builder.Append(" | Major: ").Append(targetMajorId?.ToString() ?? student.MajorId.ToString());
+        builder.Append(" - Major: ").Append(targetMajorId?.ToString() ?? student.MajorId.ToString());
         if (profile.PrimaryRole != AiPrimaryRole.Unknown)
-            builder.Append(" | Role: ").Append(AiRoleHelper.ToDisplayString(profile.PrimaryRole));
+            builder.Append(" - Role: ").Append(AiRoleHelper.ToDisplayString(profile.PrimaryRole));
         if (profile.HasTags)
-            builder.Append(" | Skills: ").Append(string.Join(", ", profile.Tags.Take(15)));
+            builder.Append(" - Skills: ").Append(string.Join(", ", profile.Tags.Take(15)));
         return builder.ToString();
     }
 
@@ -1782,13 +1873,13 @@ public sealed class AiMatchingService(
         var builder = new StringBuilder();
         builder.Append(groupName);
         if (profile.PrimaryRole != AiPrimaryRole.Unknown)
-            builder.Append(" | Primary need: ").Append(AiRoleHelper.ToDisplayString(profile.PrimaryRole));
+            builder.Append(" - Primary need: ").Append(AiRoleHelper.ToDisplayString(profile.PrimaryRole));
         if (profile.HasTags)
-            builder.Append(" | Skills: ").Append(string.Join(", ", profile.Tags.Take(15)));
+            builder.Append(" - Skills: ").Append(string.Join(", ", profile.Tags.Take(15)));
 
         if (mix is not null)
         {
-            builder.Append(" | Current mix: ")
+            builder.Append(" - Current mix: ")
                 .Append($"FE {mix.FrontendCount}, BE {mix.BackendCount}, Other {mix.OtherCount}");
         }
 
@@ -1805,22 +1896,24 @@ public sealed class AiMatchingService(
         var builder = new StringBuilder();
         builder.Append(groupName);
 
-        if (recruitmentPosts.Count > 0)
+        // If there are no recruitment posts, still describe role needs via the role mix,
+        // so the AI can compare profile posts against the group's missing roles.
+        if (recruitmentPosts.Count > 0 || (needsProfile.PrimaryRole != AiPrimaryRole.Unknown || needsProfile.HasTags))
         {
             if (needsProfile.PrimaryRole != AiPrimaryRole.Unknown)
-                builder.Append(" | Hiring need: ").Append(AiRoleHelper.ToDisplayString(needsProfile.PrimaryRole));
+                builder.Append(" - Hiring need: ").Append(AiRoleHelper.ToDisplayString(needsProfile.PrimaryRole));
             if (needsProfile.HasTags)
-                builder.Append(" | Required skills: ").Append(string.Join(", ", needsProfile.Tags.Take(15)));
+                builder.Append(" - Required skills: ").Append(string.Join(", ", needsProfile.Tags.Take(15)));
         }
 
         if (groupProfile.PrimaryRole != AiPrimaryRole.Unknown)
-            builder.Append(" | Team role: ").Append(AiRoleHelper.ToDisplayString(groupProfile.PrimaryRole));
+            builder.Append(" - Team role: ").Append(AiRoleHelper.ToDisplayString(groupProfile.PrimaryRole));
         if (groupProfile.HasTags)
-            builder.Append(" | Team skills: ").Append(string.Join(", ", groupProfile.Tags.Take(15)));
+            builder.Append(" - Team skills: ").Append(string.Join(", ", groupProfile.Tags.Take(15)));
 
         if (mix is not null)
         {
-            builder.Append(" | Current mix: ")
+            builder.Append(" - Current mix: ")
                 .Append($"FE {mix.FrontendCount}, BE {mix.BackendCount}, Other {mix.OtherCount}");
         }
 
@@ -1912,6 +2005,15 @@ public sealed class AiMatchingService(
             payload,
             metadata);
     }
+    private static string? BuildGpa10Line(double? gpaOn4)
+    {
+        if (!gpaOn4.HasValue)
+            return null;
+
+        var gpa4 = Math.Clamp(gpaOn4.Value, 0, 4);
+        var gpa10 = gpa4 * 2.5;
+        return $"GPA: {gpa10.ToString("0.00", CultureInfo.InvariantCulture)}/10.";
+    }
 
     private static string BuildStructuredCandidateText(
         string title,
@@ -1919,7 +2021,8 @@ public sealed class AiMatchingService(
         IEnumerable<string>? skills,
         string? roleNeeded,
         bool? canTakeMore,
-        IEnumerable<string>? matchingHighlights)
+        IEnumerable<string>? matchingHighlights,
+        IEnumerable<string?>? extraLines = null)
     {
         var normalizedSkills = NormalizeSkillTokens(skills).Take(35).ToList();
         var normalizedMatches = NormalizeSkillTokens(matchingHighlights).Take(15).ToList();
@@ -1938,11 +2041,19 @@ public sealed class AiMatchingService(
             summaryParts.Add(canTakeMore.Value ? "Slots available" : "At capacity");
         if (!string.IsNullOrWhiteSpace(summary))
             summaryParts.Add(summary);
-        var combinedSummary = string.Join(" | ", summaryParts.Where(part => !string.IsNullOrWhiteSpace(part)));
+        var combinedSummary = string.Join(" - ", summaryParts.Where(part => !string.IsNullOrWhiteSpace(part)));
 
         var builder = new StringBuilder();
         builder.AppendLine("SKILLS: " + (normalizedSkills.Count == 0 ? "n/a" : string.Join(", ", normalizedSkills)));
         builder.AppendLine("MATCHING_SKILLS: " + (normalizedMatches.Count == 0 ? "n/a" : string.Join(", ", normalizedMatches)));
+        if (extraLines is not null)
+        {
+            foreach (var line in extraLines)
+            {
+                if (!string.IsNullOrWhiteSpace(line))
+                    builder.AppendLine(line.Trim());
+            }
+        }
         builder.Append("SUMMARY: ").Append(combinedSummary);
         return builder.ToString();
     }
@@ -1956,7 +2067,11 @@ public sealed class AiMatchingService(
         string? needsText)
     {
         var primaryNeed = InferPrimaryNeedFromMix(mix);
-        var prefer = string.IsNullOrWhiteSpace(primaryNeed) ? Array.Empty<string>() : new[] { primaryNeed };
+        var prefer = string.IsNullOrWhiteSpace(primaryNeed)
+            ? Array.Empty<string>()
+            : (primaryNeed is "frontend" or "backend"
+                ? new[] { primaryNeed, "fullstack" }
+                : new[] { primaryNeed });
 
         var payload = new
         {
@@ -2042,11 +2157,17 @@ public sealed class AiMatchingService(
         // IMPORTANT: recruitment-post matching skills are deterministic overlap between
         // student skills and post requirements. Do not allow the LLM to overwrite them.
         var matches = suggestion.MatchingSkills;
+        var chosenReason = ChooseAiReason(
+            llmReason: reranked.Reason,
+            existingReason: suggestion.AiReason,
+            title: suggestion.Title,
+            description: suggestion.Description,
+            fallback: BuildRecruitmentFallbackReason(suggestion));
         var updated = suggestion with
         {
             // Use rerank finalScore as the displayed score (0-100) as requested.
             Score = NormalizeLlmScore(reranked.FinalScore),
-            AiReason = reranked.Reason ?? suggestion.AiReason,
+            AiReason = chosenReason,
             AiBalanceNote = reranked.BalanceNote ?? suggestion.AiBalanceNote,
             MatchingSkills = matches
         };
@@ -2062,10 +2183,16 @@ public sealed class AiMatchingService(
             return (suggestion, null);
 
         var matches = ChooseMatches(suggestion.MatchingSkills, reranked.MatchedSkills);
+        var chosenReason = ChooseAiReason(
+            llmReason: reranked.Reason,
+            existingReason: suggestion.AiReason,
+            title: suggestion.Title,
+            description: suggestion.Description,
+            fallback: BuildTopicFallbackReason(suggestion, matches));
         var updated = suggestion with
         {
             Score = NormalizeLlmScore(reranked.FinalScore),
-            AiReason = reranked.Reason ?? suggestion.AiReason,
+            AiReason = chosenReason,
             AiBalanceNote = reranked.BalanceNote ?? suggestion.AiBalanceNote,
             MatchingSkills = matches
         };
@@ -2081,10 +2208,16 @@ public sealed class AiMatchingService(
             return (suggestion, null);
 
         var matches = ChooseMatches(suggestion.MatchingSkills, reranked.MatchedSkills);
+        var chosenReason = ChooseAiReason(
+            llmReason: reranked.Reason,
+            existingReason: suggestion.AiReason,
+            title: suggestion.Title,
+            description: suggestion.Description,
+            fallback: BuildProfilePostFallbackReason(suggestion, matches));
         var updated = suggestion with
         {
             Score = NormalizeLlmScore(reranked.FinalScore),
-            AiReason = reranked.Reason ?? suggestion.AiReason,
+            AiReason = chosenReason,
             AiBalanceNote = reranked.BalanceNote ?? suggestion.AiBalanceNote,
             MatchingSkills = matches
         };
@@ -2129,11 +2262,20 @@ public sealed class AiMatchingService(
         for (var i = 0; i < candidates.Count; i++)
             candidateIdToKey[candidates[i].Id] = candidates[i].Key;
 
+        if (_llmClient is null)
+            return suggestionList;
+
         AiLlmRerankResponse response;
         try
         {
             var request = new AiLlmRerankRequest(queryType, queryText, candidates, context);
             response = await _llmClient.RerankAsync(request, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // If the client cancels (e.g., user clicks quickly and the UI aborts the previous call),
+            // do not return heuristic reasons as a "successful" response.
+            throw;
         }
         catch (Exception ex)
         {
@@ -2180,15 +2322,15 @@ public sealed class AiMatchingService(
 
         if (requireAiReason)
         {
-            // Only keep items that the gateway returned (so every item has AI reason).
+            // Only keep items that the gateway returned (so the batch is comparable).
+            // Do not drop items just because reason text is missing/low-quality.
             updatedList = updatedList
                 .Where(item =>
                 {
                     var id = idSelector(item.Item);
                     return candidateIdToKey.TryGetValue(id, out var key)
                            && key is not null
-                           && lookup.TryGetValue(key, out var rr)
-                           && !string.IsNullOrWhiteSpace(rr.Reason);
+                           && lookup.ContainsKey(key);
                 })
                 .ToList();
         }
@@ -2271,7 +2413,14 @@ public sealed class AiMatchingService(
                         m.SkillTags,
                         m.PrimaryRole,
                         null,
-                        null),
+                        null,
+                        extraLines: new[]
+                        {
+                            BuildGpa10Line(m.Gpa),
+                            string.IsNullOrWhiteSpace(m.DesiredPositionName)
+                                ? null
+                                : $"Desired position: {m.DesiredPositionName}."
+                        }),
                     Metadata: BuildMetadata(
                         ("groupId", group.GroupId.ToString()),
                         // AiLlmClient maps metadata.score -> baselineScore for gateway.
@@ -2391,6 +2540,103 @@ public sealed class AiMatchingService(
             .ToList();
 
         return canonical.Count == 0 ? fallback : canonical;
+    }
+
+    private static string? ChooseAiReason(
+        string? llmReason,
+        string? existingReason,
+        string? title,
+        string? description,
+        string? fallback)
+    {
+        if (!IsBadAiReason(llmReason, title, description))
+            return llmReason;
+
+        if (!string.IsNullOrWhiteSpace(existingReason))
+            return existingReason;
+
+        return fallback;
+    }
+
+    private static bool IsBadAiReason(string? reason, string? title, string? description)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+            return true;
+
+        var r = reason.Trim();
+
+        // Common fallback format from snippet builders: "Title | Role: ... | ...".
+        if (r.Contains(" | ", StringComparison.Ordinal))
+        {
+            if (r.Contains("Role:", StringComparison.OrdinalIgnoreCase)
+                || r.Contains("Major:", StringComparison.OrdinalIgnoreCase)
+                || r.Contains("NeededRole:", StringComparison.OrdinalIgnoreCase)
+                || r.Contains("GroupFrontend", StringComparison.OrdinalIgnoreCase)
+                || r.Contains("GroupBackend", StringComparison.OrdinalIgnoreCase)
+                || r.Contains("GroupOther", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(description))
+        {
+            var d = description.Trim();
+            if (d.Length > 0)
+            {
+                if (string.Equals(r, d, StringComparison.OrdinalIgnoreCase))
+                    return true;
+
+                // If it contains the entire description verbatim, it's not a "reason".
+                if (d.Length >= 40 && r.Contains(d, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(title))
+        {
+            var t = title.Trim();
+            if (t.Length > 0 && r.StartsWith(t, StringComparison.OrdinalIgnoreCase) && r.Contains(" | ", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static string BuildProfilePostFallbackReason(ProfilePostSuggestionDto suggestion, IReadOnlyList<string> matches)
+    {
+        var parts = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(suggestion.PrimaryRole))
+            parts.Add($"Vai trò phù hợp: {suggestion.PrimaryRole}.");
+
+        var matchList = matches.Where(x => !string.IsNullOrWhiteSpace(x)).Take(5).ToList();
+        if (matchList.Count > 0)
+            parts.Add("Kỹ năng trùng: " + string.Join(", ", matchList) + ".");
+
+        return parts.Count == 0 ? "Phù hợp với nhu cầu hiện tại của nhóm." : string.Join(" ", parts);
+    }
+
+    private static string BuildRecruitmentFallbackReason(RecruitmentPostSuggestionDto suggestion)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(suggestion.PositionNeeded))
+            parts.Add($"Nhóm đang cần vị trí: {suggestion.PositionNeeded}.");
+
+        var ms = suggestion.MatchingSkills.Where(x => !string.IsNullOrWhiteSpace(x)).Take(5).ToList();
+        if (ms.Count > 0)
+            parts.Add("Kỹ năng trùng: " + string.Join(", ", ms) + ".");
+
+        return parts.Count == 0 ? "Phù hợp với nhu cầu tuyển thành viên của nhóm." : string.Join(" ", parts);
+    }
+
+    private static string BuildTopicFallbackReason(TopicSuggestionDto suggestion, IReadOnlyList<string> matches)
+    {
+        var parts = new List<string>();
+        var ms = matches.Where(x => !string.IsNullOrWhiteSpace(x)).Take(5).ToList();
+        if (ms.Count > 0)
+            parts.Add("Kỹ năng phù hợp: " + string.Join(", ", ms) + ".");
+        if (suggestion.CanTakeMore)
+            parts.Add("Mentor vẫn còn có thể nhận thêm nhóm.");
+        return parts.Count == 0 ? "Topic phù hợp với nhu cầu và kỹ năng của nhóm." : string.Join(" ", parts);
     }
 
     private static IReadOnlyDictionary<string, string>? BuildLlmContext(params (string Key, string? Value)[] entries)
@@ -2735,13 +2981,35 @@ public sealed class AiMatchingService(
         var needsFrontend = mix.FrontendCount == 0;
         var needsBackend = mix.BackendCount == 0;
         var role = candidateProfile.PrimaryRole;
-        var roleScore = role switch
+
+        var searchable = string.Join(" ", new[]
         {
-            AiPrimaryRole.Frontend when needsFrontend => 40,
-            AiPrimaryRole.Backend when needsBackend => 40,
-            AiPrimaryRole.Unknown => 15,
-            _ => 20
-        };
+            post.Title,
+            post.Description,
+            post.SkillsText
+        }.Where(x => !string.IsNullOrWhiteSpace(x))).ToLowerInvariant();
+        var isFullStack = searchable.Contains("fullstack")
+                          || searchable.Contains("full stack")
+                          || searchable.Contains("full-stack");
+
+        var roleScore = 20;
+        if (needsFrontend || needsBackend)
+        {
+            if (isFullStack && (needsFrontend || needsBackend))
+                roleScore = 40;
+            else if (role == AiPrimaryRole.Frontend && needsFrontend)
+                roleScore = 40;
+            else if (role == AiPrimaryRole.Backend && needsBackend)
+                roleScore = 40;
+            else if (role == AiPrimaryRole.Unknown)
+                roleScore = 15;
+            else
+                roleScore = 10;
+        }
+        else if (role == AiPrimaryRole.Unknown)
+        {
+            roleScore = 12;
+        }
 
         var overlapScore = Math.Min(matchingSkills.Count, 5) * 12;
         var recencyDays = Math.Clamp((int)(DateTime.UtcNow - post.CreatedAt).TotalDays, 0, 30);
@@ -2752,6 +3020,35 @@ public sealed class AiMatchingService(
             return null;
 
         var normalizedScore = NormalizeScoreToPercent(totalScore, ProfileScoreThreshold, ProfileScoreMax);
+        var displayRole = isFullStack
+            ? "fullstack"
+            : AiRoleHelper.ToDisplayString(role);
+
+        var inferredNeeds = new List<string>(2);
+        if (needsFrontend)
+            inferredNeeds.Add("frontend");
+        if (needsBackend)
+            inferredNeeds.Add("backend");
+
+        var reasonParts = new List<string>(3);
+        if (inferredNeeds.Count > 0)
+        {
+            // If group is missing FE/BE, explicitly call out that match.
+            if (isFullStack || (needsFrontend && role == AiPrimaryRole.Frontend) || (needsBackend && role == AiPrimaryRole.Backend))
+                reasonParts.Add($"Nhóm đang thiếu {string.Join("/", inferredNeeds)}; vai trò {displayRole} phù hợp.");
+            else
+                reasonParts.Add($"Nhóm đang thiếu {string.Join("/", inferredNeeds)}; ưu tiên các hồ sơ đúng vai trò hoặc fullstack.");
+        }
+        else if (!string.IsNullOrWhiteSpace(displayRole))
+        {
+            reasonParts.Add($"Vai trò: {displayRole}.");
+        }
+
+        if (matchingSkills.Count > 0)
+            reasonParts.Add($"Kỹ năng trùng: {string.Join(", ", matchingSkills.Take(6))}.");
+
+        var heuristicReason = reasonParts.Count == 0 ? null : string.Join(" ", reasonParts);
+
         return new ProfilePostSuggestionDto(
             post.PostId,
             post.OwnerUserId,
@@ -2762,8 +3059,11 @@ public sealed class AiMatchingService(
             post.CreatedAt,
             normalizedScore,
             post.SkillsText,
-            AiRoleHelper.ToDisplayString(role),
-            matchingSkills);
+            displayRole,
+            matchingSkills)
+        {
+            AiReason = heuristicReason
+        };
     }
 
     private static int ScoreRoleMatch(AiPrimaryRole studentRole, AiPrimaryRole requiredRole, string? textHint)
@@ -2837,37 +3137,70 @@ public sealed class AiMatchingService(
 
     private sealed class RolePools
     {
-        private readonly Queue<StudentProfileSnapshot> _frontend;
-        private readonly Queue<StudentProfileSnapshot> _backend;
-        private readonly Queue<StudentProfileSnapshot> _others;
+        // GPA balancing goal: spread high-GPA students across groups
+        // so a single group doesn't receive all high-GPA members.
+        private readonly double? _highGpaThreshold;
+
+        private readonly Queue<StudentProfileSnapshot> _frontendHigh;
+        private readonly Queue<StudentProfileSnapshot> _frontendMid;
+        private readonly Queue<StudentProfileSnapshot> _frontendLow;
+
+        private readonly Queue<StudentProfileSnapshot> _backendHigh;
+        private readonly Queue<StudentProfileSnapshot> _backendMid;
+        private readonly Queue<StudentProfileSnapshot> _backendLow;
+
+        private readonly Queue<StudentProfileSnapshot> _othersHigh;
+        private readonly Queue<StudentProfileSnapshot> _othersMid;
+        private readonly Queue<StudentProfileSnapshot> _othersLow;
 
         public RolePools(IEnumerable<StudentProfileSnapshot> students)
         {
-            _frontend = new Queue<StudentProfileSnapshot>();
-            _backend = new Queue<StudentProfileSnapshot>();
-            _others = new Queue<StudentProfileSnapshot>();
+            var list = students.ToList();
+            _highGpaThreshold = ComputeHighGpaThreshold(list);
 
-            foreach (var student in students)
+            _frontendHigh = new Queue<StudentProfileSnapshot>();
+            _frontendMid = new Queue<StudentProfileSnapshot>();
+            _frontendLow = new Queue<StudentProfileSnapshot>();
+
+            _backendHigh = new Queue<StudentProfileSnapshot>();
+            _backendMid = new Queue<StudentProfileSnapshot>();
+            _backendLow = new Queue<StudentProfileSnapshot>();
+
+            _othersHigh = new Queue<StudentProfileSnapshot>();
+            _othersMid = new Queue<StudentProfileSnapshot>();
+            _othersLow = new Queue<StudentProfileSnapshot>();
+
+            foreach (var student in list)
             {
+                var tier = ClassifyGpa(student.Gpa, _highGpaThreshold);
                 switch (AiRoleHelper.Parse(student.PrimaryRole))
                 {
                     case AiPrimaryRole.Frontend:
-                        _frontend.Enqueue(student);
+                        EnqueueTiered(_frontendHigh, _frontendMid, _frontendLow, student, tier);
                         break;
                     case AiPrimaryRole.Backend:
-                        _backend.Enqueue(student);
+                        EnqueueTiered(_backendHigh, _backendMid, _backendLow, student, tier);
                         break;
                     default:
-                        _others.Enqueue(student);
+                        EnqueueTiered(_othersHigh, _othersMid, _othersLow, student, tier);
                         break;
                 }
             }
         }
 
-        public int RemainingCount => _frontend.Count + _backend.Count + _others.Count;
-        public bool HasFrontendCandidates => _frontend.Count > 0;
-        public bool HasBackendCandidates => _backend.Count > 0;
-        public bool HasOtherCandidates => _others.Count > 0;
+        public int RemainingCount =>
+            _frontendHigh.Count + _frontendMid.Count + _frontendLow.Count
+            + _backendHigh.Count + _backendMid.Count + _backendLow.Count
+            + _othersHigh.Count + _othersMid.Count + _othersLow.Count;
+
+        public double? HighGpaThreshold => _highGpaThreshold;
+
+        public bool IsHighGpa(StudentProfileSnapshot profile)
+            => _highGpaThreshold.HasValue && profile.Gpa.HasValue && profile.Gpa.Value >= _highGpaThreshold.Value;
+
+        public bool HasFrontendCandidates => _frontendHigh.Count + _frontendMid.Count + _frontendLow.Count > 0;
+        public bool HasBackendCandidates => _backendHigh.Count + _backendMid.Count + _backendLow.Count > 0;
+        public bool HasOtherCandidates => _othersHigh.Count + _othersMid.Count + _othersLow.Count > 0;
 
         public CandidateSelection? DequeueForGroup(GroupAssignmentState group)
         {
@@ -2880,7 +3213,7 @@ public sealed class AiMatchingService(
 
             if (priorityRole.HasValue)
             {
-                var pick = Dequeue(priorityRole.Value);
+                var pick = Dequeue(priorityRole.Value, group);
                 if (pick is not null)
                     return pick;
             }
@@ -2888,39 +3221,55 @@ public sealed class AiMatchingService(
             return DequeueLargest();
         }
 
-        private CandidateSelection? Dequeue(AiPrimaryRole desired)
+        private CandidateSelection? Dequeue(AiPrimaryRole desired, GroupAssignmentState group)
         {
+            var avoidHigh = group.HighGpaAssignedCount > 0;
+
             return desired switch
             {
-                AiPrimaryRole.Frontend when _frontend.Count > 0 => new CandidateSelection(_frontend.Dequeue(), AiPrimaryRole.Frontend),
-                AiPrimaryRole.Backend when _backend.Count > 0 => new CandidateSelection(_backend.Dequeue(), AiPrimaryRole.Backend),
-                AiPrimaryRole.Other when _others.Count > 0 => new CandidateSelection(_others.Dequeue(), AiPrimaryRole.Other),
+                AiPrimaryRole.Frontend => DequeueTiered(_frontendHigh, _frontendMid, _frontendLow, AiPrimaryRole.Frontend, avoidHigh),
+                AiPrimaryRole.Backend => DequeueTiered(_backendHigh, _backendMid, _backendLow, AiPrimaryRole.Backend, avoidHigh),
+                AiPrimaryRole.Other => DequeueTiered(_othersHigh, _othersMid, _othersLow, AiPrimaryRole.Other, avoidHigh),
                 _ => null
             };
         }
 
         private CandidateSelection? DequeueLargest()
         {
-            if (_frontend.Count >= _backend.Count && _frontend.Count > 0)
-                return new CandidateSelection(_frontend.Dequeue(), AiPrimaryRole.Frontend);
-            if (_backend.Count > 0)
-                return new CandidateSelection(_backend.Dequeue(), AiPrimaryRole.Backend);
-            return _others.Count > 0 ? new CandidateSelection(_others.Dequeue(), AiPrimaryRole.Other) : null;
+            var feCount = _frontendHigh.Count + _frontendMid.Count + _frontendLow.Count;
+            var beCount = _backendHigh.Count + _backendMid.Count + _backendLow.Count;
+            var otherCount = _othersHigh.Count + _othersMid.Count + _othersLow.Count;
+
+            if (feCount >= beCount && feCount >= otherCount && feCount > 0)
+                return DequeueTiered(_frontendHigh, _frontendMid, _frontendLow, AiPrimaryRole.Frontend, avoidHigh: false);
+
+            if (beCount >= otherCount && beCount > 0)
+                return DequeueTiered(_backendHigh, _backendMid, _backendLow, AiPrimaryRole.Backend, avoidHigh: false);
+
+            return otherCount > 0
+                ? DequeueTiered(_othersHigh, _othersMid, _othersLow, AiPrimaryRole.Other, avoidHigh: false)
+                : null;
         }
 
         public IEnumerable<Guid> RemainingStudentIds
-            => _frontend.Select(s => s.UserId)
-                .Concat(_backend.Select(s => s.UserId))
-                .Concat(_others.Select(s => s.UserId));
+            => _frontendHigh.Select(s => s.UserId)
+                .Concat(_frontendMid.Select(s => s.UserId))
+                .Concat(_frontendLow.Select(s => s.UserId))
+                .Concat(_backendHigh.Select(s => s.UserId))
+                .Concat(_backendMid.Select(s => s.UserId))
+                .Concat(_backendLow.Select(s => s.UserId))
+                .Concat(_othersHigh.Select(s => s.UserId))
+                .Concat(_othersMid.Select(s => s.UserId))
+                .Concat(_othersLow.Select(s => s.UserId));
 
         public IEnumerable<StudentProfileSnapshot> PeekFrontend(int max)
-            => _frontend.Take(Math.Max(0, max));
+            => _frontendHigh.Concat(_frontendMid).Concat(_frontendLow).Take(Math.Max(0, max));
 
         public IEnumerable<StudentProfileSnapshot> PeekBackend(int max)
-            => _backend.Take(Math.Max(0, max));
+            => _backendHigh.Concat(_backendMid).Concat(_backendLow).Take(Math.Max(0, max));
 
         public IEnumerable<StudentProfileSnapshot> PeekOther(int max)
-            => _others.Take(Math.Max(0, max));
+            => _othersHigh.Concat(_othersMid).Concat(_othersLow).Take(Math.Max(0, max));
 
         public CandidateSelection? DequeueSpecific(Guid userId)
         {
@@ -2954,9 +3303,87 @@ public sealed class AiMatchingService(
                 return result;
             }
 
-            return TakeFromQueue(_frontend, AiPrimaryRole.Frontend)
-                   ?? TakeFromQueue(_backend, AiPrimaryRole.Backend)
-                   ?? TakeFromQueue(_others, AiPrimaryRole.Other);
+            return TakeFromQueue(_frontendHigh, AiPrimaryRole.Frontend)
+                   ?? TakeFromQueue(_frontendMid, AiPrimaryRole.Frontend)
+                   ?? TakeFromQueue(_frontendLow, AiPrimaryRole.Frontend)
+                   ?? TakeFromQueue(_backendHigh, AiPrimaryRole.Backend)
+                   ?? TakeFromQueue(_backendMid, AiPrimaryRole.Backend)
+                   ?? TakeFromQueue(_backendLow, AiPrimaryRole.Backend)
+                   ?? TakeFromQueue(_othersHigh, AiPrimaryRole.Other)
+                   ?? TakeFromQueue(_othersMid, AiPrimaryRole.Other)
+                   ?? TakeFromQueue(_othersLow, AiPrimaryRole.Other);
+        }
+
+        private enum GpaTier
+        {
+            Low,
+            Mid,
+            High
+        }
+
+        private static void EnqueueTiered(
+            Queue<StudentProfileSnapshot> high,
+            Queue<StudentProfileSnapshot> mid,
+            Queue<StudentProfileSnapshot> low,
+            StudentProfileSnapshot student,
+            GpaTier tier)
+        {
+            switch (tier)
+            {
+                case GpaTier.High:
+                    high.Enqueue(student);
+                    break;
+                case GpaTier.Low:
+                    low.Enqueue(student);
+                    break;
+                default:
+                    mid.Enqueue(student);
+                    break;
+            }
+        }
+
+        private static CandidateSelection? DequeueTiered(
+            Queue<StudentProfileSnapshot> high,
+            Queue<StudentProfileSnapshot> mid,
+            Queue<StudentProfileSnapshot> low,
+            AiPrimaryRole role,
+            bool avoidHigh)
+        {
+            if (!avoidHigh && high.Count > 0)
+                return new CandidateSelection(high.Dequeue(), role);
+            if (mid.Count > 0)
+                return new CandidateSelection(mid.Dequeue(), role);
+            if (low.Count > 0)
+                return new CandidateSelection(low.Dequeue(), role);
+            return high.Count > 0 ? new CandidateSelection(high.Dequeue(), role) : null;
+        }
+
+        private static double? ComputeHighGpaThreshold(IReadOnlyList<StudentProfileSnapshot> students)
+        {
+            var gpas = students
+                .Select(s => s.Gpa)
+                .Where(x => x.HasValue)
+                .Select(x => x!.Value)
+                .OrderBy(x => x)
+                .ToList();
+
+            if (gpas.Count < 6)
+                return null;
+
+            var idx = (int)Math.Floor((gpas.Count - 1) * 0.75);
+            idx = Math.Clamp(idx, 0, gpas.Count - 1);
+            return gpas[idx];
+        }
+
+        private static GpaTier ClassifyGpa(double? gpa, double? highThreshold)
+        {
+            if (!gpa.HasValue || !highThreshold.HasValue)
+                return GpaTier.Mid;
+
+            if (gpa.Value >= highThreshold.Value)
+                return GpaTier.High;
+
+            return gpa.Value <= Math.Max(0, highThreshold.Value - 1.0) ? GpaTier.Low : GpaTier.Mid;
         }
     }
 
@@ -2990,6 +3417,8 @@ public sealed class AiMatchingService(
         public int FrontendCount => _mix.FrontendCount;
         public int BackendCount => _mix.BackendCount;
         public int OtherCount => _mix.OtherCount;
+
+        public int HighGpaAssignedCount { get; private set; }
 
         public bool TryExpand(int policyMax, int desiredSlots)
         {
@@ -3030,11 +3459,14 @@ public sealed class AiMatchingService(
             CapacityDirty = true;
         }
 
-        public void Apply(AiPrimaryRole role)
+        public void Apply(AiPrimaryRole role, bool isHighGpa)
         {
             if (RemainingSlots > 0)
                 RemainingSlots--;
             CurrentMembers++;
+
+            if (isHighGpa)
+                HighGpaAssignedCount++;
 
             _mix = role switch
             {

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Teammy.Application.Common.Interfaces;
+using Teammy.Application.Files;
 using Teammy.Application.Topics.Dtos;
 
 namespace Teammy.Application.Topics.Services
@@ -16,19 +17,22 @@ namespace Teammy.Application.Topics.Services
         private readonly ITopicImportService _excel;
         private readonly IMentorLookupService _mentorLookup;
         private readonly ITopicMentorService _topicMentorService;
+        private readonly IFileStorage _fileStorage;
 
         public TopicsService(
             ITopicReadOnlyQueries read,
             ITopicWriteRepository write,
             ITopicImportService excel,
             IMentorLookupService mentorLookup,
-            ITopicMentorService topicMentorService)
+            ITopicMentorService topicMentorService,
+            IFileStorage fileStorage)
         {
             _read = read;
             _write = write;
             _excel = excel;
             _mentorLookup = mentorLookup;
             _topicMentorService = topicMentorService;
+            _fileStorage = fileStorage;
         }
 
         public Task<IReadOnlyList<TopicListItemDto>> GetAllAsync(
@@ -87,6 +91,27 @@ namespace Teammy.Application.Topics.Services
 
         public Task<TopicImportResult> ImportAsync(Guid currentUserId, Stream s, CancellationToken ct)
             => _excel.ImportAsync(s, currentUserId, ct);
+
+        public async Task ReplaceRegistrationFileAsync(
+            Guid topicId,
+            Stream content,
+            string originalFileName,
+            CancellationToken ct)
+        {
+            if (content is null) throw new ArgumentNullException(nameof(content));
+            if (string.IsNullOrWhiteSpace(originalFileName))
+                throw new ArgumentException("FileName is required", nameof(originalFileName));
+
+            // Spec: if there is an old file, delete it first.
+            var oldUrl = await _write.GetRegistrationFileUrlAsync(topicId, ct);
+            if (!string.IsNullOrWhiteSpace(oldUrl))
+                await _fileStorage.DeleteAsync(oldUrl!, ct);
+
+            var safeName = originalFileName.Trim();
+            var uploadPath = $"topics/registration/{topicId:N}/{safeName}";
+            var (fileUrl, fileType, fileSize) = await _fileStorage.SaveAsync(content, uploadPath, ct);
+            await _write.SetRegistrationFileAsync(topicId, fileUrl, safeName, fileType, fileSize, ct);
+        }
 
         public Task<TopicImportValidationResult> ValidateImportAsync(
             TopicImportValidationRequest request,

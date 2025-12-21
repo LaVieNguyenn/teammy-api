@@ -21,6 +21,7 @@ public sealed class UsersController : ControllerBase
     private readonly IGroupReadOnlyQueries _groups;
     private readonly IUserWriteRepository _userWrite;
     private readonly IRoleReadOnlyQueries _roles;
+    private readonly IPositionReadOnlyQueries _positions;
     private readonly UserProfileService _profileService;
 
     public UsersController(
@@ -28,12 +29,14 @@ public sealed class UsersController : ControllerBase
         IGroupReadOnlyQueries groups,
         IUserWriteRepository userWrite,
         IRoleReadOnlyQueries roles,
+        IPositionReadOnlyQueries positions,
         UserProfileService profileService)
     {
         _users = users;
         _groups = groups;
         _userWrite = userWrite;
         _roles = roles;
+        _positions = positions;
         _profileService = profileService;
     }
 
@@ -71,6 +74,15 @@ public sealed class UsersController : ControllerBase
     {
         var dto = await _profileService.UpdateProfileAsync(GetCurrentUserId(), request, ct);
         return Ok(dto);
+    }
+
+    [HttpGet("positions")]
+    [Authorize]
+    public async Task<IActionResult> ListPositionsByMajor([FromQuery] Guid majorId, CancellationToken ct)
+    {
+        if (majorId == Guid.Empty) return BadRequest("majorId is required");
+        var list = await _positions.ListByMajorAsync(majorId, ct);
+        return Ok(list.Select(x => new { x.PositionId, x.PositionName }));
     }
 
     [HttpPost("me/avatar")]
@@ -176,12 +188,31 @@ public sealed class UsersController : ControllerBase
         if (!roleId.HasValue)
             return BadRequest("Invalid role.");
 
+        if (request.Gpa.HasValue && request.Gpa.Value < 0)
+            return BadRequest("GPA must be >= 0.");
+
+        if (request.Gpa.HasValue && request.Gpa.Value > 4)
+            return BadRequest("GPA must be <= 4.");
+
+        Guid? desiredPositionId = null;
+        if (!string.IsNullOrWhiteSpace(request.Position))
+        {
+            if (!request.MajorId.HasValue)
+                return BadRequest("MajorId is required when Position is provided.");
+
+            desiredPositionId = await _positions.FindPositionIdByNameAsync(request.MajorId.Value, request.Position!, ct);
+            if (!desiredPositionId.HasValue)
+                return BadRequest("Position not found for the given MajorId.");
+        }
+
         var userId = await _userWrite.CreateUserAsync(
             request.Email,
             request.DisplayName,
             request.StudentCode,
             request.Gender,
             request.MajorId,
+            request.Gpa,
+            desiredPositionId,
             ct);
 
         await _userWrite.SetSingleRoleAsync(userId, roleId.Value, ct);

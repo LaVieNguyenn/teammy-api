@@ -40,6 +40,8 @@ public partial class AppDbContext : DbContext
 
     public virtual DbSet<major> majors { get; set; }
 
+    public virtual DbSet<position_list> position_lists { get; set; }
+
     public virtual DbSet<message> messages { get; set; }
 
     public virtual DbSet<milestone> milestones { get; set; }

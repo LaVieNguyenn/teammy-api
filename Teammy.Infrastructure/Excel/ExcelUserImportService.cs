@@ -1,4 +1,5 @@
 using System.Net.Mail;
+using System.Globalization;
 using ClosedXML.Excel;
 using Microsoft.EntityFrameworkCore;
 using Teammy.Application.Common.Interfaces;
@@ -9,10 +10,11 @@ namespace Teammy.Infrastructure.Excel;
 public sealed class ExcelUserImportService(
     IUserWriteRepository userWriteRepo,
     IRoleReadOnlyQueries roleQueries,
-    IMajorReadOnlyQueries majorQueries
+    IMajorReadOnlyQueries majorQueries,
+    IEmailSender emailSender
 ) : IUserImportService
 {
-    private static readonly string[] Headers = { "Email","DisplayName","Role","MajorName","Gender","StudentCode" };
+    private static readonly string[] Headers = { "Email","DisplayName","Role","MajorName","Gender","StudentCode","GPA" };
     private static readonly HashSet<string> AllowedGenders = new(StringComparer.OrdinalIgnoreCase)
     {
         "male",
@@ -34,8 +36,8 @@ public sealed class ExcelUserImportService(
         for (int i = 0; i < Headers.Length; i++)
             ws.Cell(1, i + 1).Value = Headers[i];
 
-        ws.Range("A1:F1").Style.Font.Bold = true;
-        ws.Columns(1, 6).Width = 28;
+        ws.Range("A1:G1").Style.Font.Bold = true;
+        ws.Columns(1, 7).Width = 28;
 
         // Sample rows
         ws.Cell(2, 1).Value = "alice@example.com";
@@ -44,6 +46,7 @@ public sealed class ExcelUserImportService(
         ws.Cell(2, 4).Value = majors.FirstOrDefault() ?? "";
         ws.Cell(2, 5).Value = "female";
         ws.Cell(2, 6).Value = "SE150001";
+        ws.Cell(2, 7).Value = 3.2;
 
         ws.Cell(3, 1).Value = "bob@example.com";
         ws.Cell(3, 2).Value = "Bob Tran";
@@ -51,6 +54,7 @@ public sealed class ExcelUserImportService(
         ws.Cell(3, 4).Value = "";
         ws.Cell(3, 5).Value = "male";
         ws.Cell(3, 6).Value = "";
+        ws.Cell(3, 7).Value = "";
 
         // Lookups
         lookup.Cell(1,1).Value = "Roles";
@@ -100,6 +104,61 @@ public sealed class ExcelUserImportService(
             string major = ws.Cell(r,4).GetString().Trim();
             string gender= ws.Cell(r,5).GetString().Trim();
             string code  = ws.Cell(r,6).GetString().Trim();
+            var gpaCell = ws.Cell(r, 7);
+
+            double? gpa = null;
+
+            // GPA parsing notes:
+            // - Excel numeric cells should be read as numbers (culture-independent)
+            // - String cells may contain either decimal dot (3.5) or decimal comma (3,5)
+            // - We must NOT parse decimal comma as thousands separator ("3,5" -> 35)
+            if (!gpaCell.IsEmpty())
+            {
+                if (gpaCell.TryGetValue<double>(out var numericGpa))
+                {
+                    if (numericGpa < 0)
+                    {
+                        errors.Add(new ImportUsersError(r, "GPA must be >= 0"));
+                        continue;
+                    }
+
+                    if (numericGpa > 4)
+                    {
+                        errors.Add(new ImportUsersError(r, "GPA must be <= 4"));
+                        continue;
+                    }
+
+                    gpa = numericGpa;
+                }
+                else
+                {
+                    var gpaRaw = gpaCell.GetString().Trim();
+                    if (!string.IsNullOrWhiteSpace(gpaRaw))
+                    {
+                        if (TryParseDoubleFlexible(gpaRaw, out var parsedGpa))
+                        {
+                            if (parsedGpa < 0)
+                            {
+                                errors.Add(new ImportUsersError(r, "GPA must be >= 0"));
+                                continue;
+                            }
+
+                            if (parsedGpa > 4)
+                            {
+                                errors.Add(new ImportUsersError(r, "GPA must be <= 4"));
+                                continue;
+                            }
+
+                            gpa = parsedGpa;
+                        }
+                        else
+                        {
+                            errors.Add(new ImportUsersError(r, "GPA format is invalid"));
+                            continue;
+                        }
+                    }
+                }
+            }
 
             if (string.IsNullOrWhiteSpace(email) && string.IsNullOrWhiteSpace(name)) continue; // skip empty row
 
@@ -131,7 +190,8 @@ public sealed class ExcelUserImportService(
                 role,
                 string.IsNullOrWhiteSpace(major) ? null : major,
                 string.IsNullOrWhiteSpace(gender) ? null : gender.ToLowerInvariant(),
-                string.IsNullOrWhiteSpace(code) ? null : code
+                string.IsNullOrWhiteSpace(code) ? null : code,
+                gpa
             ));
         }
 
@@ -187,9 +247,22 @@ public sealed class ExcelUserImportService(
                 studentCode: row.StudentCode,
                 gender: row.Gender,
                 majorId: majorId,
+                gpa: row.Gpa,
+                desiredPositionId: null,
                 ct: ct);
 
             await userWriteRepo.AssignRoleAsync(userId, roleId.Value, ct);
+
+            var subject = "TEAMMY - Your account is ready";
+            var html = $"""
+<p>Hello {System.Net.WebUtility.HtmlEncode(row.DisplayName)},</p>
+<p>Your TEAMMY account has been created with this email: <b>{System.Net.WebUtility.HtmlEncode(row.Email)}</b>.</p>
+<p>Please login to TEAMMY to complete your profile.</p>
+""";
+            var sent = await emailSender.SendAsync(row.Email, subject, html, ct);
+            if (!sent)
+                errors.Add(new ImportUsersError(-1, $"Email failed to send (email: {row.Email})"));
+
             created++;
         }
 
@@ -231,13 +304,15 @@ public sealed class ExcelUserImportService(
             string major = row?.MajorName?.Trim() ?? string.Empty;
             string gender = row?.Gender?.Trim() ?? string.Empty;
             string studentCode = row?.StudentCode?.Trim() ?? string.Empty;
+            var gpa = row?.Gpa;
 
             bool rowIsEmpty = string.IsNullOrWhiteSpace(email)
                               && string.IsNullOrWhiteSpace(displayName)
                               && string.IsNullOrWhiteSpace(role)
                               && string.IsNullOrWhiteSpace(major)
                               && string.IsNullOrWhiteSpace(gender)
-                              && string.IsNullOrWhiteSpace(studentCode);
+                              && string.IsNullOrWhiteSpace(studentCode)
+                              && gpa is null;
 
             if (rowIsEmpty)
             {
@@ -248,6 +323,7 @@ public sealed class ExcelUserImportService(
                 columns.Add(new UserColumnValidation("MajorName", false, emptyMessage));
                 columns.Add(new UserColumnValidation("Gender", false, emptyMessage));
                 columns.Add(new UserColumnValidation("StudentCode", false, emptyMessage));
+                columns.Add(new UserColumnValidation("GPA", false, emptyMessage));
                 messages.Add("Row has no data");
                 invalidCount++;
                 results.Add(new UserImportRowValidation(rowNumber, false, columns, messages));
@@ -340,6 +416,23 @@ public sealed class ExcelUserImportService(
             string? studentCodeError = studentCodeValid ? null : "StudentCode must be <= 30 characters";
             columns.Add(new UserColumnValidation("StudentCode", studentCodeValid, studentCodeError));
 
+            bool gpaValid = true;
+            string? gpaError = null;
+            if (gpa is not null)
+            {
+                if (gpa < 0)
+                {
+                    gpaValid = false;
+                    gpaError = "GPA must be >= 0";
+                }
+                else if (gpa > 4)
+                {
+                    gpaValid = false;
+                    gpaError = "GPA must be <= 4";
+                }
+            }
+            columns.Add(new UserColumnValidation("GPA", gpaValid, gpaError));
+
             bool rowValid = columns.All(c => c.IsValid);
             if (rowValid) validCount++; else invalidCount++;
 
@@ -362,5 +455,44 @@ public sealed class ExcelUserImportService(
     {
         try { _ = new MailAddress(email); return true; }
         catch { return false; }
+    }
+
+    private static bool TryParseDoubleFlexible(string raw, out double value)
+    {
+        value = default;
+        if (string.IsNullOrWhiteSpace(raw))
+            return false;
+
+        // Normalize common user inputs:
+        // - "3,5" => "3.5" (decimal comma)
+        // - "3.5" stays as-is
+        // - If both separators exist, treat the last one as the decimal separator
+        //   and strip the other as thousands separator.
+        var s = raw.Trim().Replace(" ", string.Empty);
+
+        var hasDot = s.Contains('.');
+        var hasComma = s.Contains(',');
+
+        if (hasDot && hasComma)
+        {
+            var lastDot = s.LastIndexOf('.');
+            var lastComma = s.LastIndexOf(',');
+            if (lastDot > lastComma)
+            {
+                // dot is decimal separator -> remove commas
+                s = s.Replace(",", string.Empty);
+            }
+            else
+            {
+                // comma is decimal separator -> remove dots, convert comma to dot
+                s = s.Replace(".", string.Empty).Replace(',', '.');
+            }
+        }
+        else if (hasComma && !hasDot)
+        {
+            s = s.Replace(',', '.');
+        }
+
+        return double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
     }
 }

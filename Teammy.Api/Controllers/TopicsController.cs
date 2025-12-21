@@ -78,11 +78,37 @@ namespace Teammy.Api.Controllers
         // POST /api/topics
         [HttpPost]
         [Authorize(Roles = "moderator")]
-        public async Task<IActionResult> Create([FromBody] CreateTopicRequest req, CancellationToken ct)
+        [Consumes("multipart/form-data")]
+        public async Task<IActionResult> Create([FromForm] CreateTopicFormRequest form, CancellationToken ct)
         {
             try
             {
+                if (form is null)
+                    return BadRequest("Body is required.");
+
+                var req = new CreateTopicRequest(
+                    form.SemesterId,
+                    form.MajorId,
+                    form.Title,
+                    form.Description,
+                    form.Source,
+                    form.Status,
+                    form.MentorEmails ?? new System.Collections.Generic.List<string>(),
+                    form.Skills);
+
                 var id = await _service.CreateAsync(GetUserId(), req, ct);
+
+                if (form.RegistrationFile is not null && form.RegistrationFile.Length > 0)
+                {
+                    var ext = Path.GetExtension(form.RegistrationFile.FileName);
+                    if (!string.Equals(ext, ".docx", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(ext, ".txt", StringComparison.OrdinalIgnoreCase))
+                        return BadRequest("Registration file must be .docx or .txt.");
+
+                    await using var stream = form.RegistrationFile.OpenReadStream();
+                    await _service.ReplaceRegistrationFileAsync(id, stream, form.RegistrationFile.FileName, ct);
+                }
+
                 return CreatedAtAction(nameof(GetById), new { id }, new { id });
             }
             catch (ArgumentException ex)         { return BadRequest(ex.Message); }
@@ -92,16 +118,66 @@ namespace Teammy.Api.Controllers
         // PUT /api/topics/{id}
         [HttpPut("{id:guid}")]
         [Authorize(Roles = "moderator")]
-        public async Task<IActionResult> Update(Guid id, [FromBody] UpdateTopicRequest req, CancellationToken ct)
+        [Consumes("multipart/form-data")]
+        public async Task<IActionResult> Update(Guid id, [FromForm] UpdateTopicFormRequest form, CancellationToken ct)
         {
             try
             {
+                if (form is null)
+                    return BadRequest("Body is required.");
+
+                var req = new UpdateTopicRequest(
+                    form.MajorId,
+                    form.Title,
+                    form.Description,
+                    form.Source,
+                    form.Status,
+                    form.MentorEmails ?? new System.Collections.Generic.List<string>(),
+                    form.Skills);
+
                 await _service.UpdateAsync(id, req, ct);
+
+                if (form.RegistrationFile is not null && form.RegistrationFile.Length > 0)
+                {
+                    var ext = Path.GetExtension(form.RegistrationFile.FileName);
+                    if (!string.Equals(ext, ".docx", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(ext, ".txt", StringComparison.OrdinalIgnoreCase))
+                        return BadRequest("Registration file must be .docx or .txt.");
+
+                    await using var stream = form.RegistrationFile.OpenReadStream();
+                    await _service.ReplaceRegistrationFileAsync(id, stream, form.RegistrationFile.FileName, ct);
+                }
+
                 return NoContent();
             }
             catch (KeyNotFoundException)         { return NotFound(); }
             catch (ArgumentException ex)         { return BadRequest(ex.Message); }
             catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+        }
+
+        public sealed class CreateTopicFormRequest
+        {
+            public Guid SemesterId { get; init; }
+            public Guid? MajorId { get; init; }
+            public string Title { get; init; } = string.Empty;
+            public string? Description { get; init; }
+            public string? Source { get; init; }
+            public string Status { get; init; } = "open";
+            public System.Collections.Generic.List<string>? MentorEmails { get; init; }
+            public System.Collections.Generic.List<string>? Skills { get; init; }
+            public IFormFile? RegistrationFile { get; init; }
+        }
+
+        public sealed class UpdateTopicFormRequest
+        {
+            public Guid? MajorId { get; init; }
+            public string Title { get; init; } = string.Empty;
+            public string? Description { get; init; }
+            public string? Source { get; init; }
+            public string Status { get; init; } = "open";
+            public System.Collections.Generic.List<string>? MentorEmails { get; init; }
+            public System.Collections.Generic.List<string>? Skills { get; init; }
+            public IFormFile? RegistrationFile { get; init; }
         }
 
         // DELETE /api/topics/{id}

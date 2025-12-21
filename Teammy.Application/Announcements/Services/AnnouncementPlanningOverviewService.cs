@@ -37,11 +37,11 @@ public sealed class AnnouncementPlanningOverviewService(
             .Select(ToGroupItem)
             .ToList();
 
-        // Use group summaries to identify mentor-missing groups because IAiMatchingQueries doesn't provide this list.
+        // Groups needing members = groups with remaining slots in this semester.
         var allMajorGroups = await groupQueries.ListGroupsAsync(status: null, majorId: request.MajorId, topicId: null, ct);
-        var groupsWithoutMentor = allMajorGroups
+        var groupsWithoutMember = allMajorGroups
             .Where(g => g.Semester.SemesterId == semesterId)
-            .Where(g => g.Topic is not null && g.Mentor is null)
+            .Where(g => g.CurrentMembers < g.MaxMembers)
             .Select(g => new PlanningGroupItemDto(
                 g.Id,
                 g.Name,
@@ -69,10 +69,10 @@ public sealed class AnnouncementPlanningOverviewService(
             request.MajorId,
             majorName,
             groupsWithoutTopic.Count,
-            groupsWithoutMentor.Count,
+            groupsWithoutMember.Count,
             studentsWithoutGroup.Count,
             groupsWithoutTopic,
-            groupsWithoutMentor,
+            groupsWithoutMember,
             studentsWithoutGroup);
     }
 

@@ -15,6 +15,15 @@ CREATE TABLE IF NOT EXISTS teammy.majors (
   major_name TEXT NOT NULL UNIQUE
 );
 
+-- Position list (per major)
+CREATE TABLE IF NOT EXISTS teammy.position_list (
+  position_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  major_id      UUID NOT NULL REFERENCES teammy.majors(major_id) ON DELETE CASCADE,
+  position_name TEXT NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (major_id, position_name)
+);
+
 CREATE TABLE IF NOT EXISTS teammy.users (
   user_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email            CITEXT NOT NULL UNIQUE,
@@ -25,6 +34,8 @@ CREATE TABLE IF NOT EXISTS teammy.users (
   student_code     VARCHAR(30),
   gender           TEXT,
   major_id         UUID REFERENCES teammy.majors(major_id) ON DELETE SET NULL,
+  gpa              DOUBLE PRECISION,
+  desired_position_id UUID REFERENCES teammy.position_list(position_id) ON DELETE SET NULL,
   portfolio_url    TEXT,
   skills           JSONB,
   skills_completed BOOLEAN NOT NULL DEFAULT FALSE,
@@ -35,6 +46,26 @@ CREATE TABLE IF NOT EXISTS teammy.users (
 
 ALTER TABLE teammy.users
   ADD COLUMN IF NOT EXISTS portfolio_url TEXT;
+
+ALTER TABLE teammy.users
+  ADD COLUMN IF NOT EXISTS gpa DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS desired_position_id UUID;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+    WHERE constraint_schema = 'teammy'
+      AND table_name = 'users'
+      AND constraint_name = 'users_desired_position_id_fkey'
+  ) THEN
+    ALTER TABLE teammy.users
+      ADD CONSTRAINT users_desired_position_id_fkey
+      FOREIGN KEY (desired_position_id)
+      REFERENCES teammy.position_list(position_id)
+      ON DELETE SET NULL;
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS teammy.user_roles (
   user_role_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -622,6 +653,9 @@ SELECT
   u.display_name,
   u.major_id,
   s.semester_id,
+  u.gpa,
+  u.desired_position_id,
+  p.position_name AS desired_position_name,
   CASE
     WHEN u.skills IS NULL THEN NULL
     WHEN jsonb_typeof(u.skills) = 'array' THEN jsonb_build_object(
@@ -648,6 +682,7 @@ FROM teammy.users u
 JOIN teammy.user_roles ur ON ur.user_id = u.user_id
 JOIN teammy.roles r ON r.role_id = ur.role_id AND r.name = 'student'
 JOIN teammy.semesters s ON s.is_active = TRUE
+LEFT JOIN teammy.position_list p ON p.position_id = u.desired_position_id
 LEFT JOIN teammy.group_members gm
   ON gm.user_id = u.user_id
   AND gm.semester_id = s.semester_id
@@ -735,6 +770,70 @@ INSERT INTO teammy.majors (major_id, major_name) VALUES
   ('22222222-2222-2222-2222-222222222222', 'Information Systems'),
   ('33333333-3333-3333-3333-333333333333', 'Digital Product Design')
 ON CONFLICT (major_name) DO NOTHING;
+
+-- Positions seed data (per major)
+-- NOTE: Position is selected by user in profile and validated against their major.
+INSERT INTO teammy.position_list (major_id, position_name) VALUES
+  -- Software Engineering
+  ('11111111-1111-1111-1111-111111111111', 'Frontend Developer'),
+  ('11111111-1111-1111-1111-111111111111', 'Backend Developer'),
+  ('11111111-1111-1111-1111-111111111111', 'Full-stack Developer'),
+  ('11111111-1111-1111-1111-111111111111', 'Mobile Developer'),
+  ('11111111-1111-1111-1111-111111111111', 'QA / Tester'),
+  ('11111111-1111-1111-1111-111111111111', 'DevOps Engineer'),
+  ('11111111-1111-1111-1111-111111111111', 'Tech Lead'),
+
+  -- Information Systems
+  ('22222222-2222-2222-2222-222222222222', 'Business Analyst'),
+  ('22222222-2222-2222-2222-222222222222', 'Data Analyst'),
+  ('22222222-2222-2222-2222-222222222222', 'Backend Developer'),
+  ('22222222-2222-2222-2222-222222222222', 'Full-stack Developer'),
+  ('22222222-2222-2222-2222-222222222222', 'QA / Tester'),
+  ('22222222-2222-2222-2222-222222222222', 'Project Manager'),
+
+  -- Digital Product Design
+  ('33333333-3333-3333-3333-333333333333', 'UI/UX Designer'),
+  ('33333333-3333-3333-3333-333333333333', 'Product Designer'),
+  ('33333333-3333-3333-3333-333333333333', 'UX Researcher'),
+  ('33333333-3333-3333-3333-333333333333', 'Visual Designer'),
+  ('33333333-3333-3333-3333-333333333333', 'Product Manager')
+ON CONFLICT (major_id, position_name) DO NOTHING;
+
+-- Position list seed data (per major)
+INSERT INTO teammy.position_list (major_id, position_name) VALUES
+  ('11111111-1111-1111-1111-111111111111', 'Backend Developer'),
+  ('11111111-1111-1111-1111-111111111111', 'Frontend Developer'),
+  ('11111111-1111-1111-1111-111111111111', 'Fullstack Developer'),
+  ('11111111-1111-1111-1111-111111111111', 'Mobile Developer'),
+  ('11111111-1111-1111-1111-111111111111', 'QA Engineer'),
+  ('11111111-1111-1111-1111-111111111111', 'Business Analyst'),
+  ('11111111-1111-1111-1111-111111111111', 'DevOps Engineer'),
+  ('11111111-1111-1111-1111-111111111111', 'Data Analyst'),
+  ('11111111-1111-1111-1111-111111111111', 'Data Engineer'),
+  ('11111111-1111-1111-1111-111111111111', 'UI/UX Designer'),
+
+  ('22222222-2222-2222-2222-222222222222', 'Backend Developer'),
+  ('22222222-2222-2222-2222-222222222222', 'Frontend Developer'),
+  ('22222222-2222-2222-2222-222222222222', 'Fullstack Developer'),
+  ('22222222-2222-2222-2222-222222222222', 'Mobile Developer'),
+  ('22222222-2222-2222-2222-222222222222', 'QA Engineer'),
+  ('22222222-2222-2222-2222-222222222222', 'Business Analyst'),
+  ('22222222-2222-2222-2222-222222222222', 'DevOps Engineer'),
+  ('22222222-2222-2222-2222-222222222222', 'Data Analyst'),
+  ('22222222-2222-2222-2222-222222222222', 'Data Engineer'),
+  ('22222222-2222-2222-2222-222222222222', 'UI/UX Designer'),
+
+  ('33333333-3333-3333-3333-333333333333', 'Backend Developer'),
+  ('33333333-3333-3333-3333-333333333333', 'Frontend Developer'),
+  ('33333333-3333-3333-3333-333333333333', 'Fullstack Developer'),
+  ('33333333-3333-3333-3333-333333333333', 'Mobile Developer'),
+  ('33333333-3333-3333-3333-333333333333', 'QA Engineer'),
+  ('33333333-3333-3333-3333-333333333333', 'Business Analyst'),
+  ('33333333-3333-3333-3333-333333333333', 'DevOps Engineer'),
+  ('33333333-3333-3333-3333-333333333333', 'Data Analyst'),
+  ('33333333-3333-3333-3333-333333333333', 'Data Engineer'),
+  ('33333333-3333-3333-3333-333333333333', 'UI/UX Designer')
+ON CONFLICT (major_id, position_name) DO NOTHING;
 
 -- Sample students with JSON skills to populate mv_students_pool
 INSERT INTO teammy.users (user_id, email, email_verified, display_name, major_id, skills, skills_completed)

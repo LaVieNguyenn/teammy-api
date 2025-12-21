@@ -5,6 +5,9 @@ public sealed record StudentProfileSnapshot(
     Guid MajorId,
     Guid SemesterId,
     string DisplayName,
+    double? Gpa,
+    Guid? DesiredPositionId,
+    string? DesiredPositionName,
     string? PrimaryRole,
     string? SkillsJson,
     bool SkillsCompleted

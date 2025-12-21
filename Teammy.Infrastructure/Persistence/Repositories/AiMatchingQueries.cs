@@ -337,6 +337,9 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
             row.major_id.Value,
             row.semester_id.Value,
             row.display_name ?? string.Empty,
+            row.gpa,
+            row.desired_position_id,
+            row.desired_position_name,
             row.primary_role,
             row.skills,
             row.skills_completed ?? false

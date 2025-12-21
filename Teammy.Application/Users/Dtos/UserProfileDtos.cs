@@ -11,6 +11,9 @@ public sealed record UserProfileDto(
     string? StudentCode,
     Guid? MajorId,
     string? MajorName,
+    double? Gpa,
+    Guid? DesiredPositionId,
+    string? DesiredPositionName,
     JsonElement? Skills,
     bool SkillsCompleted,
     string? AvatarUrl,
@@ -23,5 +26,6 @@ public sealed record UpdateUserProfileRequest(
     string? Gender,
     JsonElement? Skills,
     bool SkillsCompleted,
-    string? PortfolioUrl
+    string? PortfolioUrl,
+    Guid? DesiredPositionId
 );

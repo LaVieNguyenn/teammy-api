@@ -13,6 +13,15 @@ namespace Teammy.Application.Common.Interfaces
         Task DeleteAsync(Guid topicId, CancellationToken ct);
         Task SetStatusAsync(Guid topicId, string status, CancellationToken ct);
 
+        Task<string?> GetRegistrationFileUrlAsync(Guid topicId, CancellationToken ct);
+        Task SetRegistrationFileAsync(
+            Guid topicId,
+            string fileUrl,
+            string fileName,
+            string? fileType,
+            long? fileSize,
+            CancellationToken ct);
+
         Task<(Guid topicId, bool created)> UpsertAsync(
             Guid semesterId,
             string title,
