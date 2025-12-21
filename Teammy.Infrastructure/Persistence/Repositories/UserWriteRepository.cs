@@ -38,7 +38,7 @@ public sealed class UserWriteRepository : IUserWriteRepository
         {
             user_id = Guid.NewGuid(),
             email = email,
-            email_verified = false,
+            email_verified = true,
             display_name = displayName,
             avatar_url = null,
             phone = null,

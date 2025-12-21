@@ -95,7 +95,7 @@ public sealed class AiMatchingService(
                 ? new Dictionary<Guid, GroupRoleMixSnapshot>()
                 : await aiQueries.GetGroupRoleMixAsync(relatedGroupIds, ct);
 
-            var (groupOptions, studentOptions) = BuildStaffingOptions(groups, students, mixSnapshots, majorLookup);
+            var (groupOptions, studentOptions, remainingStudents) = BuildStaffingOptions(groups, students, mixSnapshots, majorLookup);
 
             if (section is AiOptionSection.All or AiOptionSection.GroupsNeedingMembers)
                 staffingPage = Paginate(groupOptions, page, pageSize);
@@ -114,13 +114,29 @@ public sealed class AiMatchingService(
                 var maxSize = Math.Max(minSize, policyMax);
 
                 var plans = new List<NewGroupCreationOptionDto>();
-                foreach (var majorGroup in students.GroupBy(s => s.MajorId).OrderBy(g => g.Key))
+                foreach (var majorGroup in remainingStudents.GroupBy(s => s.MajorId).OrderBy(g => g.Key))
                 {
                     var ordered = majorGroup
                         .OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase)
                         .ToList();
 
                     var sizes = ComputeBalancedGroupSizes(ordered.Count, minSize, maxSize);
+                    var plannedCount = ordered.Count;
+                    if (sizes.Count == 0)
+                    {
+                        // If we can't split ALL students into valid groups, still plan as many valid groups as possible,
+                        // leaving the remainder unresolved.
+                        for (var used = ordered.Count - 1; used >= minSize; used--)
+                        {
+                            var attempt = ComputeBalancedGroupSizes(used, minSize, maxSize);
+                            if (attempt.Count > 0)
+                            {
+                                sizes = attempt;
+                                plannedCount = used;
+                                break;
+                            }
+                        }
+                    }
                     var plannedGroups = new List<PlannedNewGroupDto>();
                     var unresolved = new List<StudentAssignmentIssueDto>();
 
@@ -138,7 +154,17 @@ public sealed class AiMatchingService(
                     }
                     else
                     {
-                        var total = ordered.Count;
+                        if (plannedCount < ordered.Count)
+                        {
+                            foreach (var s in ordered.Skip(plannedCount))
+                            {
+                                unresolved.Add(new StudentAssignmentIssueDto(
+                                    s.UserId,
+                                    $"Còn lại {ordered.Count - plannedCount} sinh viên chưa đủ để tạo nhóm mới (policy min {minSize}, max {maxSize})."));
+                            }
+                        }
+
+                        var total = plannedCount;
                         var splitText = string.Join("+", sizes);
                         var baseReason = $"Đề xuất chia {total} sinh viên thành {sizes.Count} nhóm ({splitText}) để mọi nhóm đều nằm trong policy min {minSize}, max {maxSize}.";
 
@@ -146,15 +172,30 @@ public sealed class AiMatchingService(
                         for (var i = 0; i < sizes.Count; i++)
                         {
                             var size = sizes[i];
-                            var batch = ordered.Skip(offset).Take(size).ToList();
+                            var batch = ordered.Take(plannedCount).Skip(offset).Take(size).ToList();
                             offset += size;
+
+                            var studentsDetail = batch
+                                .Select(s =>
+                                {
+                                    majorLookup.TryGetValue(s.MajorId, out var mname);
+                                    var profile = BuildSkillProfile(s);
+                                    return new PlannedNewGroupStudentDto(
+                                        s.UserId,
+                                        s.DisplayName,
+                                        s.MajorId,
+                                        mname,
+                                        AiRoleHelper.ToDisplayString(profile.PrimaryRole),
+                                        profile.Tags.Take(5).ToList());
+                                })
+                                .ToList();
 
                             plannedGroups.Add(new PlannedNewGroupDto(
                                 Key: $"major_{majorId:N}_group_{i + 1}",
                                 MajorId: majorId,
                                 MajorName: majorName,
                                 MemberCount: batch.Count,
-                                StudentIds: batch.Select(x => x.UserId).ToList(),
+                                Students: studentsDetail,
                                 Reason: baseReason));
                         }
                     }
@@ -171,8 +212,31 @@ public sealed class AiMatchingService(
                 newGroupPlans = plans;
             }
 
-            // Enrich option reasons using AI (required for suggestions UX).
-            (staffingPage, studentPage) = await EnrichStaffingOptionReasonsWithAiAsync(staffingPage, studentPage, ct);
+            // Enrich option reasons using AI.
+            // Important: if caller requests StudentsWithoutGroup ONLY, staffingPage is null but we still need AI reasons/scores.
+            if (staffingPage is null && studentPage is not null && studentPage.Items.Count > 0)
+            {
+                var neededGroupIds = studentPage.Items
+                    .Where(s => s.SuggestedGroup is not null)
+                    .Select(s => s.SuggestedGroup!.GroupId)
+                    .Distinct()
+                    .ToHashSet();
+
+                var aiGroups = groupOptions
+                    .Where(g => g.SuggestedMembers.Count > 0 && neededGroupIds.Contains(g.GroupId))
+                    .ToList();
+
+                var aiPageSize = Math.Max(1, aiGroups.Count);
+                var staffingForAi = aiGroups.Count == 0
+                    ? null
+                    : new PaginatedCollection<GroupStaffingOptionDto>(aiGroups.Count, 1, aiPageSize, aiGroups);
+
+                (_, studentPage) = await EnrichStaffingOptionReasonsWithAiAsync(staffingForAi, studentPage, ct);
+            }
+            else
+            {
+                (staffingPage, studentPage) = await EnrichStaffingOptionReasonsWithAiAsync(staffingPage, studentPage, ct);
+            }
         }
 
         return new AiOptionListDto(
@@ -925,12 +989,23 @@ public sealed class AiMatchingService(
         {
             var groupProfile = await GetGroupSkillProfileAsync(group.GroupId, ct);
             var groupQueryText = BuildGroupQueryText(group.Name, groupProfile, null);
+            var semanticQuery = BuildSemanticQuery(groupProfile);
             var relevantTopics = group.MajorId.HasValue
                 ? topicList.Where(t => !t.MajorId.HasValue || t.MajorId.Value == group.MajorId.Value)
                 : topicList;
 
+            // Match SuggestTopics pipeline: use vector shortlist before rerank.
+            var candidateTopics = await ApplySemanticShortlistAsync(
+                "topic",
+                semanticQuery,
+                group.SemesterId,
+                group.MajorId,
+                relevantTopics.ToList(),
+                t => t.TopicId,
+                ct);
+
             // Build heuristic shortlist then ask AI to produce reasons (and optionally adjust ordering).
-            var shortlist = relevantTopics
+            var shortlist = candidateTopics
                 .Select(topic => BuildTopicSuggestion(topic, groupProfile))
                 .Where(s => s is not null)
                 .Select(s => s!)
@@ -973,6 +1048,7 @@ public sealed class AiMatchingService(
                 group.MaxMembers,
                 group.CurrentMembers,
                 group.RemainingSlots,
+                suggestionItems.Count == 0 ? 0 : suggestionItems.Max(s => s.Score),
                 suggestionItems));
         }
 
@@ -990,14 +1066,14 @@ public sealed class AiMatchingService(
         return BuildGroupSkillProfile(detail?.Skills, memberProfiles);
     }
 
-    private (IReadOnlyList<GroupStaffingOptionDto> Groups, IReadOnlyList<StudentPlacementOptionDto> Students) BuildStaffingOptions(
+    private (IReadOnlyList<GroupStaffingOptionDto> Groups, IReadOnlyList<StudentPlacementOptionDto> Students, IReadOnlyList<StudentProfileSnapshot> RemainingStudents) BuildStaffingOptions(
         IReadOnlyList<GroupOverviewSnapshot> groups,
         IReadOnlyList<StudentProfileSnapshot> students,
         IReadOnlyDictionary<Guid, GroupRoleMixSnapshot> mixes,
         IReadOnlyDictionary<Guid, string> majors)
     {
         if (groups.Count == 0 && students.Count == 0)
-            return (Array.Empty<GroupStaffingOptionDto>(), Array.Empty<StudentPlacementOptionDto>());
+            return (Array.Empty<GroupStaffingOptionDto>(), Array.Empty<StudentPlacementOptionDto>(), Array.Empty<StudentProfileSnapshot>());
 
         var candidateStates = students
             .Select(s => new StudentCandidate(s, BuildSkillProfile(s), GetMajorName(s.MajorId, majors)))
@@ -1042,6 +1118,7 @@ public sealed class AiMatchingService(
                     group.Name,
                     group.MajorId,
                     group.MajorName,
+                    score,
                     reason);
 
                 mutableMix = ApplyRoleToMix(mutableMix, candidate.Profile.PrimaryRole);
@@ -1057,8 +1134,13 @@ public sealed class AiMatchingService(
                 group.MaxMembers,
                 group.CurrentMembers,
                 group.RemainingSlots,
+                suggestions.Count == 0 ? 0 : suggestions.Max(s => s.Score),
                 suggestions));
         }
+
+        var remainingStudents = availablePool
+            .Select(c => c.Snapshot)
+            .ToList();
 
         var studentOptions = students
             .Select(student =>
@@ -1074,12 +1156,14 @@ public sealed class AiMatchingService(
                     candidate.MajorName,
                     AiRoleHelper.ToDisplayString(candidate.Profile.PrimaryRole),
                     tags,
+                    placement?.Score ?? 0,
+                    placement?.Reason,
                     placement,
                     placement is null);
             })
             .ToList();
 
-        return (groupOptions, studentOptions);
+        return (groupOptions, studentOptions, remainingStudents);
     }
 
     private async Task<NewGroupCreationResult> CreateNewGroupsForStudentsAsync(
@@ -1323,7 +1407,7 @@ public sealed class AiMatchingService(
         if (profile.HasTags)
             reasons.Add("Kỹ năng: " + string.Join(", ", profile.Tags.Take(3)));
 
-        reasons.Add($"Điểm AI {score}");
+        // Heuristic baseline only; AI rerank will provide final score/reason.
         return string.Join(" | ", reasons);
     }
 
@@ -1840,11 +1924,9 @@ public sealed class AiMatchingService(
         var normalizedSkills = NormalizeSkillTokens(skills).Take(35).ToList();
         var normalizedMatches = NormalizeSkillTokens(matchingHighlights).Take(15).ToList();
 
-        var summary = string.IsNullOrWhiteSpace(description)
-            ? "Không có mô tả."
-            : description.Trim();
+        var summary = string.IsNullOrWhiteSpace(description) ? null : description.Trim();
 
-        if (summary.Length > 1200)
+        if (!string.IsNullOrWhiteSpace(summary) && summary.Length > 1200)
             summary = summary[..1200];
 
         var summaryParts = new List<string>();  
@@ -1854,7 +1936,8 @@ public sealed class AiMatchingService(
             summaryParts.Add($"Role: {roleNeeded.Trim()}");
         if (canTakeMore.HasValue)
             summaryParts.Add(canTakeMore.Value ? "Slots available" : "At capacity");
-        summaryParts.Add(summary);
+        if (!string.IsNullOrWhiteSpace(summary))
+            summaryParts.Add(summary);
         var combinedSummary = string.Join(" | ", summaryParts.Where(part => !string.IsNullOrWhiteSpace(part)));
 
         var builder = new StringBuilder();
@@ -2127,6 +2210,19 @@ public sealed class AiMatchingService(
 
         var updatedGroups = new List<GroupStaffingOptionDto>(staffingPage.Items.Count);
         var studentReasonMap = new Dictionary<Guid, string>();
+        var studentScoreMap = new Dictionary<Guid, int>();
+
+        IReadOnlyDictionary<Guid, GroupRoleMixSnapshot> mixByGroupId = new Dictionary<Guid, GroupRoleMixSnapshot>();
+        try
+        {
+            var ids = staffingPage.Items.Select(g => g.GroupId).Distinct().ToArray();
+            if (ids.Length > 0)
+                mixByGroupId = await aiQueries.GetGroupRoleMixAsync(ids, ct);
+        }
+        catch
+        {
+            mixByGroupId = new Dictionary<Guid, GroupRoleMixSnapshot>();
+        }
 
         foreach (var group in staffingPage.Items)
         {
@@ -2136,13 +2232,32 @@ public sealed class AiMatchingService(
                 continue;
             }
 
+            var mix = mixByGroupId.TryGetValue(group.GroupId, out var m)
+                ? m
+                : new GroupRoleMixSnapshot(group.GroupId, 0, 0, 0);
+
+            var primaryNeed = InferPrimaryNeedFromMix(mix);
+
+            var teamContextJson = JsonSerializer.Serialize(new
+            {
+                teamName = group.Name,
+                primaryNeed,
+                currentMix = new { fe = mix.FrontendCount, be = mix.BackendCount, other = mix.OtherCount },
+                openSlots = new { fe = 0, be = 0, other = Math.Max(group.RemainingSlots, 0) },
+                teamTopSkills = Array.Empty<string>()
+            });
+
             var queryText = BuildStructuredCandidateText(
-                group.Name,
-                group.Description,
+                title: group.Name,
+                description: group.Description,
                 skills: null,
-                roleNeeded: null,
+                roleNeeded: primaryNeed,
                 canTakeMore: null,
-                matchingHighlights: null);
+                matchingHighlights: new[]
+                {
+                    $"RemainingSlots: {group.RemainingSlots}",
+                    $"CurrentMix: FE={mix.FrontendCount}, BE={mix.BackendCount}, Other={mix.OtherCount}"
+                });
 
             var candidates = group.SuggestedMembers
                 .Select(m => new AiLlmCandidate(
@@ -2152,13 +2267,14 @@ public sealed class AiMatchingService(
                     null,
                     BuildStructuredCandidateText(
                         m.DisplayName,
-                        null,
+                        $"Role: {m.PrimaryRole ?? "n/a"}. Skills: {(m.SkillTags.Count == 0 ? "n/a" : string.Join(", ", m.SkillTags))}.",
                         m.SkillTags,
                         m.PrimaryRole,
                         null,
                         null),
                     Metadata: BuildMetadata(
                         ("groupId", group.GroupId.ToString()),
+                        // AiLlmClient maps metadata.score -> baselineScore for gateway.
                         ("score", m.Score.ToString(CultureInfo.InvariantCulture)),
                         ("majorId", m.MajorId.ToString()))))
                 .ToList();
@@ -2179,6 +2295,9 @@ public sealed class AiMatchingService(
                         candidates,
                         BuildLlmContext(
                             ("mode", "auto_assign_team"),
+                            ("withReasons", "true"),
+                            ("team", teamContextJson),
+                            ("topN", candidates.Count.ToString(CultureInfo.InvariantCulture)),
                             ("groupId", group.GroupId.ToString()))),
                     ct);
             }
@@ -2204,10 +2323,12 @@ public sealed class AiMatchingService(
                         && rrByKey.TryGetValue(key, out var rrItem)
                         && !string.IsNullOrWhiteSpace(rrItem.Reason))
                     {
+                        var normalizedScore = NormalizeLlmScore(rrItem.FinalScore);
                         studentReasonMap[m.StudentId] = rrItem.Reason!;
+                        studentScoreMap[m.StudentId] = normalizedScore;
                         return m with
                         {
-                            Score = NormalizeLlmScore(rrItem.FinalScore),
+                            Score = normalizedScore,
                             Reason = rrItem.Reason!
                         };
                     }
@@ -2216,7 +2337,8 @@ public sealed class AiMatchingService(
                 })
                 .ToList();
 
-            updatedGroups.Add(group with { SuggestedMembers = updatedMembers });
+            var groupScore = updatedMembers.Count == 0 ? 0 : updatedMembers.Max(x => x.Score);
+            updatedGroups.Add(group with { Score = groupScore, SuggestedMembers = updatedMembers });
         }
 
         staffingPage = staffingPage with { Items = updatedGroups };
@@ -2228,9 +2350,25 @@ public sealed class AiMatchingService(
                 {
                     if (s.SuggestedGroup is null)
                         return s;
-                    if (!studentReasonMap.TryGetValue(s.StudentId, out var reason) || string.IsNullOrWhiteSpace(reason))
+
+                    studentReasonMap.TryGetValue(s.StudentId, out var reason);
+                    studentScoreMap.TryGetValue(s.StudentId, out var score);
+
+                    if (string.IsNullOrWhiteSpace(reason) && score <= 0)
                         return s;
-                    return s with { SuggestedGroup = s.SuggestedGroup with { Reason = reason } };
+
+                    var updatedGroup = s.SuggestedGroup with
+                    {
+                        Score = score > 0 ? score : s.SuggestedGroup.Score,
+                        Reason = !string.IsNullOrWhiteSpace(reason) ? reason : s.SuggestedGroup.Reason
+                    };
+
+                    return s with
+                    {
+                        Score = score > 0 ? score : s.Score,
+                        Reason = !string.IsNullOrWhiteSpace(reason) ? reason : s.Reason,
+                        SuggestedGroup = updatedGroup
+                    };
                 })
                 .ToList();
 

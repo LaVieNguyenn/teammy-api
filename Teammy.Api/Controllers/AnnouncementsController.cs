@@ -8,7 +8,7 @@ namespace Teammy.Api.Controllers;
 
 [ApiController]
 [Route("api/announcements")]
-public sealed class AnnouncementsController(AnnouncementService service) : ControllerBase
+public sealed class AnnouncementsController(AnnouncementService service, AnnouncementPlanningOverviewService overviewService) : ControllerBase
 {
     [HttpGet]
     [Authorize]
@@ -37,6 +37,14 @@ public sealed class AnnouncementsController(AnnouncementService service) : Contr
 
         var preview = await service.PreviewRecipientsAsync(GetUserId(), request, ct);
         return Ok(preview);
+    }
+
+    [HttpGet("planning-overview")]
+    [Authorize(Roles = "moderator,admin")]
+    public async Task<ActionResult<AnnouncementPlanningOverviewDto>> GetPlanningOverview([FromQuery] Guid majorId, CancellationToken ct)
+    {
+        var overview = await overviewService.GetOverviewAsync(new AnnouncementPlanningOverviewRequest(majorId), ct);
+        return Ok(overview);
     }
 
     private Guid GetUserId()
