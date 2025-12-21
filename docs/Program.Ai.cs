@@ -11,6 +11,7 @@
 
 using System.Diagnostics;
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -35,10 +36,10 @@ var apiKey = "THIS_IS_THE_STRONGEST_API_KEY_EVER_ON_THIS_WORLD_123_321_203";
 var dbPath = @"C:\Users\PhiHung\Teammy.AiGateway\data\teammy_ai.db";
 Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
 
-// ABSOLUTE PATH (your request)
+// ABSOLUTE PATH
 var vecExtPath = @"C:\Users\PhiHung\Teammy.AiGateway\sqlite_ext\vec0.dll";  // vec0.dll path
 
-// Embedding dimension (nomic-embed-text-v1.5 commonly 768)
+// Embedding dimension
 var embedDim = 768;
 
 // Limits
@@ -75,6 +76,15 @@ var enableDebug = true;
 var last = new LastDebug();
 
 // ======================================================================
+// Concurrency gates (CRITICAL for stability & speed on local machine)
+// - llama.cpp is best kept at low concurrency (queue requests)
+// - SQLite only 1 writer at a time to avoid "database is locked"
+// ======================================================================
+
+var llmGate = new SemaphoreSlim(1, 1);       // 1 concurrent chat call (prevents llama.cpp overload)
+var embedGate = new SemaphoreSlim(2, 2);     // embeddings can be a bit more parallel
+var rerankGate = new SemaphoreSlim(2, 2);    // python cross-encoder ok with small parallelism
+var dbWriteGate = new SemaphoreSlim(1, 1);   // SQLite single-writer gate
 
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
@@ -99,6 +109,36 @@ builder.Services.AddHttpClient("rerank", c =>
 });
 
 var app = builder.Build();
+
+// Global exception shielding (avoid raw 500 crash)
+app.Use(async (ctx, next) =>
+{
+    try
+    {
+        await next();
+    }
+    catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
+    {
+        // client disconnected; don't spam 500
+        if (!ctx.Response.HasStarted)
+            ctx.Response.StatusCode = 499; // Client Closed Request (nginx-style)
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogError(ex, "Unhandled exception");
+        if (!ctx.Response.HasStarted)
+        {
+            ctx.Response.StatusCode = 503;
+            ctx.Response.ContentType = "application/json";
+            await ctx.Response.WriteAsync(JsonSerializer.Serialize(new
+            {
+                ok = false,
+                error = "gateway_unhandled_exception",
+                detail = ex.Message
+            }, JsonOpts()));
+        }
+    }
+});
 
 bool Authorized(HttpRequest req)
 {
@@ -178,57 +218,76 @@ app.MapPost("/index/upsert", async (HttpRequest req, IHttpClientFactory hf) =>
     if (body is null || string.IsNullOrWhiteSpace(body.Text) || string.IsNullOrWhiteSpace(body.Type))
         return Results.BadRequest(new { error = "Missing text/type" });
 
+    // Embedding (guard + retry + no 500)
     var embed = hf.CreateClient("embed");
-    var vector = await LlamaEmbedAsync(embed, body.Text!, req.HttpContext.RequestAborted);
+    var embRes = await LlamaEmbedSafeAsync(embed, Clip(body.Text!, 9000), embedGate, req.HttpContext.RequestAborted);
+    if (!embRes.ok)
+        return Results.Json(new { ok = false, error = "embed_failed", detail = embRes.error, status = embRes.status }, statusCode: 503);
 
+    var vector = embRes.vector!;
     var pointId = body.PointId ?? Guid.NewGuid().ToString("N");
 
-    using var conn = OpenDbSafe(dbPath, vecExtPath);
-    using var tx = conn.BeginTransaction();
-
-    // items: normal table => UPSERT OK
-    using (var cmd = conn.CreateCommand())
+    // Single writer gate avoids "database is locked" 500
+    await dbWriteGate.WaitAsync(req.HttpContext.RequestAborted);
+    try
     {
-        cmd.Transaction = tx;
-        cmd.CommandText = """
-        insert into items(point_id, type, entity_id, title, semester_id, major_id, text)
-        values ($pid, $type, $eid, $title, $sid, $mid, $text)
-        on conflict(point_id) do update set
-          type=excluded.type,
-          entity_id=excluded.entity_id,
-          title=excluded.title,
-          semester_id=excluded.semester_id,
-          major_id=excluded.major_id,
-          text=excluded.text;
-        """;
-        cmd.Parameters.AddWithValue("$pid", pointId);
-        cmd.Parameters.AddWithValue("$type", body.Type);
-        cmd.Parameters.AddWithValue("$eid", (object?)body.EntityId ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$title", (object?)body.Title ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$sid", (object?)body.SemesterId ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$mid", (object?)body.MajorId ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$text", body.Text);
-        await cmd.ExecuteNonQueryAsync(req.HttpContext.RequestAborted);
+        using var conn = OpenDbSafe(dbPath, vecExtPath);
+        using var tx = conn.BeginTransaction();
+
+        // items: normal table => UPSERT OK
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+            insert into items(point_id, type, entity_id, title, semester_id, major_id, text)
+            values ($pid, $type, $eid, $title, $sid, $mid, $text)
+            on conflict(point_id) do update set
+              type=excluded.type,
+              entity_id=excluded.entity_id,
+              title=excluded.title,
+              semester_id=excluded.semester_id,
+              major_id=excluded.major_id,
+              text=excluded.text;
+            """;
+            cmd.Parameters.AddWithValue("$pid", pointId);
+            cmd.Parameters.AddWithValue("$type", body.Type);
+            cmd.Parameters.AddWithValue("$eid", (object?)body.EntityId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$title", (object?)body.Title ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$sid", (object?)body.SemesterId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$mid", (object?)body.MajorId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$text", body.Text);
+            await cmd.ExecuteNonQueryAsync(req.HttpContext.RequestAborted);
+        }
+
+        // item_vec: vec0 virtual table => delete + insert (NO UPSERT)
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = "delete from item_vec where point_id = $pid;";
+            cmd.Parameters.AddWithValue("$pid", pointId);
+            await cmd.ExecuteNonQueryAsync(req.HttpContext.RequestAborted);
+        }
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = "insert into item_vec(point_id, embedding) values ($pid, $vec);";
+            cmd.Parameters.AddWithValue("$pid", pointId);
+            cmd.Parameters.AddWithValue("$vec", JsonSerializer.Serialize(vector));
+            await cmd.ExecuteNonQueryAsync(req.HttpContext.RequestAborted);
+        }
+
+        tx.Commit();
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogError(ex, "Upsert failed");
+        return Results.Json(new { ok = false, error = "db_upsert_failed", detail = ex.Message }, statusCode: 503);
+    }
+    finally
+    {
+        dbWriteGate.Release();
     }
 
-    // item_vec: vec0 virtual table => delete + insert (NO UPSERT)
-    using (var cmd = conn.CreateCommand())
-    {
-        cmd.Transaction = tx;
-        cmd.CommandText = "delete from item_vec where point_id = $pid;";
-        cmd.Parameters.AddWithValue("$pid", pointId);
-        await cmd.ExecuteNonQueryAsync(req.HttpContext.RequestAborted);
-    }
-    using (var cmd = conn.CreateCommand())
-    {
-        cmd.Transaction = tx;
-        cmd.CommandText = "insert into item_vec(point_id, embedding) values ($pid, $vec);";
-        cmd.Parameters.AddWithValue("$pid", pointId);
-        cmd.Parameters.AddWithValue("$vec", JsonSerializer.Serialize(vector));
-        await cmd.ExecuteNonQueryAsync(req.HttpContext.RequestAborted);
-    }
-
-    tx.Commit();
     return Results.Ok(new { ok = true, pointId });
 });
 
@@ -244,54 +303,81 @@ app.MapPost("/index/delete", async (HttpRequest req) =>
     if (string.IsNullOrWhiteSpace(pointId))
         return Results.BadRequest(new { error = "Missing pointId" });
 
-    using var conn = OpenDbSafe(dbPath, vecExtPath);
-    using var tx = conn.BeginTransaction();
-
-    using (var cmd = conn.CreateCommand())
+    await dbWriteGate.WaitAsync(req.HttpContext.RequestAborted);
+    try
     {
-        cmd.Transaction = tx;
-        cmd.CommandText = "delete from item_vec where point_id = $pid;";
-        cmd.Parameters.AddWithValue("$pid", pointId);
-        await cmd.ExecuteNonQueryAsync(req.HttpContext.RequestAborted);
+        using var conn = OpenDbSafe(dbPath, vecExtPath);
+        using var tx = conn.BeginTransaction();
+
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = "delete from item_vec where point_id = $pid;";
+            cmd.Parameters.AddWithValue("$pid", pointId);
+            await cmd.ExecuteNonQueryAsync(req.HttpContext.RequestAborted);
+        }
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = "delete from items where point_id = $pid;";
+            cmd.Parameters.AddWithValue("$pid", pointId);
+            await cmd.ExecuteNonQueryAsync(req.HttpContext.RequestAborted);
+        }
+
+        tx.Commit();
     }
-    using (var cmd = conn.CreateCommand())
+    catch (Exception ex)
     {
-        cmd.Transaction = tx;
-        cmd.CommandText = "delete from items where point_id = $pid;";
-        cmd.Parameters.AddWithValue("$pid", pointId);
-        await cmd.ExecuteNonQueryAsync(req.HttpContext.RequestAborted);
+        app.Logger.LogError(ex, "Delete failed");
+        return Results.Json(new { ok = false, error = "db_delete_failed", detail = ex.Message }, statusCode: 503);
+    }
+    finally
+    {
+        dbWriteGate.Release();
     }
 
-    tx.Commit();
     return Results.Ok(new { ok = true, pointId });
 });
 
-// Compatibility: Teammy API currently calls DELETE /index/delete/{pointId}
 app.MapDelete("/index/delete/{pointId}", async (HttpRequest req, string pointId) =>
 {
     if (!Authorized(req)) return Results.Unauthorized();
     if (string.IsNullOrWhiteSpace(pointId))
         return Results.BadRequest(new { error = "Missing pointId" });
 
-    using var conn = OpenDbSafe(dbPath, vecExtPath);
-    using var tx = conn.BeginTransaction();
-
-    using (var cmd = conn.CreateCommand())
+    await dbWriteGate.WaitAsync(req.HttpContext.RequestAborted);
+    try
     {
-        cmd.Transaction = tx;
-        cmd.CommandText = "delete from item_vec where point_id = $pid;";
-        cmd.Parameters.AddWithValue("$pid", pointId);
-        await cmd.ExecuteNonQueryAsync(req.HttpContext.RequestAborted);
+        using var conn = OpenDbSafe(dbPath, vecExtPath);
+        using var tx = conn.BeginTransaction();
+
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = "delete from item_vec where point_id = $pid;";
+            cmd.Parameters.AddWithValue("$pid", pointId);
+            await cmd.ExecuteNonQueryAsync(req.HttpContext.RequestAborted);
+        }
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = "delete from items where point_id = $pid;";
+            cmd.Parameters.AddWithValue("$pid", pointId);
+            await cmd.ExecuteNonQueryAsync(req.HttpContext.RequestAborted);
+        }
+
+        tx.Commit();
     }
-    using (var cmd = conn.CreateCommand())
+    catch (Exception ex)
     {
-        cmd.Transaction = tx;
-        cmd.CommandText = "delete from items where point_id = $pid;";
-        cmd.Parameters.AddWithValue("$pid", pointId);
-        await cmd.ExecuteNonQueryAsync(req.HttpContext.RequestAborted);
+        app.Logger.LogError(ex, "Delete failed");
+        return Results.Json(new { ok = false, error = "db_delete_failed", detail = ex.Message }, statusCode: 503);
+    }
+    finally
+    {
+        dbWriteGate.Release();
     }
 
-    tx.Commit();
     return Results.Ok(new { ok = true, pointId });
 });
 
@@ -304,8 +390,11 @@ app.MapPost("/search", async (HttpRequest req, IHttpClientFactory hf) =>
         return Results.BadRequest(new { error = "Missing queryText" });
 
     var embed = hf.CreateClient("embed");
-    var q = await LlamaEmbedAsync(embed, body.QueryText!, req.HttpContext.RequestAborted);
+    var embRes = await LlamaEmbedSafeAsync(embed, body.QueryText!, embedGate, req.HttpContext.RequestAborted);
+    if (!embRes.ok)
+        return Results.Json(new { ok = false, error = "embed_failed", detail = embRes.error, status = embRes.status }, statusCode: 503);
 
+    var q = embRes.vector!;
     var limit = body.Limit <= 0 ? 20 : Math.Min(body.Limit, 100);
 
     using var conn = OpenDbSafe(dbPath, vecExtPath);
@@ -391,28 +480,37 @@ Schema:
 
     var llm = hf.CreateClient("llm");
 
-    var (content, finish) = await LlamaChatAsync(llm, sys, user, temperature: 0.2, maxTokens: 2600, req.HttpContext.RequestAborted);
-    var extracted = ExtractFirstCompleteJsonObject(content);
+    // Safe call (no 500)
+    var call1 = await LlamaChatSafeAsync(llm, sys, user, temperature: 0.2, maxTokens: 2600, llmGate, req.HttpContext.RequestAborted);
+    if (!call1.ok)
+        return Results.Json(new { ok = false, error = "llm_failed", detail = call1.error, status = call1.status }, statusCode: 503);
 
-    if (extracted is null || finish == "length")
+    var extracted = ExtractFirstCompleteJsonValue(call1.content);
+
+    // If truncated, retry with higher tokens
+    if (extracted is null || call1.finish == "length")
     {
-        (content, finish) = await LlamaChatAsync(llm, sys, user, temperature: 0.2, maxTokens: 4200, req.HttpContext.RequestAborted);
-        extracted = ExtractFirstCompleteJsonObject(content);
+        var call2 = await LlamaChatSafeAsync(llm, sys, user, temperature: 0.2, maxTokens: 4200, llmGate, req.HttpContext.RequestAborted);
+        if (!call2.ok)
+            return Results.Json(new { ok = false, error = "llm_failed", detail = call2.error, status = call2.status }, statusCode: 503);
+
+        extracted = ExtractFirstCompleteJsonValue(call2.content);
     }
 
     if (extracted is null)
-        return Results.Problem("LLM returned truncated/invalid JSON for extract-skills.");
+        return Results.Json(new { ok = false, error = "llm_invalid_json_or_truncated" }, statusCode: 200);
 
     extracted = EscapeNewlinesInsideJsonStrings(extracted);
 
     if (!TryParseJson(extracted, out var parsed, out var err))
-        return Results.Problem($"LLM returned invalid JSON: {err}");
+        return Results.Json(new { ok = false, error = "llm_invalid_json", detail = err }, statusCode: 200);
 
     return Results.Text(parsed!.RootElement.GetRawText(), "application/json");
 });
 
 // ======================================================================
 // NEW: LLM Generate Group Post Draft
+// (kept from your version; uses safe JSON retry already)
 // ======================================================================
 app.MapPost("/llm/generate-post/group", async (HttpRequest req, IHttpClientFactory hf) =>
 {
@@ -423,28 +521,17 @@ app.MapPost("/llm/generate-post/group", async (HttpRequest req, IHttpClientFacto
         return Results.BadRequest(new { error = "Missing group.name" });
 
     var opts = body.Options ?? new PostOptions(Language: null, MaxWords: null, Tone: null);
-
-    // Always respond in English unless explicitly overridden.
     var lang = string.IsNullOrWhiteSpace(opts.Language) ? "en" : opts.Language!.Trim();
     var tone = string.IsNullOrWhiteSpace(opts.Tone) ? "friendly" : opts.Tone!.Trim();
     var maxWordsRaw = opts.MaxWords ?? POST_MAX_WORDS_DEFAULT;
     var maxWords = Math.Clamp(maxWordsRaw, POST_MAX_WORDS_MIN, POST_MAX_WORDS_MAX);
 
-    // Deterministic spec: compute a suggested role bucket + provide an allowed skill bank.
     var spec = ComputeGroupPostSpec(body);
 
     var allowedPositions = new[]
     {
-        "Frontend Developer",
-        "Backend Developer",
-        "Mobile Developer",
-        "AI Engineer",
-        "QA Engineer",
-        "Project Manager",
-        "Data Analyst",
-        "UI/UX Designer",
-        "DevOps Engineer",
-        "Business Analyst"
+        "Frontend Developer","Backend Developer","Mobile Developer","AI Engineer","QA Engineer",
+        "Project Manager","Data Analyst","UI/UX Designer","DevOps Engineer","Business Analyst"
     };
 
     var sys = """
@@ -490,11 +577,12 @@ Schema:
 
     var llm = hf.CreateClient("llm");
 
-    var (ok, json, err, dbg) = await CallJsonWithRetryAsync(
+    var (ok, json, err, dbg) = await CallJsonWithRetrySafeAsync(
         llm, sys, user,
         temperature: 0.35,
         maxTokens1: 650,
         maxTokens2: 950,
+        llmGate,
         req.HttpContext.RequestAborted);
 
     if (!ok)
@@ -505,40 +593,8 @@ Schema:
 
     var root = parsed!.RootElement;
 
-    // light validation + extra retry if the model echoed input JSON
     if (!HasRequiredKeys(root, "title", "description", "positionNeed", "requiredSkills") || IsBadPositionNeed(GetStringAny(root, "positionNeed", "PositionNeed")))
-    {
-        var sys3 = sys + "\n\nIMPORTANT: Output MUST be EXACTLY ONE JSON object matching the schema.\n" +
-                   "Do NOT echo the input fields (language/tone/maxWords/person/project/postSpec).\n" +
-                   "The JSON MUST include keys: title, description, positionNeed, requiredSkills.\n" +
-                   "positionNeed MUST be one of allowedPositions and MUST NOT be 'Other'.\n" +
-                   "requiredSkills MUST be an array of 3-6 items from skillBank only.";
-
-        var (c3, f3) = await LlamaChatAsync(llm, sys3, user, temperature: 0.2, maxTokens: 1200, req.HttpContext.RequestAborted);
-        var j3 = ExtractFirstCompleteJsonObject(c3);
-        if (j3 is not null)
-        {
-            j3 = EscapeNewlinesInsideJsonStrings(j3);
-            if (TryParseJson(j3, out var parsed3, out _))
-            {
-                var r3 = parsed3!.RootElement;
-                if (HasRequiredKeys(r3, "title", "description", "positionNeed", "requiredSkills") && !IsBadPositionNeed(GetStringAny(r3, "positionNeed", "PositionNeed")))
-                {
-                    var draftObj = BuildGroupDraftResponse(r3, spec);
-                    return Results.Json(new { draft = draftObj });
-                }
-
-                return Results.Ok(new
-                {
-                    draft = (object?)null,
-                    error = "llm_missing_required_keys",
-                    detail = new { raw = Clip(r3.GetRawText(), 1200), finish = f3 }
-                });
-            }
-        }
-
         return Results.Ok(new { draft = (object?)null, error = "llm_missing_required_keys", detail = new { raw = Clip(root.GetRawText(), 1200) } });
-    }
 
     return Results.Json(new { draft = BuildGroupDraftResponse(root, spec) });
 });
@@ -555,8 +611,6 @@ app.MapPost("/llm/generate-post/personal", async (HttpRequest req, IHttpClientFa
         return Results.BadRequest(new { error = "Missing user.displayName" });
 
     var opts = body.Options ?? new PostOptions(Language: null, MaxWords: null, Tone: null);
-
-    // Always respond in English unless explicitly overridden.
     var lang = string.IsNullOrWhiteSpace(opts.Language) ? "en" : opts.Language!.Trim();
     var tone = string.IsNullOrWhiteSpace(opts.Tone) ? "professional" : opts.Tone!.Trim();
     var maxWordsRaw = opts.MaxWords ?? POST_MAX_WORDS_DEFAULT;
@@ -581,7 +635,6 @@ RULES:
 - Do NOT invent skills. Use the provided skills only.
 - Make the description engaging and attractive to project teams.
 - Title must be meaningful (NOT just the person's name).
-- Title should reflect intent (seeking a team / looking for a group), target role/goal, and optionally 1 key skill.
 - Keep title to ~6-12 words.
 - Keep description under maxWords words.
 - Include goal and availability if provided.
@@ -607,11 +660,12 @@ Schema:
 
     var llm = hf.CreateClient("llm");
 
-    var (ok, json, err, dbg) = await CallJsonWithRetryAsync(
+    var (ok, json, err, dbg) = await CallJsonWithRetrySafeAsync(
         llm, sys, user,
         temperature: 0.35,
         maxTokens1: 650,
         maxTokens2: 950,
+        llmGate,
         req.HttpContext.RequestAborted);
 
     if (!ok)
@@ -621,65 +675,16 @@ Schema:
         return Results.Ok(new { draft = (object?)null, error = "llm_invalid_json", detail = new { perr, raw = Clip(json!, 1200) } });
 
     var root = parsed!.RootElement;
-
-    // Some local models tend to echo input JSON. If required keys are missing, reprompt once.
     if (!HasRequiredKeys(root, "title", "description"))
-    {
-        var sys3 = sys + "\n\nIMPORTANT: Output MUST be EXACTLY ONE JSON object matching the schema.\n" +
-                   "Do NOT echo the input fields (language/tone/maxWords/person).\n" +
-                   "The JSON MUST include both keys: title and description.";
-
-        var (c3, f3) = await LlamaChatAsync(llm, sys3, user, temperature: 0.2, maxTokens: 1200, req.HttpContext.RequestAborted);
-        var j3 = ExtractFirstCompleteJsonObject(c3);
-        if (j3 is not null)
-        {
-            j3 = EscapeNewlinesInsideJsonStrings(j3);
-            if (TryParseJson(j3, out var parsed3, out _))
-            {
-                var r3 = parsed3!.RootElement;
-                if (HasRequiredKeys(r3, "title", "description"))
-                    return Results.Json(new { draft = BuildPersonalDraftResponse(r3) });
-
-                return Results.Ok(new
-                {
-                    draft = (object?)null,
-                    error = "llm_missing_required_keys",
-                    detail = new { raw = Clip(r3.GetRawText(), 1200), finish = f3 }
-                });
-            }
-        }
-
         return Results.Ok(new { draft = (object?)null, error = "llm_missing_required_keys", detail = new { raw = Clip(root.GetRawText(), 1200) } });
-    }
-
-    // If the title is basically just the name / generic, reprompt once for a better title.
-    var modelTitle = GetStringAny(root, "title", "Title")?.Trim() ?? "";
-    if (IsBadPersonalTitle(modelTitle, body.User.DisplayName))
-    {
-        var sysTitle = sys + "\n\nCRITICAL: Improve the title.\n" +
-                       "Title MUST NOT be only the name or a generic greeting.\n" +
-                       "Title should state intent (seeking team/group) + target role/goal.\n" +
-                       "Return ONE JSON object matching the schema.";
-
-        var (cT, fT) = await LlamaChatAsync(llm, sysTitle, user, temperature: 0.25, maxTokens: 650, req.HttpContext.RequestAborted);
-        var jT = ExtractFirstCompleteJsonObject(cT);
-        if (jT is not null)
-        {
-            jT = EscapeNewlinesInsideJsonStrings(jT);
-            if (TryParseJson(jT, out var parsedT, out _))
-            {
-                var rT = parsedT!.RootElement;
-                if (HasRequiredKeys(rT, "title", "description"))
-                    return Results.Json(new { draft = BuildPersonalDraftResponse(rT) });
-            }
-        }
-    }
 
     return Results.Json(new { draft = BuildPersonalDraftResponse(root) });
 });
 
 // ======================================================================
 // LLM: Rerank (topic / group_post / personal_post)
+// - SAFE upstream calls (no 500)
+// - BATCH reason generation (fast)
 // ======================================================================
 app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
 {
@@ -691,7 +696,7 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
 
     var mode = NormalizeMode(GetStringAny(root, "mode", "Mode") ?? "topic");
 
-    // Bulk operations (auto-assign) can skip reason generation for speed.
+    // withReasons (default true)
     var withReasons = true;
     var withReasonsStr = GetStringAny(root, "withReasons", "WithReasons", "with_reasons", "With_Reasons");
     if (!string.IsNullOrWhiteSpace(withReasonsStr) && bool.TryParse(withReasonsStr, out var wr))
@@ -746,19 +751,17 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
     if (candidates.Count == 0)
         return Results.Json(new { ranked = Array.Empty<object>() });
 
-    // Phase A: Cross-encoder rerank (python)
+    // Phase A: Cross-encoder rerank (python) - SAFE
     var rrClient = hf.CreateClient("rerank");
     var rrTexts = candidates.Select(c => BuildRerankText(c, RERANK_TEXT_MAX)).ToArray();
 
-    using var rrRes = await rrClient.PostAsJsonAsync("/rerank", new { query = queryText, candidates = rrTexts }, req.HttpContext.RequestAborted);
-    var rrJson = await rrRes.Content.ReadAsStringAsync(req.HttpContext.RequestAborted);
-    rrRes.EnsureSuccessStatusCode();
+    var rrRes = await RerankSafeAsync(rrClient, queryText, rrTexts, rerankGate, req.HttpContext.RequestAborted);
+    if (!rrRes.ok)
+        return Results.Json(new { ok = false, error = "rerank_failed", detail = rrRes.error, status = rrRes.status }, statusCode: 503);
 
-    using var rrDoc = JsonDocument.Parse(rrJson);
-    var logits = rrDoc.RootElement.GetProperty("scores").EnumerateArray().Select(x => x.GetDouble()).ToArray();
-
+    var logits = rrRes.logits!;
     if (logits.Length != candidates.Count)
-        return Results.Problem($"Rerank scores mismatch. scores={logits.Length} candidates={candidates.Count}");
+        return Results.Json(new { ok = false, error = "rerank_scores_mismatch", scores = logits.Length, candidates = candidates.Count }, statusCode: 200);
 
     // Phase B: Score mapping (SEPARATED BY MODE)
     double[] ceScores = IsTopicMode(mode)
@@ -777,7 +780,6 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
         return (WEIGHT_POST_CE * ce) + (WEIGHT_POST_BASE * b);
     }
 
-    // auto_assign_team is an operational mode; never filter by minScore to avoid empty results.
     var minScore = mode == "auto_assign_team" ? 0.0 : (IsTopicMode(mode) ? TOPIC_MIN_SCORE : POST_MIN_SCORE);
 
     var seeds = candidates
@@ -827,116 +829,99 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
         return Results.Json(new { ranked = rankedNoReasons });
     }
 
-    // Phase D: LLM micro-summary reasons
+    // Phase D: LLM reasons (BATCH for speed)
     var llm = hf.CreateClient("llm");
-    var sysOne = BuildReasonSystemPrompt(mode);
+    var sysBatch = BuildReasonBatchSystemPrompt(mode);
+
+    // Keep snippet for reason, but still bounded
+    var items = seeds.Select(s => new
+    {
+        key = s.Key,
+        finalScore = s.FinalScore,
+        anchor = ExtractTitleAnchor(s.Text),
+        snippet = s.Text
+    }).ToArray();
+
+    var userBatch = JsonSerializer.Serialize(new
+    {
+        mode,
+        queryText,
+        policy,
+        items
+    });
 
     var reasons = new Dictionary<string, SummaryInfo>(StringComparer.OrdinalIgnoreCase);
 
-    foreach (var s in seeds)
+    var batchCall = await LlamaChatSafeAsync(llm, sysBatch, userBatch, temperature, maxTokens: 900, llmGate, req.HttpContext.RequestAborted);
+    if (batchCall.ok)
     {
-        var anchor = ExtractTitleAnchor(s.Text);
-        var userOne = JsonSerializer.Serialize(new
+        var extracted = ExtractFirstCompleteJsonValue(batchCall.content);
+        if (extracted is not null)
         {
-            mode,
-            queryText,
-            policy,
-            item = new { key = s.Key, finalScore = s.FinalScore, anchor, snippet = s.Text }
-        });
-
-        var (content, finish) = await LlamaChatAsync(llm, sysOne, userOne, temperature, maxTokens: 320, req.HttpContext.RequestAborted);
-        var extracted = ExtractFirstCompleteJsonObject(content);
-
-        SummaryInfo info;
-        // Accept any successfully parsed, non-empty summary.
-        // Local models frequently violate word-count/format heuristics; rejecting them causes excessive fallbacks.
-        if (extracted is not null && TryParseSingleSummary(extracted, out info) && !string.IsNullOrWhiteSpace(info.Summary))
-        {
-            info = NormalizeReasonSoft(info);
-        }
-        else
-        {
-            // If the model returned plain text (no JSON object), accept it as the reason.
-            var plain = CleanReasonText(content);
-            if (!string.IsNullOrWhiteSpace(plain) && finish != "length")
+            extracted = EscapeNewlinesInsideJsonStrings(extracted);
+            if (TryParseBatchSummaries(extracted, out var dict) && dict.Count > 0)
             {
-                info = NormalizeReasonSoft(new SummaryInfo(plain, FallbackMatchedSkillsFromSnippet(s.Text)));
+                foreach (var kv in dict)
+                    reasons[kv.Key] = NormalizeReasonSoft(kv.Value);
             }
-            else
+            else if (enableDebug)
             {
-            var sysRetry = sysOne + "\n\nIMPORTANT: Return EXACTLY ONE JSON object. No markdown, no commentary.\n" +
-                           "If you previously echoed the input, DO NOT do that.\n" +
-                           "If summary is too long, rewrite it shorter (do NOT truncate with '...').\n" +
-                           "Summary must be ONE sentence (<= 180 characters), end with a period, and include 1-2 technologies.";
-            (content, finish) = await LlamaChatAsync(llm, sysRetry, userOne, temperature: 0.2, maxTokens: 520, req.HttpContext.RequestAborted);
-            extracted = ExtractFirstCompleteJsonObject(content);
+                last.SystemPreview = Clip(sysBatch, 1600);
+                last.UserPreview = Clip(userBatch, 1600);
+                last.RawResponsePreview = Clip(batchCall.content, 1600);
+            }
+        }
+    }
 
-            if (extracted is not null && TryParseSingleSummary(extracted, out var info2) && !string.IsNullOrWhiteSpace(info2.Summary))
-                info = NormalizeReasonSoft(info2);
-            else
+    // Fallback: per-item (only for missing keys), still safe + gated
+    if (reasons.Count < seeds.Count)
+    {
+        var sysOne = BuildReasonSystemPrompt(mode);
+
+        foreach (var s in seeds)
+        {
+            if (reasons.ContainsKey(s.Key)) continue;
+
+            var anchor = ExtractTitleAnchor(s.Text);
+            var userOne = JsonSerializer.Serialize(new
             {
-                var plain2 = CleanReasonText(content);
-                if (!string.IsNullOrWhiteSpace(plain2) && finish != "length")
-                    info = NormalizeReasonSoft(new SummaryInfo(plain2, FallbackMatchedSkillsFromSnippet(s.Text)));
+                mode,
+                queryText,
+                policy,
+                item = new { key = s.Key, finalScore = s.FinalScore, anchor, snippet = s.Text }
+            });
+
+            var oneCall = await LlamaChatSafeAsync(llm, sysOne, userOne, temperature: 0.25, maxTokens: 320, llmGate, req.HttpContext.RequestAborted);
+            SummaryInfo info;
+
+            if (oneCall.ok)
+            {
+                var j = ExtractFirstCompleteJsonValue(oneCall.content);
+                if (j is not null && TryParseSingleSummary(EscapeNewlinesInsideJsonStrings(j), out var info2) && !string.IsNullOrWhiteSpace(info2.Summary))
+                {
+                    info = NormalizeReasonSoft(info2);
+                }
                 else
-                    info = new SummaryInfo(FallbackReasonFromSnippet(s.Title, s.Text), FallbackMatchedSkillsFromSnippet(s.Text));
+                {
+                    var plain = CleanReasonText(oneCall.content);
+                    info = !string.IsNullOrWhiteSpace(plain)
+                        ? NormalizeReasonSoft(new SummaryInfo(plain!, FallbackMatchedSkillsFromSnippet(s.Text)))
+                        : new SummaryInfo(FallbackReasonFromSnippet(s.Title, s.Text), FallbackMatchedSkillsFromSnippet(s.Text));
+                }
             }
+            else
+            {
+                info = new SummaryInfo(FallbackReasonFromSnippet(s.Title, s.Text), FallbackMatchedSkillsFromSnippet(s.Text));
             }
-        }
 
-        // If still too long, ask the model to rewrite shorter (avoid server-side "..." truncation).
-        if (!string.IsNullOrWhiteSpace(info.Summary) && info.Summary.Length > 180)
-        {
-            var sysShort = sysOne + "\n\nCRITICAL: Rewrite summary shorter (do NOT truncate with '...').\n" +
-                           "Return JSON only. ONE sentence. <= 180 characters. Keep meaning.";
-            var userShort = JsonSerializer.Serialize(new { mode, anchor, longSummary = info.Summary, snippet = s.Text });
-            var (cS, fS) = await LlamaChatAsync(llm, sysShort, userShort, temperature: 0.2, maxTokens: 260, req.HttpContext.RequestAborted);
-            var jS = ExtractFirstCompleteJsonObject(cS);
-            if (jS is not null && TryParseSingleSummary(jS, out var infoS) && !string.IsNullOrWhiteSpace(infoS.Summary))
-                info = NormalizeReasonSoft(infoS);
-        }
+            reasons[s.Key] = info;
 
-        // If the model simply copies the candidate summary/detail verbatim, reprompt once for a paraphrase.
-        if (IsLikelyEchoReason(info.Summary, s.Text))
-        {
-            var sysEcho = sysOne + "\n\nCRITICAL: The summary MUST be a paraphrase.\n" +
-                          "Do NOT copy any full sentence from the snippet.\n" +
-                          "Write ONE short sentence (<= 180 characters) and end with a period.";
-
-            var (c4, f4) = await LlamaChatAsync(llm, sysEcho, userOne, temperature: 0.4, maxTokens: 260, req.HttpContext.RequestAborted);
-            var j4 = ExtractFirstCompleteJsonObject(c4);
-
-            if (j4 is not null && TryParseSingleSummary(j4, out var info4) && !string.IsNullOrWhiteSpace(info4.Summary) && !IsLikelyEchoReason(info4.Summary, s.Text))
-                info = NormalizeReasonSoft(info4);
-            else if (enableDebug && last.RawResponsePreview is null)
-                last.RawResponsePreview = Clip(c4, 1600);
-
-            // Keep the original if the retry still echoes (avoid falling back just because of paraphrase quality).
-        }
-
-        // If reason duplicates a previous one, reprompt once to make it distinct.
-        var reasonKey = NormalizeForCompare(info.Summary);
-        if (!string.IsNullOrWhiteSpace(reasonKey) && reasons.Values.Any(x => NormalizeForCompare(x.Summary) == reasonKey))
-        {
-            var sysDistinct = sysOne + "\n\nCRITICAL: Make this reason DISTINCT from others.\n" +
-                              "Must include the anchor keyword at the end in parentheses, exactly like: (" + anchor + ").\n" +
-                              "Return JSON only. ONE sentence. <= 180 characters.";
-            var (cD, fD) = await LlamaChatAsync(llm, sysDistinct, userOne, temperature: 0.35, maxTokens: 260, req.HttpContext.RequestAborted);
-            var jD = ExtractFirstCompleteJsonObject(cD);
-            if (jD is not null && TryParseSingleSummary(jD, out var infoD) && !string.IsNullOrWhiteSpace(infoD.Summary))
-                info = NormalizeReasonSoft(infoD);
-        }
-
-        if (string.IsNullOrWhiteSpace(info.Summary))
-            info = new SummaryInfo(FallbackReasonFromSnippet(s.Title, s.Text), FallbackMatchedSkillsFromSnippet(s.Text));
-
-        reasons[s.Key] = info;
-
-        if (enableDebug && last.SystemPreview is null)
-        {
-            last.SystemPreview = Clip(sysOne, 1600);
-            last.UserPreview = Clip(userOne, 1600);
-            last.RawResponsePreview = Clip(content, 1600);
+            if (enableDebug && last.SystemPreview is null)
+            {
+                last.SystemPreview = Clip(sysOne, 1600);
+                last.UserPreview = Clip(userOne, 1600);
+                last.RawResponsePreview = Clip(oneCall.ok ? oneCall.content : (oneCall.error ?? ""), 1600);
+            }
         }
     }
 
@@ -1004,7 +989,6 @@ static object BuildGroupDraftResponse(JsonElement llmJson, GroupPostSpec spec)
     if (requiredSkills.Count == 0)
         requiredSkills.AddRange(spec.SkillBank.Take(4));
 
-    // Deterministic fields (not generated by LLM)
     var expiresAt = DateTime.UtcNow.AddDays(1).ToString("O", CultureInfo.InvariantCulture);
 
     return new
@@ -1034,32 +1018,6 @@ static object BuildPersonalDraftResponse(JsonElement llmJson)
     return new { title, description };
 }
 
-static bool IsBadPersonalTitle(string? title, string? displayName)
-{
-    if (string.IsNullOrWhiteSpace(title)) return true;
-    var t = NormalizeWhitespace(title!).Trim();
-    if (t.Length < 6) return true;
-
-    var n = NormalizeWhitespace(displayName ?? string.Empty).Trim();
-    if (n.Length == 0) return false;
-
-    var tl = t.ToLowerInvariant();
-    var nl = n.ToLowerInvariant();
-
-    // Exactly the name
-    if (string.Equals(tl, nl, StringComparison.OrdinalIgnoreCase)) return true;
-
-    // "Hi I'm <name>" / "I'm <name>" / "Hello, <name>"
-    if (tl.Contains("i'm") && tl.Contains(nl) && tl.Length <= nl.Length + 12) return true;
-    if (tl.StartsWith("hi ") && tl.Contains(nl) && tl.Length <= nl.Length + 12) return true;
-    if (tl.StartsWith("hello") && tl.Contains(nl) && tl.Length <= nl.Length + 16) return true;
-
-    // Starts with the name and doesn't add much meaning
-    if (tl.StartsWith(nl) && tl.Length <= nl.Length + 10) return true;
-
-    return false;
-}
-
 static string? CleanReasonText(string raw)
 {
     if (string.IsNullOrWhiteSpace(raw))
@@ -1067,7 +1025,6 @@ static string? CleanReasonText(string raw)
 
     raw = raw.Trim();
 
-    // Strip ``` fences if any.
     if (raw.StartsWith("```", StringComparison.Ordinal))
     {
         var firstNl = raw.IndexOf('\n');
@@ -1077,18 +1034,16 @@ static string? CleanReasonText(string raw)
         raw = raw.Trim();
     }
 
-    // If it's a JSON object, don't treat it as plain text.
-    if (raw.Contains('{') && raw.Contains('}'))
+    // If it's a JSON object/array, don't treat it as plain text.
+    if ((raw.Contains('{') && raw.Contains('}')) || (raw.Contains('[') && raw.Contains(']')))
         return null;
 
-    // Remove wrapping quotes.
     raw = raw.Trim().Trim('"').Trim('\'');
     raw = NormalizeWhitespace(raw);
     if (raw.Length == 0)
         return null;
 
     raw = EnsureTrailingPeriod(raw);
-
     return raw;
 }
 
@@ -1097,13 +1052,6 @@ static SummaryInfo NormalizeReasonSoft(SummaryInfo info)
     var summary = NormalizeWhitespace(info.Summary ?? string.Empty);
     summary = EnsureTrailingPeriod(summary);
     return new SummaryInfo(summary, info.MatchedSkills);
-}
-
-static string NormalizeForCompare(string? s)
-{
-    if (string.IsNullOrWhiteSpace(s)) return "";
-    s = NormalizeWhitespace(s).Trim().TrimEnd('.');
-    return s.ToLowerInvariant();
 }
 
 static string NormalizeWhitespace(string s)
@@ -1141,7 +1089,6 @@ static string ExtractTitleAnchor(string snippet)
     title = title.Trim();
     if (title.Length == 0) return "Item";
 
-    // Prefer the first alphanumeric token (before separators like '-', ':', '|').
     var cut = title.IndexOfAny(['-', ':', '|']);
     if (cut > 0) title = title[..cut].Trim();
 
@@ -1150,16 +1097,11 @@ static string ExtractTitleAnchor(string snippet)
         .ToArray());
 
     if (string.IsNullOrWhiteSpace(token))
-    {
-        // Fallback: first word.
         token = title.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "Item";
-    }
 
-    // Keep it short.
     if (token.Length > 20) token = token[..20];
     return token;
 }
-
 
 // ======================================================================
 // Group post spec (deterministic team gap -> skills)
@@ -1174,13 +1116,10 @@ static GroupPostSpec ComputeGroupPostSpec(GenerateGroupPostRequest req)
 
     string roleBucket = PickNeededRole(open, g.PrimaryNeed, mix);
 
-    // Skill catalogs (tune freely)
     var fe = new[] { "React", "TypeScript", "Tailwind", "Vite", "Next.js", "Redux", "UI", "UX" };
     var be = new[] { "C#", "ASP.NET Core", "SQL", "Docker", "REST", "Azure", "CI/CD" };
     var ai = new[] { "Python", "PyTorch", "LLM", "RAG", "Embeddings", "Vector DB" };
     var mobile = new[] { "Flutter", "React Native", "Android", "iOS" };
-
-    // Skill bank provided to the LLM as the ONLY allowed requiredSkills choices.
     var qa = new[] { "QA", "Testing", "Test Cases", "Bug Reporting", "Cypress" };
     var pm = new[] { "Project Management", "Agile", "Communication", "Planning", "Documentation" };
     var data = new[] { "Analytics", "SQL", "Dashboards", "Reporting", "Data Visualization" };
@@ -1188,16 +1127,7 @@ static GroupPostSpec ComputeGroupPostSpec(GenerateGroupPostRequest req)
     var devops = new[] { "DevOps", "CI/CD", "Docker", "Kubernetes", "Monitoring" };
     var ba = new[] { "Requirements", "User Stories", "Documentation", "Stakeholder Management" };
 
-    var skillBank = fe
-        .Concat(be)
-        .Concat(ai)
-        .Concat(mobile)
-        .Concat(qa)
-        .Concat(pm)
-        .Concat(data)
-        .Concat(uiux)
-        .Concat(devops)
-        .Concat(ba)
+    var skillBank = fe.Concat(be).Concat(ai).Concat(mobile).Concat(qa).Concat(pm).Concat(data).Concat(uiux).Concat(devops).Concat(ba)
         .Where(s => !string.IsNullOrWhiteSpace(s))
         .Select(s => s.Trim())
         .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -1218,7 +1148,6 @@ static GroupPostSpec ComputeGroupPostSpec(GenerateGroupPostRequest req)
         {
             if (open.Fe >= open.Be && open.Fe >= open.Other) return "Frontend";
             if (open.Be >= open.Fe && open.Be >= open.Other) return "Backend";
-            // Prefer a non-generic bucket for "other" slots.
             return "Other";
         }
 
@@ -1235,55 +1164,56 @@ static GroupPostSpec ComputeGroupPostSpec(GenerateGroupPostRequest req)
 }
 
 // ======================================================================
-// JSON call helper for post generation (retry)
+// JSON call helper for post generation (retry) - SAFE + GATED
 // ======================================================================
 
-static async Task<(bool ok, string? json, string? err, object? dbg)> CallJsonWithRetryAsync(
+static async Task<(bool ok, string? json, string? err, object? dbg)> CallJsonWithRetrySafeAsync(
     HttpClient llm,
     string system,
     string user,
     double temperature,
     int maxTokens1,
     int maxTokens2,
+    SemaphoreSlim llmGate,
     CancellationToken ct)
 {
-    // Attempt 1
-    var (c1, f1) = await LlamaChatAsync(llm, system, user, temperature, maxTokens1, ct);
-    var j1 = ExtractFirstCompleteJsonObject(c1);
+    var c1 = await LlamaChatSafeAsync(llm, system, user, temperature, maxTokens1, llmGate, ct);
+    if (!c1.ok)
+        return (false, null, "llm_http_failed", new { attempt = 1, c1.status, c1.error });
 
+    var j1 = ExtractFirstCompleteJsonValue(c1.content);
     if (j1 is not null)
     {
         j1 = EscapeNewlinesInsideJsonStrings(j1);
         if (TryParseJson(j1, out _, out _))
-            return (true, j1, null, new { attempt = 1, finish = f1 });
+            return (true, j1, null, new { attempt = 1, finish = c1.finish });
     }
 
-    // Attempt 2
     var sys2 = system + "\nIf JSON is missing/invalid, return ONE complete JSON object that matches the schema.";
-    var (c2, f2) = await LlamaChatAsync(llm, sys2, user, temperature, maxTokens2, ct);
-    var j2 = ExtractFirstCompleteJsonObject(c2);
+    var c2 = await LlamaChatSafeAsync(llm, sys2, user, temperature, maxTokens2, llmGate, ct);
+    if (!c2.ok)
+        return (false, null, "llm_http_failed", new { attempt = 2, c2.status, c2.error });
 
+    var j2 = ExtractFirstCompleteJsonValue(c2.content);
     if (j2 is not null)
     {
         j2 = EscapeNewlinesInsideJsonStrings(j2);
         if (TryParseJson(j2, out _, out _))
-            return (true, j2, null, new { attempt = 2, finish = f2 });
+            return (true, j2, null, new { attempt = 2, finish = c2.finish });
     }
 
     return (false, null, "no_complete_valid_json", new
     {
-        attempt1 = new { finish = f1, preview = Clip(c1, 900) },
-        attempt2 = new { finish = f2, preview = Clip(c2, 900) }
+        attempt1 = new { finish = c1.finish, preview = Clip(c1.content, 900) },
+        attempt2 = new { finish = c2.finish, preview = Clip(c2.content, 900) }
     });
 }
-
 
 // ======================================================================
 // Scoring (SEPARATED BY MODE)
 // ======================================================================
 
 static bool IsTopicMode(string mode) => NormalizeMode(mode) == "topic";
-
 static double Sigmoid(double x) => 1.0 / (1.0 + Math.Exp(-x));
 
 static double[] ScoreTopicAbsolute(double[] logits, double pivot, double scale)
@@ -1319,7 +1249,6 @@ static double[] ScorePostRelative(double[] logits)
     return scores;
 }
 
-
 // ======================================================================
 // Prompt builders (reason micro-summary)
 // ======================================================================
@@ -1332,24 +1261,11 @@ static string BuildReasonSystemPrompt(string mode)
 Return ONLY valid JSON. No markdown. No code fences. No extra keys.
 
 You are explaining WHY the finalScore (0-100) is what it is.
-The input snippet contains signals like:
-- NEEDED_ROLE
-- TEAM_MIX / team needs
-- MATCHING_SKILLS / SKILLS
-- BASELINE_SCORE and finalScore
-
-IMPORTANT consistency rules:
-- If finalScore >= 70: you may say "strong fit".
-- If 40 <= finalScore < 70: say "moderate fit" and mention 1 trade-off.
-- If finalScore < 40: say "weak fit" and mention 1 missing/weak signal.
-- Do NOT claim "high/strong" when finalScore < 40.
-
 Write ONE short justification sentence:
 - 1 sentence, <= 180 characters (including spaces).
 - Do NOT truncate with "...". If it's too long, rewrite shorter.
 - Do NOT restate the item's description/title.
-- Include the provided anchor keyword at the very end in parentheses, e.g. "(... )".
-- Mention team need (FE/BE/Other) when available.
+- Include the provided anchor keyword at the very end in parentheses.
 - Mention 1-2 concrete technologies.
 - End with a period.
 
@@ -1366,11 +1282,6 @@ Schema:
 
 Focus: Team gap matching.
 Prioritize NEEDED_ROLE and TEAM_MIX. Use MATCHING_SKILLS when present.
-
-Good examples:
-- {"summary":"Strong fit for backend gap with C# and ASP.NET Core aligned to team needs (Backend).","matchedSkills":["C#","ASP.NET Core"]}
-- {"summary":"Moderate fit for frontend need via React and Tailwind, but missing backend depth (Frontend).","matchedSkills":["React","Tailwind"]}
-- {"summary":"Weak fit: limited frontend signals and missing role alignment despite Azure exposure (Frontend).","matchedSkills":["Azure"]}
 """;
     }
 
@@ -1378,6 +1289,43 @@ Good examples:
 
 Focus: Topic matching query goals and skills overlap.
 Mention 1-2 matched skills and 1 missing/weak point if any.
+""";
+}
+
+// Batch reasons: 1 call for all seeds (FAST)
+static string BuildReasonBatchSystemPrompt(string mode)
+{
+    mode = NormalizeMode(mode);
+
+    var common = """
+Return ONLY valid JSON. No markdown. No code fences. No extra keys.
+
+You will receive: items[] each with key finalScore anchor snippet.
+
+For EACH item:
+- Write ONE short sentence (<= 180 characters) ending with a period.
+- Include 1-2 technologies that appear in the snippet.
+- End with the anchor in parentheses, exactly: (anchor).
+- matchedSkills must contain 1-3 skills found in snippet.
+
+Do NOT invent skills. Do NOT copy full sentences from the snippet.
+
+Return EXACT schema:
+{"items":[{"key":"...","summary":"...","matchedSkills":["..."]}]}
+""";
+
+    if (mode is "group_post" or "personal_post" or "auto_assign_team")
+    {
+        return common + """
+
+Focus: Team gap matching.
+Prioritize NEEDED_ROLE and TEAM_MIX. Use MATCHING_SKILLS when present.
+""";
+    }
+
+    return common + """
+
+Focus: Topic matching query goals and skills overlap.
 """;
 }
 
@@ -1573,60 +1521,181 @@ static string? ExtractLine(string text, string prefix)
 }
 
 // ======================================================================
-// llama.cpp OpenAI-compatible calls
+// SAFE upstream calls (NO EnsureSuccessStatusCode throwing 500)
 // ======================================================================
 
-static async Task<double[]> LlamaEmbedAsync(HttpClient embed, string input, CancellationToken ct)
+static async Task<(bool ok, double[]? vector, int status, string? error)> LlamaEmbedSafeAsync(
+    HttpClient embed, string input, SemaphoreSlim gate, CancellationToken ct)
 {
-    using var res = await embed.PostAsJsonAsync("/v1/embeddings", new { input = Clip(input, 9000) }, ct);
-    var json = await res.Content.ReadAsStringAsync(ct);
-    res.EnsureSuccessStatusCode();
+    await gate.WaitAsync(ct);
+    try
+    {
+        for (int attempt = 1; attempt <= 2; attempt++)
+        {
+            try
+            {
+                using var res = await embed.PostAsJsonAsync("/v1/embeddings", new { input = Clip(input, 9000) }, ct);
+                var json = await res.Content.ReadAsStringAsync(ct);
 
-    using var doc = JsonDocument.Parse(json);
-    return doc.RootElement.GetProperty("data")[0].GetProperty("embedding")
-        .EnumerateArray().Select(x => x.GetDouble()).ToArray();
+                if (!res.IsSuccessStatusCode)
+                {
+                    if (attempt < 2 && IsRetryableStatus(res.StatusCode))
+                    {
+                        await Task.Delay(150, ct);
+                        continue;
+                    }
+                    return (false, null, (int)res.StatusCode, Clip(json, 800));
+                }
+
+                using var doc = JsonDocument.Parse(json);
+                var vec = doc.RootElement.GetProperty("data")[0].GetProperty("embedding")
+                    .EnumerateArray().Select(x => x.GetDouble()).ToArray();
+
+                return (true, vec, (int)res.StatusCode, null);
+            }
+            catch (Exception ex) when (attempt < 2)
+            {
+                await Task.Delay(150, ct);
+            }
+            catch (Exception ex)
+            {
+                return (false, null, 0, ex.Message);
+            }
+        }
+
+        return (false, null, 0, "embed_unknown_failure");
+    }
+    finally
+    {
+        gate.Release();
+    }
 }
 
-static async Task<(string Content, string FinishReason)> LlamaChatAsync(
+static async Task<(bool ok, double[]? logits, int status, string? error)> RerankSafeAsync(
+    HttpClient rr, string query, string[] candidates, SemaphoreSlim gate, CancellationToken ct)
+{
+    await gate.WaitAsync(ct);
+    try
+    {
+        for (int attempt = 1; attempt <= 2; attempt++)
+        {
+            try
+            {
+                using var res = await rr.PostAsJsonAsync("/rerank", new { query, candidates }, ct);
+                var json = await res.Content.ReadAsStringAsync(ct);
+
+                if (!res.IsSuccessStatusCode)
+                {
+                    if (attempt < 2 && IsRetryableStatus(res.StatusCode))
+                    {
+                        await Task.Delay(150, ct);
+                        continue;
+                    }
+                    return (false, null, (int)res.StatusCode, Clip(json, 900));
+                }
+
+                using var doc = JsonDocument.Parse(json);
+                var logits = doc.RootElement.GetProperty("scores").EnumerateArray().Select(x => x.GetDouble()).ToArray();
+                return (true, logits, (int)res.StatusCode, null);
+            }
+            catch (Exception ex) when (attempt < 2)
+            {
+                await Task.Delay(150, ct);
+            }
+            catch (Exception ex)
+            {
+                return (false, null, 0, ex.Message);
+            }
+        }
+
+        return (false, null, 0, "rerank_unknown_failure");
+    }
+    finally
+    {
+        gate.Release();
+    }
+}
+
+static async Task<(bool ok, string content, string finish, int status, string? error)> LlamaChatSafeAsync(
     HttpClient llm,
     string system,
     string user,
     double temperature,
     int maxTokens,
+    SemaphoreSlim gate,
     CancellationToken ct)
 {
-    var payload = new
+    await gate.WaitAsync(ct);
+    try
     {
-        messages = new object[]
+        var payload = new
         {
-            new { role = "system", content = system },
-            new { role = "user", content = user }
-        },
-        temperature,
-        max_tokens = maxTokens
-    };
+            messages = new object[]
+            {
+                new { role = "system", content = system },
+                new { role = "user", content = user }
+            },
+            temperature,
+            max_tokens = maxTokens
+        };
 
-    using var res = await llm.PostAsJsonAsync("/v1/chat/completions", payload, ct);
-    var json = await res.Content.ReadAsStringAsync(ct);
-    res.EnsureSuccessStatusCode();
+        for (int attempt = 1; attempt <= 2; attempt++)
+        {
+            try
+            {
+                using var res = await llm.PostAsJsonAsync("/v1/chat/completions", payload, ct);
+                var json = await res.Content.ReadAsStringAsync(ct);
 
-    using var doc = JsonDocument.Parse(json);
-    var choice = doc.RootElement.GetProperty("choices")[0];
-    var finish = choice.TryGetProperty("finish_reason", out var fr) ? (fr.GetString() ?? "unknown") : "unknown";
-    var content = choice.GetProperty("message").GetProperty("content").GetString() ?? "";
-    return (content, finish);
+                if (!res.IsSuccessStatusCode)
+                {
+                    if (attempt < 2 && IsRetryableStatus(res.StatusCode))
+                    {
+                        await Task.Delay(180, ct);
+                        continue;
+                    }
+                    return (false, "", "error", (int)res.StatusCode, Clip(json, 900));
+                }
+
+                using var doc = JsonDocument.Parse(json);
+                var choice = doc.RootElement.GetProperty("choices")[0];
+                var finish = choice.TryGetProperty("finish_reason", out var fr) ? (fr.GetString() ?? "unknown") : "unknown";
+                var content = choice.GetProperty("message").GetProperty("content").GetString() ?? "";
+                return (true, content, finish, (int)res.StatusCode, null);
+            }
+            catch (Exception ex) when (attempt < 2)
+            {
+                await Task.Delay(180, ct);
+            }
+            catch (Exception ex)
+            {
+                return (false, "", "error", 0, ex.Message);
+            }
+        }
+
+        return (false, "", "error", 0, "llm_unknown_failure");
+    }
+    finally
+    {
+        gate.Release();
+    }
+}
+
+static bool IsRetryableStatus(HttpStatusCode code)
+{
+    var n = (int)code;
+    return n == 408 || n == 429 || n == 500 || n == 502 || n == 503 || n == 504;
 }
 
 // ======================================================================
 // JSON extraction / parsing
 // ======================================================================
 
-static string? ExtractFirstCompleteJsonObject(string raw)
+// Extract FIRST complete JSON value (object OR array) from raw output
+static string? ExtractFirstCompleteJsonValue(string raw)
 {
     if (string.IsNullOrWhiteSpace(raw)) return null;
     raw = raw.Trim();
 
-    // Strip ``` fences if any
     if (raw.StartsWith("```"))
     {
         var firstNl = raw.IndexOf('\n');
@@ -1636,8 +1705,22 @@ static string? ExtractFirstCompleteJsonObject(string raw)
         raw = raw.Trim();
     }
 
-    var start = raw.IndexOf('{');
-    if (start < 0) return null;
+    var startObj = raw.IndexOf('{');
+    var startArr = raw.IndexOf('[');
+
+    int start;
+    char open;
+    char close;
+
+    if (startObj < 0 && startArr < 0) return null;
+    if (startObj >= 0 && (startArr < 0 || startObj < startArr))
+    {
+        start = startObj; open = '{'; close = '}';
+    }
+    else
+    {
+        start = startArr; open = '['; close = ']';
+    }
 
     int depth = 0;
     bool inStr = false, esc = false;
@@ -1656,13 +1739,17 @@ static string? ExtractFirstCompleteJsonObject(string raw)
 
         if (ch == '"') { inStr = true; continue; }
 
-        if (ch == '{') depth++;
-        else if (ch == '}')
+        if (ch == open) depth++;
+        else if (ch == close)
         {
             depth--;
             if (depth == 0)
                 return raw.Substring(start, i - start + 1);
         }
+
+        // handle nested object/array mix
+        if (open == '{' && ch == '[' && !inStr) { /* ok */ }
+        if (open == '[' && ch == '{' && !inStr) { /* ok */ }
     }
 
     return null;
@@ -1762,7 +1849,6 @@ static bool TryParseSingleSummary(string? json, out SummaryInfo info)
         }
         else
         {
-            // Some models return matchedSkills as a single string.
             var one = GetStringAny(root, "matchedSkills", "MatchedSkills", "matched_skills", "Matched_Skills");
             if (!string.IsNullOrWhiteSpace(one))
                 ms.AddRange(one.Split(',', StringSplitOptions.RemoveEmptyEntries)
@@ -1781,37 +1867,49 @@ static bool TryParseSingleSummary(string? json, out SummaryInfo info)
     }
 }
 
-static bool IsGoodSummary(string s)
+// Parse {"items":[{key,summary,matchedSkills}...]} into dict
+static bool TryParseBatchSummaries(string json, out Dictionary<string, SummaryInfo> dict)
 {
-    // Kept for backward compatibility with any future call sites.
-    // For the current pipeline we accept any parsed, non-empty summary.
-    return !string.IsNullOrWhiteSpace(s);
-}
+    dict = new Dictionary<string, SummaryInfo>(StringComparer.OrdinalIgnoreCase);
 
-static bool IsLikelyEchoReason(string summary, string snippet)
-{
-    if (string.IsNullOrWhiteSpace(summary) || string.IsNullOrWhiteSpace(snippet))
-        return false;
-
-    var s = TrimOneLine(summary, 1000).Trim();
-    var sumLine = ExtractLine(snippet, "SUMMARY:");
-
-    if (!string.IsNullOrWhiteSpace(sumLine))
+    try
     {
-        var t = TrimOneLine(sumLine!, 1400).Trim();
-        if (string.Equals(s, t, StringComparison.OrdinalIgnoreCase))
-            return true;
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        if (!root.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array)
+            return false;
+
+        foreach (var it in items.EnumerateArray())
+        {
+            if (it.ValueKind != JsonValueKind.Object) continue;
+            var key = GetStringAny(it, "key", "Key");
+            var summary = GetStringAny(it, "summary", "Summary");
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(summary)) continue;
+
+            var ms = new List<string>();
+            if (TryGetArrayAny(it, out var arr, "matchedSkills", "MatchedSkills"))
+            {
+                foreach (var x in arr.EnumerateArray())
+                {
+                    if (x.ValueKind != JsonValueKind.String) continue;
+                    var v = (x.GetString() ?? "").Trim();
+                    if (v.Length == 0) continue;
+                    if (!ms.Contains(v, StringComparer.OrdinalIgnoreCase))
+                        ms.Add(v);
+                    if (ms.Count >= 3) break;
+                }
+            }
+
+            dict[key!] = new SummaryInfo(summary!, ms.ToArray());
+        }
+
+        return dict.Count > 0;
     }
-
-    // If summary is a long substring of the snippet, it's probably a copy.
-    if (s.Length >= 60 && snippet.IndexOf(s, StringComparison.OrdinalIgnoreCase) >= 0)
-        return true;
-
-    // If summary starts with the title and then continues with description-like content, treat as echo.
-    if (s.Length >= 90 && s.Contains(" | ") && s.StartsWith(TrimOneLine(ExtractLine(snippet, "TITLE:") ?? "", 120), StringComparison.OrdinalIgnoreCase))
-        return true;
-
-    return false;
+    catch
+    {
+        return false;
+    }
 }
 
 static string FallbackReasonFromSnippet(string title, string snippet)
@@ -1846,7 +1944,7 @@ static string[] FallbackMatchedSkillsFromSnippet(string snippet)
 }
 
 // ======================================================================
-// DB helpers
+// DB helpers (WAL + busy_timeout => fewer locks => fewer 500)
 // ======================================================================
 
 static void InitDb(string dbPath, string vecExtPath, int dim)
@@ -1883,13 +1981,27 @@ static void InitDb(string dbPath, string vecExtPath, int dim)
 
 static SqliteConnection OpenDbSafe(string dbPath, string vecExtPath)
 {
-    var conn = new SqliteConnection($"Data Source={dbPath}");
+    // Pooling + default timeout helps a lot on multi-request
+    var conn = new SqliteConnection($"Data Source={dbPath};Cache=Shared;Pooling=True;Default Timeout=5;");
     conn.Open();
 
     try
     {
         conn.EnableExtensions(true);
         conn.LoadExtension(vecExtPath);
+
+        // PRAGMAs to reduce locking & improve throughput
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = """
+            pragma journal_mode = WAL;
+            pragma synchronous = NORMAL;
+            pragma temp_store = MEMORY;
+            pragma busy_timeout = 5000;
+            """;
+            cmd.ExecuteNonQuery();
+        }
+
         return conn;
     }
     catch (Exception ex)
@@ -2154,14 +2266,9 @@ record GroupInfo(
 );
 
 record Mix(int Fe, int Be, int Other);
-
 record ProjectInfo(string? Title, string? Summary);
-
 record PersonalUser(string DisplayName, List<string>? Skills, string? Goal, string? Availability);
-
-// FIXED: NO default parameters (avoids top-level const capture errors)
 record PostOptions(string? Language, int? MaxWords, string? Tone);
-
 record GroupPostSpec(string SuggestedBucket, string[] SkillBank, string[] Tags);
 
 sealed class LastDebug

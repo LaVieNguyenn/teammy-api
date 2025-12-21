@@ -111,6 +111,7 @@ public static class DependencyInjection
         services.AddScoped<IAnnouncementReadOnlyQueries, AnnouncementReadOnlyQueries>();
         services.AddScoped<IAnnouncementRecipientQueries, AnnouncementRecipientQueries>();
         services.AddScoped<AnnouncementService>();
+        services.AddScoped<Teammy.Application.Announcements.Services.AnnouncementPlanningOverviewService>();
 
         // AI Matching
         services.AddScoped<IAiMatchingQueries, AiMatchingQueries>();

@@ -69,10 +69,18 @@ public sealed class DashboardReadOnlyQueries(AppDbContext db) : IDashboardReadOn
             groupsQuery = groupsQuery.Where(g => g.semester_id == resolvedSemesterId.Value);
 
         var totalGroups = await groupsQuery.CountAsync(ct);
-        var groupsMissingTopic = await groupsQuery.Where(g => g.topic_id == null).CountAsync(ct);
-        var groupsMissingMentor = await groupsQuery.Where(g => g.topic_id != null && g.mentor_id == null).CountAsync(ct);
+        var groupsWithoutTopic = await groupsQuery.Where(g => g.topic_id == null).CountAsync(ct);
 
-        var membershipStatuses = new[] { "member", "leader" };
+        // Groups that still have room for more members.
+        var memberStatuses = new[] { "member", "leader", "pending" };
+        var groupsWithoutMember = await groupsQuery
+            .Where(g => db.group_members
+                .AsNoTracking()
+                .Where(gm => gm.group_id == g.group_id && memberStatuses.Contains(gm.status))
+                .Count() < g.max_members)
+            .CountAsync(ct);
+
+        var membershipStatuses = new[] { "member", "leader", "pending" };
         var membershipQuery = db.group_members
             .AsNoTracking()
             .Where(gm => membershipStatuses.Contains(gm.status));
@@ -94,8 +102,8 @@ public sealed class DashboardReadOnlyQueries(AppDbContext db) : IDashboardReadOn
 
         return new ModeratorDashboardStatsDto(
             totalGroups,
-            groupsMissingTopic,
-            groupsMissingMentor,
+            groupsWithoutTopic,
+            groupsWithoutMember,
             studentsWithoutGroup,
             resolvedSemesterId,
             semesterLabel);

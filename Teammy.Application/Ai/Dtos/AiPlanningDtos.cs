@@ -48,8 +48,17 @@ public sealed record PlannedNewGroupDto(
     Guid MajorId,
     string? MajorName,
     int MemberCount,
-    IReadOnlyList<Guid> StudentIds,
+    IReadOnlyList<PlannedNewGroupStudentDto> Students,
     string Reason
+);
+
+public sealed record PlannedNewGroupStudentDto(
+    Guid StudentId,
+    string DisplayName,
+    Guid MajorId,
+    string? MajorName,
+    string? PrimaryRole,
+    IReadOnlyList<string> SkillTags
 );
 
 public sealed record GroupTopicOptionDto(
@@ -61,6 +70,7 @@ public sealed record GroupTopicOptionDto(
     int MaxMembers,
     int CurrentMembers,
     int RemainingSlots,
+    int Score,
     IReadOnlyList<TopicSuggestionDetailDto> Suggestions
 );
 
@@ -82,6 +92,7 @@ public sealed record GroupStaffingOptionDto(
     int MaxMembers,
     int CurrentMembers,
     int RemainingSlots,
+    int Score,
     IReadOnlyList<GroupCandidateSuggestionDto> SuggestedMembers
 );
 
@@ -93,7 +104,7 @@ public sealed record GroupCandidateSuggestionDto(
     string? PrimaryRole,
     IReadOnlyList<string> SkillTags,
     int Score,
-    string Reason
+    string? Reason
 );
 
 public sealed record StudentPlacementOptionDto(
@@ -103,6 +114,8 @@ public sealed record StudentPlacementOptionDto(
     string? MajorName,
     string? PrimaryRole,
     IReadOnlyList<string> SkillTags,
+    int Score,
+    string? Reason,
     GroupPlacementSuggestionDto? SuggestedGroup,
     bool NeedsNewGroup
 );
@@ -112,7 +125,8 @@ public sealed record GroupPlacementSuggestionDto(
     string Name,
     Guid? MajorId,
     string? MajorName,
-    string Reason
+    int Score,
+    string? Reason
 );
 
 public sealed record AiAutoResolveResultDto(

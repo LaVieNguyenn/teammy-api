@@ -4,8 +4,8 @@ namespace Teammy.Application.Dashboard.Dtos;
 
 public sealed record ModeratorDashboardStatsDto(
     int TotalGroups,
-    int GroupsMissingTopic,
-    int GroupsMissingMentor,
+    int GroupsWithoutTopic,
+    int GroupsWithoutMember,
     int StudentsWithoutGroup,
     Guid? SemesterId,
     string? SemesterLabel);
