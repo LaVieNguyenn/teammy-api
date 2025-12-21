@@ -23,6 +23,10 @@ public partial class user
 
     public Guid? major_id { get; set; }
 
+    public double? gpa { get; set; }
+
+    public Guid? desired_position_id { get; set; }
+
     public string? portfolio_url { get; set; }
 
     public string? skills { get; set; }
@@ -56,6 +60,8 @@ public partial class user
     public virtual ICollection<invitation> invitationinvitee_users { get; set; } = new List<invitation>();
 
     public virtual major? major { get; set; }
+
+    public virtual position_list? desired_position { get; set; }
 
     public virtual ICollection<message> messages { get; set; } = new List<message>();
 

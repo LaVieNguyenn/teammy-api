@@ -33,6 +33,7 @@ public sealed class TopicRegistrationPackageImportService : ITopicImportService
     private readonly IMentorLookupService _mentorLookup;
     private readonly ITopicMentorService _topicMentors;
     private readonly IFileStorage _fileStorage;
+    private readonly IMajorReadOnlyQueries _majorQueries;
     private readonly ISkillDictionaryReadOnlyQueries _skillDictionary;
     private readonly IAiLlmClient _llmClient;
 
@@ -43,6 +44,7 @@ public sealed class TopicRegistrationPackageImportService : ITopicImportService
         IMentorLookupService mentorLookup,
         ITopicMentorService topicMentors,
         IFileStorage fileStorage,
+        IMajorReadOnlyQueries majorQueries,
         ISkillDictionaryReadOnlyQueries skillDictionary,
         IAiLlmClient llmClient)
     {
@@ -52,12 +54,17 @@ public sealed class TopicRegistrationPackageImportService : ITopicImportService
         _mentorLookup = mentorLookup;
         _topicMentors = topicMentors;
         _fileStorage = fileStorage;
+        _majorQueries = majorQueries;
         _skillDictionary = skillDictionary;
         _llmClient = llmClient;
     }
 
     public async Task<byte[]> BuildTemplateAsync(CancellationToken ct)
     {
+        var majors = await _majorQueries.GetAllMajorNamesAsync(ct);
+        var sampleMajor1 = majors.FirstOrDefault() ?? "Software Engineering";
+        var sampleMajor2 = majors.Skip(1).FirstOrDefault() ?? majors.FirstOrDefault() ?? "Information Systems";
+
         using var workbookStream = new MemoryStream();
         using (var workbook = new XLWorkbook())
         {
@@ -72,14 +79,14 @@ public sealed class TopicRegistrationPackageImportService : ITopicImportService
             sheet.Cell(2, 2).Value = "Teammy";
             sheet.Cell(2, 3).Value = "Giải pháp số quản lý nhóm";
             sheet.Cell(2, 4).Value = "open";
-            sheet.Cell(2, 5).Value = "Công nghệ thông tin";
+            sheet.Cell(2, 5).Value = sampleMajor1;
             sheet.Cell(2, 6).Value = "mentor1@example.com;mentor2@example.com";
 
             sheet.Cell(3, 1).Value = "SPRING26";
             sheet.Cell(3, 2).Value = "IoT Sensor Hub";
             sheet.Cell(3, 3).Value = "Gateway thu thập dữ liệu";
             sheet.Cell(3, 4).Value = "closed";
-            sheet.Cell(3, 5).Value = "Khoa học dữ liệu";
+            sheet.Cell(3, 5).Value = sampleMajor2;
             sheet.Cell(3, 6).Value = "mentor@example.com";
 
             workbook.SaveAs(workbookStream);
@@ -143,6 +150,7 @@ public sealed class TopicRegistrationPackageImportService : ITopicImportService
 
         int total = 0, created = 0, updated = 0, skipped = 0;
         var errors = new List<string>();
+        var seenTopicKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         for (int row = 2; row <= lastRow; row++)
         {
@@ -171,6 +179,15 @@ public sealed class TopicRegistrationPackageImportService : ITopicImportService
             if (string.IsNullOrWhiteSpace(title))
             {
                 errors.Add($"Row {row}: Title required");
+                skipped++;
+                continue;
+            }
+
+            // Prevent duplicate topic title in the same semester within a single import package.
+            var dupKey = $"{rawSemester.Trim()}|{title.Trim()}";
+            if (!seenTopicKeys.Add(dupKey))
+            {
+                errors.Add($"Row {row}: Duplicate Title '{title}' in Semester '{rawSemester}' (not allowed)");
                 skipped++;
                 continue;
             }
@@ -285,6 +302,7 @@ public sealed class TopicRegistrationPackageImportService : ITopicImportService
         var mentorCache = new Dictionary<string, (bool Valid, string? Error)>(StringComparer.OrdinalIgnoreCase);
 
         int validCount = 0, invalidCount = 0;
+        var titleBySemester = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var row in safeRows)
         {
@@ -321,7 +339,17 @@ public sealed class TopicRegistrationPackageImportService : ITopicImportService
             columns.Add(new TopicColumnValidation(TopicImportColumns.SemesterCode, semesterValidation.Valid, semesterValidation.Error));
 
             bool titleValid = !string.IsNullOrWhiteSpace(title);
-            columns.Add(new TopicColumnValidation(TopicImportColumns.Title, titleValid, titleValid ? null : "Title is required"));
+            string? titleError = titleValid ? null : "Title is required";
+            if (titleValid && !string.IsNullOrWhiteSpace(semesterCode))
+            {
+                var key = $"{semesterCode}|{title}";
+                if (!titleBySemester.Add(key))
+                {
+                    titleValid = false;
+                    titleError = "Duplicate Title within the same SemesterCode";
+                }
+            }
+            columns.Add(new TopicColumnValidation(TopicImportColumns.Title, titleValid, titleError));
             columns.Add(new TopicColumnValidation(TopicImportColumns.Description, true, null));
 
             bool statusValid = true;

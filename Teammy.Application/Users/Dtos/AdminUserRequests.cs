@@ -8,7 +8,9 @@ public sealed record AdminCreateUserRequest(
     string Role,
     string? StudentCode,
     string? Gender,
-    Guid? MajorId
+    Guid? MajorId,
+    double? Gpa,
+    string? Position
 );
 
 public sealed record AdminUpdateUserRequest(

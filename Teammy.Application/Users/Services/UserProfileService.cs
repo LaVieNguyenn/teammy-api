@@ -8,6 +8,7 @@ namespace Teammy.Application.Users.Services;
 public sealed class UserProfileService(
     IUserReadOnlyQueries read,
     IUserWriteRepository write,
+    IPositionReadOnlyQueries positions,
     IFileStorage storage,
     IGroupRepository groupRepository)
 {
@@ -43,6 +44,19 @@ public sealed class UserProfileService(
             NormalizePortfolio(request.PortfolioUrl),
             ct);
 
+        // Desired position is updated via /me/profile as requested.
+        if (request.DesiredPositionId.HasValue)
+        {
+            if (!current.MajorId.HasValue)
+                throw new ArgumentException("Major is required before setting desired position.");
+
+            var allowed = await positions.ListByMajorAsync(current.MajorId.Value, ct);
+            if (!allowed.Any(x => x.PositionId == request.DesiredPositionId.Value))
+                throw new ArgumentException("DesiredPositionId is invalid for the user's major.");
+        }
+
+        await write.UpdateDesiredPositionAsync(userId, request.DesiredPositionId, ct);
+
         await groupRepository.RefreshSkillsForMemberAsync(userId, ct);
 
         return await GetProfileAsync(userId, ct);
@@ -64,6 +78,24 @@ public sealed class UserProfileService(
             catch { /* ignore storage cleanup errors */ }
         }
 
+        return await GetProfileAsync(userId, ct);
+    }
+
+    public async Task<UserProfileDto> UpdateDesiredPositionAsync(Guid userId, Guid? desiredPositionId, CancellationToken ct)
+    {
+        var current = await read.GetProfileAsync(userId, ct) ?? throw new KeyNotFoundException("User not found");
+
+        if (desiredPositionId.HasValue)
+        {
+            if (!current.MajorId.HasValue)
+                throw new ArgumentException("Major is required before setting desired position.");
+
+            var allowed = await positions.ListByMajorAsync(current.MajorId.Value, ct);
+            if (!allowed.Any(x => x.PositionId == desiredPositionId.Value))
+                throw new ArgumentException("DesiredPositionId is invalid for the user's major.");
+        }
+
+        await write.UpdateDesiredPositionAsync(userId, desiredPositionId, ct);
         return await GetProfileAsync(userId, ct);
     }
 

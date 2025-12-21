@@ -32,6 +32,8 @@ public sealed class UserWriteRepository : IUserWriteRepository
         string? studentCode,
         string? gender,
         Guid? majorId,
+        double? gpa,
+        Guid? desiredPositionId,
         CancellationToken ct)
     {
         var entity = new user
@@ -45,6 +47,8 @@ public sealed class UserWriteRepository : IUserWriteRepository
             student_code = studentCode,
             gender = gender,
             major_id = majorId,
+            gpa = gpa,
+            desired_position_id = desiredPositionId,
             portfolio_url = null,
             skills = null,
             skills_completed = false,
@@ -162,6 +166,18 @@ public sealed class UserWriteRepository : IUserWriteRepository
             throw new KeyNotFoundException("User not found");
 
         entity.avatar_url = avatarUrl;
+        entity.updated_at = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync(ct);
+    }
+
+    public async Task UpdateDesiredPositionAsync(Guid userId, Guid? desiredPositionId, CancellationToken ct)
+    {
+        var entity = await _db.users.FirstOrDefaultAsync(u => u.user_id == userId, ct);
+        if (entity is null)
+            throw new KeyNotFoundException("User not found");
+
+        entity.desired_position_id = desiredPositionId;
         entity.updated_at = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);

@@ -13,6 +13,12 @@ public partial class mv_students_pool
 
     public Guid? semester_id { get; set; }
 
+    public double? gpa { get; set; }
+
+    public Guid? desired_position_id { get; set; }
+
+    public string? desired_position_name { get; set; }
+
     public string? skills { get; set; }
 
     public string? primary_role { get; set; }

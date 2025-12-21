@@ -79,8 +79,10 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 from u in _db.users
                 join m in _db.majors on u.major_id equals m.major_id into mj
                 from m in mj.DefaultIfEmpty()
+                join p in _db.position_lists on u.desired_position_id equals p.position_id into pj
+                from p in pj.DefaultIfEmpty()
                 where u.user_id == userId
-                select new { User = u, MajorName = m.major_name };
+                select new { User = u, MajorName = m.major_name, DesiredPositionName = p.position_name };
 
             var row = await query.AsNoTracking().FirstOrDefaultAsync(ct);
             if (row is null) return null;
@@ -108,6 +110,9 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 row.User.student_code,
                 row.User.major_id,
                 row.MajorName,
+                row.User.gpa,
+                row.User.desired_position_id,
+                row.DesiredPositionName,
                 skills,
                 row.User.skills_completed,
                 row.User.avatar_url,

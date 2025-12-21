@@ -1265,9 +1265,14 @@ Write ONE short justification sentence:
 - 1 sentence, <= 180 characters (including spaces).
 - Do NOT truncate with "...". If it's too long, rewrite shorter.
 - Do NOT restate the item's description/title.
+- Do NOT use the '|' character.
 - Include the provided anchor keyword at the very end in parentheses.
 - Mention 1-2 concrete technologies.
 - End with a period.
+
+GPA rule:
+- GPA is on a 0-10 scale (10 is best). 8+ strong, 6-8 moderate, <6 weak.
+- Do NOT call GPA >= 8 "low".
 
 matchedSkills:
 - 1 to 3 skills that appear in the snippet (exact tokens).
@@ -1308,7 +1313,12 @@ For EACH item:
 - End with the anchor in parentheses, exactly: (anchor).
 - matchedSkills must contain 1-3 skills found in snippet.
 
+GPA rule:
+- GPA is on a 0-10 scale (10 is best). 8+ strong, 6-8 moderate, <6 weak.
+- Do NOT call GPA >= 8 "low".
+
 Do NOT invent skills. Do NOT copy full sentences from the snippet.
+Do NOT use the '|' character.
 
 Return EXACT schema:
 {"items":[{"key":"...","summary":"...","matchedSkills":["..."]}]}
@@ -1358,34 +1368,28 @@ static string BuildQueryText(string mode, string rawQueryText, TeamContext? team
 
     var sb = new StringBuilder();
 
-    sb.Append(team.TeamName).Append(" | ");
-    sb.Append("Mode: ").Append(mode).Append(" | ");
+    sb.AppendLine($"TEAM: {team.TeamName}");
+    sb.AppendLine($"MODE: {mode}");
 
     if (!string.IsNullOrWhiteSpace(team.PrimaryNeed))
-        sb.Append("Primary need: ").Append(team.PrimaryNeed).Append(" | ");
+        sb.AppendLine($"PRIMARY_NEED: {team.PrimaryNeed}");
 
     if (team.OpenFe + team.OpenBe + team.OpenOther > 0)
-    {
-        sb.Append("Open slots: FE ").Append(team.OpenFe)
-          .Append(", BE ").Append(team.OpenBe)
-          .Append(", Other ").Append(team.OpenOther).Append(" | ");
-    }
+        sb.AppendLine($"OPEN_SLOTS: FE {team.OpenFe}, BE {team.OpenBe}, Other {team.OpenOther}");
 
-    sb.Append("Current mix: FE ").Append(team.CurrentMixFe)
-      .Append(", BE ").Append(team.CurrentMixBe)
-      .Append(", Other ").Append(team.CurrentMixOther).Append(" | ");
+    sb.AppendLine($"CURRENT_MIX: FE {team.CurrentMixFe}, BE {team.CurrentMixBe}, Other {team.CurrentMixOther}");
 
     if (team.PreferRoles.Count > 0)
-        sb.Append("Prefer: ").Append(string.Join(", ", team.PreferRoles)).Append(" | ");
+        sb.AppendLine($"PREFER: {string.Join(", ", team.PreferRoles)}");
     if (team.AvoidRoles.Count > 0)
-        sb.Append("Avoid: ").Append(string.Join(", ", team.AvoidRoles)).Append(" | ");
+        sb.AppendLine($"AVOID: {string.Join(", ", team.AvoidRoles)}");
     if (team.Skills.Count > 0)
-        sb.Append("Team skills: ").Append(string.Join(", ", team.Skills.Take(28))).Append(" | ");
+        sb.AppendLine($"TEAM_SKILLS: {string.Join(", ", team.Skills.Take(28))}");
 
     if (!string.IsNullOrWhiteSpace(rawQueryText))
-        sb.Append("Query: ").Append(rawQueryText);
+        sb.AppendLine($"QUERY: {rawQueryText}");
 
-    return sb.ToString();
+    return sb.ToString().Trim();
 }
 
 static TeamContext ParseTeamContext(JsonElement teamEl)
@@ -1458,6 +1462,8 @@ static string BuildRerankText(RerankCandidate c, int maxChars)
     var summary = ExtractLine(c.Text, "SUMMARY:");
     var major = ExtractLine(c.Text, "MAJOR:");
     var role = ExtractLine(c.Text, "ROLE:");
+    var desiredPosition = ExtractLine(c.Text, "Desired position:") ?? ExtractLine(c.Text, "DESIRED_POSITION:");
+    var gpa = ExtractLine(c.Text, "GPA:");
 
     var sb = new StringBuilder();
 
@@ -1471,6 +1477,12 @@ static string BuildRerankText(RerankCandidate c, int maxChars)
 
     if (!string.IsNullOrWhiteSpace(c.NeededRole))
         sb.Append("NEEDED_ROLE: ").AppendLine(TrimOneLine(c.NeededRole!, 100));
+
+    if (!string.IsNullOrWhiteSpace(desiredPosition))
+        sb.Append("DESIRED_POSITION: ").AppendLine(TrimOneLine(desiredPosition!, 160));
+
+    if (!string.IsNullOrWhiteSpace(gpa))
+        sb.Append("GPA: ").AppendLine(TrimOneLine(gpa!, 40));
 
     if (c.GroupFrontend + c.GroupBackend + c.GroupOther > 0)
         sb.Append("TEAM_MIX: FE ").Append(c.GroupFrontend).Append(" BE ").Append(c.GroupBackend).Append(" Other ").Append(c.GroupOther).AppendLine();
@@ -1536,7 +1548,6 @@ static async Task<(bool ok, double[]? vector, int status, string? error)> LlamaE
             {
                 using var res = await embed.PostAsJsonAsync("/v1/embeddings", new { input = Clip(input, 9000) }, ct);
                 var json = await res.Content.ReadAsStringAsync(ct);
-
                 if (!res.IsSuccessStatusCode)
                 {
                     if (attempt < 2 && IsRetryableStatus(res.StatusCode))
@@ -1636,7 +1647,6 @@ static async Task<(bool ok, string content, string finish, int status, string? e
                 new { role = "user", content = user }
             },
             temperature,
-            max_tokens = maxTokens
         };
 
         for (int attempt = 1; attempt <= 2; attempt++)

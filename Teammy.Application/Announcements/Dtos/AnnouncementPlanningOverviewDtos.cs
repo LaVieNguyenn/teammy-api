@@ -10,10 +10,10 @@ public sealed record AnnouncementPlanningOverviewDto(
     Guid MajorId,
     string? MajorName,
     int GroupsWithoutTopicCount,
-    int GroupsWithoutMentorCount,
+    int GroupsWithoutMemberCount,
     int StudentsWithoutGroupCount,
     IReadOnlyList<PlanningGroupItemDto> GroupsWithoutTopic,
-    IReadOnlyList<PlanningGroupItemDto> GroupsWithoutMentor,
+    IReadOnlyList<PlanningGroupItemDto> GroupsWithoutMember,
     IReadOnlyList<PlanningStudentItemDto> StudentsWithoutGroup
 );
 
