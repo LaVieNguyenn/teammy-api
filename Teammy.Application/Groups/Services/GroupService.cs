@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using Teammy.Application.Common.Email;
 using Teammy.Application.Activity.Dtos;
 using Teammy.Application.Activity.Services;
 using Teammy.Application.Common.Interfaces;
@@ -19,6 +20,7 @@ public sealed class GroupService(
     ISemesterReadOnlyQueries semesterQueries)
 {
     private const string AppName = "TEAMMY";
+    private const string DefaultAppUrl = "https://teammy.vercel.app/login";
     private readonly IUserReadOnlyQueries _userQueries = userQueries;
     private readonly IRecruitmentPostRepository _postRepo = postRepo;
     private readonly ActivityLogService _activityLog = activityLogService;
@@ -340,11 +342,14 @@ public sealed class GroupService(
         var message = actedBy is null
             ? $"<p>You have been removed from the group <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong>.</p>"
             : $"<p>{System.Net.WebUtility.HtmlEncode(actedBy.DisplayName ?? actedBy.Email ?? "Group leader")} removed you from the group <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong>.</p>";
-        var html = $@"<!doctype html>
-<html><body style=""font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#0f172a"">
-{message}
-<p>If you believe this is a mistake, please contact the leader.</p>
-</body></html>";
+        var messageHtml = $@"{message}
+<p style=""margin-top:8px;color:#475569;"">If you believe this is a mistake, please contact the leader.</p>";
+        var html = EmailTemplateBuilder.Build(
+            subject,
+            "Removed from group",
+            messageHtml,
+            "Open Teammy",
+            DefaultAppUrl);
 
         await _emailSender.SendAsync(
             removedUser.Email,
@@ -368,11 +373,14 @@ public sealed class GroupService(
         var group = await queries.GetGroupAsync(groupId, ct);
         var groupName = group?.Name ?? "your group";
         var subject = $"{AppName} - {memberName} left {groupName}";
-        var html = $@"<!doctype html>
-<html><body style=""font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#0f172a"">
-<p>{System.Net.WebUtility.HtmlEncode(memberName)} has left <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong>.</p>
-<p>Please review your member list if needed.</p>
-</body></html>";
+        var messageHtml = $@"<p>{System.Net.WebUtility.HtmlEncode(memberName)} has left <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong>.</p>
+<p style=""margin-top:8px;color:#475569;"">Please review your member list if needed.</p>";
+        var html = EmailTemplateBuilder.Build(
+            subject,
+            "Member left group",
+            messageHtml,
+            "Open Teammy",
+            DefaultAppUrl);
 
         foreach (var leader in recipients)
         {
