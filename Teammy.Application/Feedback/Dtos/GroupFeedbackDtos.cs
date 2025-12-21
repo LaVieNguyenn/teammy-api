@@ -15,6 +15,16 @@ public sealed class SubmitGroupFeedbackRequest
     public string? NextSteps { get; init; }
 }
 
+public sealed class UpdateGroupFeedbackRequest
+{
+    public string? Category { get; init; }
+    public string? Summary { get; init; }
+    public string? Details { get; init; }
+    public int? Rating { get; init; }
+    public string? Blockers { get; init; }
+    public string? NextSteps { get; init; }
+}
+
 public sealed record GroupFeedbackDto(
     Guid FeedbackId,
     Guid GroupId,
@@ -48,6 +58,14 @@ public sealed record GroupFeedbackCreateModel(
     Guid MentorId,
     string? Category,
     string Summary,
+    string? Details,
+    int? Rating,
+    string? Blockers,
+    string? NextSteps);
+
+public sealed record GroupFeedbackUpdateModel(
+    string? Category,
+    string? Summary,
     string? Details,
     int? Rating,
     string? Blockers,

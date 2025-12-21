@@ -120,6 +120,56 @@ public sealed class MentorFeedbackService(
         }
     }
 
+    public async Task UpdateAsync(Guid groupId, Guid feedbackId, Guid mentorUserId, UpdateGroupFeedbackRequest req, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(req);
+
+        var group = await groupQueries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
+        if (!await groupAccess.IsMentorAsync(groupId, mentorUserId, ct))
+            throw new UnauthorizedAccessException("Mentor only");
+
+        var feedback = await feedbackQueries.GetAsync(feedbackId, ct) ?? throw new KeyNotFoundException("Feedback not found");
+        if (feedback.GroupId != groupId)
+            throw new InvalidOperationException("Feedback does not belong to this group");
+        if (feedback.MentorId != mentorUserId)
+            throw new UnauthorizedAccessException("Cannot edit another mentor's feedback");
+        if (string.Equals(feedback.Status, "resolved", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Feedback already resolved");
+
+        var summary = req.Summary is null ? null : req.Summary.Trim();
+        if (summary is not null && string.IsNullOrWhiteSpace(summary))
+            throw new ArgumentException("Summary cannot be empty");
+        if (req.Rating.HasValue && (req.Rating < 1 || req.Rating > 5))
+            throw new ArgumentException("Rating must be between 1 and 5");
+
+        var updateModel = new GroupFeedbackUpdateModel(
+            req.Category?.Trim(),
+            summary,
+            req.Details,
+            req.Rating,
+            req.Blockers,
+            req.NextSteps);
+
+        await feedbackRepository.UpdateAsync(feedbackId, updateModel, ct);
+    }
+
+    public async Task DeleteAsync(Guid groupId, Guid feedbackId, Guid mentorUserId, CancellationToken ct)
+    {
+        var group = await groupQueries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
+        if (!await groupAccess.IsMentorAsync(groupId, mentorUserId, ct))
+            throw new UnauthorizedAccessException("Mentor only");
+
+        var feedback = await feedbackQueries.GetAsync(feedbackId, ct) ?? throw new KeyNotFoundException("Feedback not found");
+        if (feedback.GroupId != groupId)
+            throw new InvalidOperationException("Feedback does not belong to this group");
+        if (feedback.MentorId != mentorUserId)
+            throw new UnauthorizedAccessException("Cannot delete another mentor's feedback");
+        if (!string.Equals(feedback.Status, "submitted", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Only submitted feedback can be deleted");
+
+        await feedbackRepository.DeleteAsync(feedbackId, ct);
+    }
+
     private async Task NotifyLeadersAsync(Guid groupId, string groupName, Guid mentorUserId, SubmitGroupFeedbackRequest req, CancellationToken ct)
     {
         var members = await groupQueries.ListActiveMembersAsync(groupId, ct);

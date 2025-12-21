@@ -133,8 +133,7 @@ public sealed class InvitationService(
                 {
                     if (invitedByIsMentor)
                     {
-                        await AcceptAsync(dupId, mentorUserId, ct);
-                        return dupId;
+                        throw new InvalidOperationException("Invite already sent by leader. Please accept the invitation.");
                     }
 
                     await repo.ResetPendingAsync(dupId, now, expiresAt, ct);
@@ -238,6 +237,12 @@ public sealed class InvitationService(
         await NotifyInviterAsync(inv, "accepted", ct);
 
         await postRepo.RejectPendingApplicationsForUserInGroupAsync(inv.GroupId, currentUserId, ct);
+        await postRepo.WithdrawPendingApplicationsForUserInSemesterAsync(currentUserId, inv.SemesterId, ct);
+        var revoked = await repo.RevokePendingForUserInSemesterAsync(currentUserId, inv.SemesterId, invitationId, ct);
+        foreach (var (revokedId, revokedGroupId) in revoked)
+        {
+            await BroadcastStatusAsync(currentUserId, revokedGroupId, revokedId, "revoked", ct);
+        }
     }
 
     public async Task DeclineAsync(Guid invitationId, Guid currentUserId, CancellationToken ct)
@@ -273,10 +278,12 @@ public sealed class InvitationService(
         if (!inv.TopicId.HasValue) throw new InvalidOperationException("Not a mentor invitation");
         var isLeader = await groupQueries.IsLeaderAsync(inv.GroupId, leaderUserId, ct);
         if (!isLeader) throw new UnauthorizedAccessException("Leader only");
+        if (inv.InvitedBy != inv.InviteeUserId)
+            throw new InvalidOperationException("Leader approval is not required for leader-sent mentor invites");
         await EnsureInvitationActiveAsync(invitationId, inv, ct);
         if (inv.Status != "pending") throw new InvalidOperationException("Invitation already handled");
         if (!inv.RespondedAt.HasValue)
-            throw new InvalidOperationException("Mentor has not accepted yet");
+            await repo.MarkMentorAwaitingLeaderAsync(invitationId, DateTime.UtcNow, ct);
 
         await CompleteMentorAssignmentAsync(inv, ct);
         await NotifyMentorDecisionAsync(inv, approved: true, ct);
@@ -307,10 +314,17 @@ public sealed class InvitationService(
         if (!inv.TopicId.HasValue)
             throw new InvalidOperationException("Invalid mentor invitation");
         if (inv.RespondedAt.HasValue)
-            throw new InvalidOperationException("Awaiting leader decision");
-        await repo.MarkMentorAwaitingLeaderAsync(inv.InvitationId, DateTime.UtcNow, ct);
-        await BroadcastStatusAsync(inv.InviteeUserId, inv.GroupId, inv.InvitationId, "pending_leader", ct);
-        await NotifyLeaderMentorPendingAsync(inv, ct);
+            throw new InvalidOperationException("Invitation already handled");
+
+        if (inv.InvitedBy == inv.InviteeUserId)
+        {
+            await repo.MarkMentorAwaitingLeaderAsync(inv.InvitationId, DateTime.UtcNow, ct);
+            await BroadcastStatusAsync(inv.InviteeUserId, inv.GroupId, inv.InvitationId, "pending_leader", ct);
+            await NotifyLeaderMentorPendingAsync(inv, ct);
+            return;
+        }
+
+        await CompleteMentorAssignmentAsync(inv, ct);
     }
 
     private async Task CompleteMentorAssignmentAsync(InvitationDetailDto inv, CancellationToken ct)

@@ -92,6 +92,30 @@ public sealed class InvitationRepository(AppDbContext db) : IInvitationRepositor
         return items.Count;
     }
 
+    public async Task<IReadOnlyList<(Guid InvitationId, Guid GroupId)>> RevokePendingForUserInSemesterAsync(Guid userId, Guid semesterId, Guid? exceptInvitationId, CancellationToken ct)
+    {
+        var query = from i in db.invitations
+                    join g in db.groups on i.group_id equals g.group_id
+                    where i.invitee_user_id == userId
+                          && g.semester_id == semesterId
+                          && i.status == "pending"
+                          && (exceptInvitationId == null || i.invitation_id != exceptInvitationId.Value)
+                    select i;
+
+        var items = await query.ToListAsync(ct);
+        if (items.Count == 0) return Array.Empty<(Guid, Guid)>();
+
+        var now = DateTime.UtcNow;
+        foreach (var inv in items)
+        {
+            inv.status = "revoked";
+            inv.responded_at = now;
+        }
+        await db.SaveChangesAsync(ct);
+
+        return items.Select(i => (i.invitation_id, i.group_id)).ToList();
+    }
+
     public async Task<IReadOnlyList<(Guid InvitationId, Guid InviteeUserId, Guid GroupId, Guid InvitedBy)>> RejectPendingMentorInvitesForTopicAsync(Guid topicId, Guid exceptInvitationId, CancellationToken ct)
     {
         var items = await db.invitations
