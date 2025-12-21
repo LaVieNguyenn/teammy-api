@@ -298,7 +298,10 @@ public sealed class AiMatchingService(
             ("studentId", studentId.ToString()),
             ("targetMajorId", targetMajorId?.ToString()),
             ("mode", "group_post"),
-            ("topN", suggestions.Count.ToString(CultureInfo.InvariantCulture)));
+            ("topN", suggestions.Count.ToString(CultureInfo.InvariantCulture)),
+            ("desiredPosition", profile.DesiredPositionName),
+            ("mustMentionDesiredPosition", "true")
+        );
 
         var reranked = await ApplyLlmRerankAsync(
             "recruitment_post",
@@ -527,9 +530,9 @@ public sealed class AiMatchingService(
                 requireAiReason: true,
             ct);
 
-            var finalSuggestions = reranked
-                .Take(limit)
-                .ToList();
+        var finalSuggestions = reranked
+            .Take(limit)
+            .ToList();
 
         if (finalSuggestions.Count == 0)
             return finalSuggestions;
@@ -1520,8 +1523,8 @@ public sealed class AiMatchingService(
             return "Đã đạt giới hạn auto assign trong lần chạy này nên chưa lấp đủ thành viên.";
         }
 
-            if (hasRemainingCandidates && state.MaxMembers >= policyMax && policyMax > 0)
-                return $"Nhóm đã chạm giới hạn tối đa {policyMax} thành viên theo policy nên không thể nhận thêm thành viên.";
+        if (hasRemainingCandidates && state.MaxMembers >= policyMax && policyMax > 0)
+            return $"Nhóm đã chạm giới hạn tối đa {policyMax} thành viên theo policy nên không thể nhận thêm thành viên.";
 
         if (!hasRemainingCandidates)
             return $"Không còn sinh viên chưa có nhóm trong chuyên ngành này. Nhóm vẫn thiếu {state.RemainingSlots} thành viên.";
@@ -1861,12 +1864,19 @@ public sealed class AiMatchingService(
         var builder = new StringBuilder();
         builder.Append(student.DisplayName);
         builder.Append(" - Major: ").Append(targetMajorId?.ToString() ?? student.MajorId.ToString());
+
+        if (!string.IsNullOrWhiteSpace(student.DesiredPositionName))
+            builder.Append(" - Desired position: ").Append(student.DesiredPositionName.Trim());
+
         if (profile.PrimaryRole != AiPrimaryRole.Unknown)
             builder.Append(" - Role: ").Append(AiRoleHelper.ToDisplayString(profile.PrimaryRole));
+
         if (profile.HasTags)
             builder.Append(" - Skills: ").Append(string.Join(", ", profile.Tags.Take(15)));
+
         return builder.ToString();
     }
+
 
     private static string BuildGroupQueryText(string groupName, AiSkillProfile profile, GroupRoleMixSnapshot? mix)
     {
@@ -1927,7 +1937,7 @@ public sealed class AiMatchingService(
         // IMPORTANT: recruitment-post descriptions are user-generated and not controlled.
         // For rerank/reasons, only send the controlled signals: required skills + position needed.
         var controlledSummary = string.IsNullOrWhiteSpace(suggestion.PositionNeeded)
-            ? "Recruiting." 
+            ? "Recruiting."
             : $"Recruiting for {suggestion.PositionNeeded}.";
 
         var payload = BuildStructuredCandidateText(
@@ -2032,7 +2042,7 @@ public sealed class AiMatchingService(
         if (!string.IsNullOrWhiteSpace(summary) && summary.Length > 1200)
             summary = summary[..1200];
 
-        var summaryParts = new List<string>();  
+        var summaryParts = new List<string>();
         if (!string.IsNullOrWhiteSpace(title))
             summaryParts.Add(title.Trim());
         if (!string.IsNullOrWhiteSpace(roleNeeded))

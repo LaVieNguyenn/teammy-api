@@ -1,13 +1,10 @@
 // Program.cs (.NET 8 Minimal API)
 // Teammy.AiGateway - Local-first AI Gateway
+// Ports:
 // - LLM (llama.cpp OpenAI-compatible):     http://127.0.0.1:8080/v1/chat/completions
 // - Embeddings (llama.cpp embeddings):     http://127.0.0.1:8081/v1/embeddings
 // - Rerank (python FastAPI cross-encoder): http://127.0.0.1:8090/rerank
 // - SQLite + sqlite-vec (vec0)
-//
-// IMPORTANT: Topic and Post scoring are separated
-// - mode=topic => ABSOLUTE calibrated score from logits (pivot/scale)
-// - mode=group_post / personal_post => RELATIVE score within the current batch (min-max over sigmoid)
 
 using System.Diagnostics;
 using System.Globalization;
@@ -21,7 +18,7 @@ using Microsoft.Data.Sqlite;
 var builder = WebApplication.CreateBuilder(args);
 
 // ======================================================================
-// CONFIG (hard-coded as requested)
+// CONFIG (hard-coded as you requested)
 // ======================================================================
 
 // AI services
@@ -36,35 +33,34 @@ var apiKey = "THIS_IS_THE_STRONGEST_API_KEY_EVER_ON_THIS_WORLD_123_321_203";
 var dbPath = @"C:\Users\PhiHung\Teammy.AiGateway\data\teammy_ai.db";
 Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
 
-// ABSOLUTE PATH
+// ABSOLUTE PATH (your request)
 var vecExtPath = @"C:\Users\PhiHung\Teammy.AiGateway\sqlite_ext\vec0.dll";  // vec0.dll path
 
 // Embedding dimension
 var embedDim = 768;
 
 // Limits
-const int MAX_POOL = 40;
-const int MAX_SUGGESTIONS = 8;
-const int RERANK_TEXT_MAX = 12000;
-const int REASON_SNIPPET_MAX = 6000;
+const int MAX_POOL = 40;                // accept max candidates per rerank call
+const int MAX_SUGGESTIONS = 8;          // return max 8
+const int RERANK_TEXT_MAX = 12000;      // per-candidate text sent to python reranker
+const int REASON_SNIPPET_MAX = 6000;    // snippet for LLM micro-summary
 
 // Post generation limits
 const int POST_MAX_WORDS_DEFAULT = 120;
 const int POST_MAX_WORDS_MIN = 60;
 const int POST_MAX_WORDS_MAX = 220;
 
-// Score rules
+// Score thresholds
 const double TOPIC_MIN_SCORE = 50.0;
 const double POST_MIN_SCORE = 50.0;
 
-// Topic absolute calibration (stable scale)
+// Topic absolute calibration (stable across calls)
 const double TOPIC_PIVOT = -7.0;
 const double TOPIC_SCALE = 1.0;
 
-// Mix baseline slightly
+// Baseline mix (keep mostly AI)
 const double WEIGHT_TOPIC_CE = 0.85;
 const double WEIGHT_TOPIC_BASE = 0.15;
-
 const double WEIGHT_POST_CE = 0.90;
 const double WEIGHT_POST_BASE = 0.10;
 
@@ -76,15 +72,15 @@ var enableDebug = true;
 var last = new LastDebug();
 
 // ======================================================================
-// Concurrency gates (CRITICAL for stability & speed on local machine)
-// - llama.cpp is best kept at low concurrency (queue requests)
-// - SQLite only 1 writer at a time to avoid "database is locked"
+// Concurrency gates (avoid 500 when 3-4 users hit concurrently)
+// - llama.cpp chat should be queued
+// - embeddings/rerank can be small parallel
+// - sqlite writes must be single-writer
 // ======================================================================
-
-var llmGate = new SemaphoreSlim(1, 1);       // 1 concurrent chat call (prevents llama.cpp overload)
-var embedGate = new SemaphoreSlim(2, 2);     // embeddings can be a bit more parallel
-var rerankGate = new SemaphoreSlim(2, 2);    // python cross-encoder ok with small parallelism
-var dbWriteGate = new SemaphoreSlim(1, 1);   // SQLite single-writer gate
+var llmGate = new SemaphoreSlim(1, 1);
+var embedGate = new SemaphoreSlim(2, 2);
+var rerankGate = new SemaphoreSlim(2, 2);
+var dbWriteGate = new SemaphoreSlim(1, 1);
 
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
@@ -110,7 +106,9 @@ builder.Services.AddHttpClient("rerank", c =>
 
 var app = builder.Build();
 
-// Global exception shielding (avoid raw 500 crash)
+// ======================================================================
+// Global exception shielding (avoid raw 500)
+// ======================================================================
 app.Use(async (ctx, next) =>
 {
     try
@@ -119,9 +117,7 @@ app.Use(async (ctx, next) =>
     }
     catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
     {
-        // client disconnected; don't spam 500
-        if (!ctx.Response.HasStarted)
-            ctx.Response.StatusCode = 499; // Client Closed Request (nginx-style)
+        if (!ctx.Response.HasStarted) ctx.Response.StatusCode = 499;
     }
     catch (Exception ex)
     {
@@ -144,7 +140,7 @@ bool Authorized(HttpRequest req)
 {
     if (!req.Headers.TryGetValue("Authorization", out var auth)) return false;
     var s = auth.ToString();
-    return s.StartsWith("Bearer ") && s["Bearer ".Length..] == apiKey;
+    return s.StartsWith("Bearer ", StringComparison.Ordinal) && s["Bearer ".Length..] == apiKey;
 }
 
 // ======================================================================
@@ -178,7 +174,7 @@ app.MapGet("/health", async (IHttpClientFactory hf, CancellationToken ct) =>
         CheckDb(dbPath, vecExtPath)
     };
 
-    var allOk = checks.All(x => GetBool(x, "ok"));
+    var allOk = checks.All(x => GetBoolProp(x, "ok"));
     return Results.Json(new { ok = allOk, timeUtc = DateTime.UtcNow, checks }, statusCode: allOk ? 200 : 503);
 });
 
@@ -218,23 +214,20 @@ app.MapPost("/index/upsert", async (HttpRequest req, IHttpClientFactory hf) =>
     if (body is null || string.IsNullOrWhiteSpace(body.Text) || string.IsNullOrWhiteSpace(body.Type))
         return Results.BadRequest(new { error = "Missing text/type" });
 
-    // Embedding (guard + retry + no 500)
     var embed = hf.CreateClient("embed");
-    var embRes = await LlamaEmbedSafeAsync(embed, Clip(body.Text!, 9000), embedGate, req.HttpContext.RequestAborted);
-    if (!embRes.ok)
-        return Results.Json(new { ok = false, error = "embed_failed", detail = embRes.error, status = embRes.status }, statusCode: 503);
+    var emb = await LlamaEmbedSafeAsync(embed, Clip(body.Text!, 9000), embedGate, req.HttpContext.RequestAborted);
+    if (!emb.ok)
+        return Results.Json(new { ok = false, error = "embed_failed", detail = emb.error, status = emb.status }, statusCode: 503);
 
-    var vector = embRes.vector!;
     var pointId = body.PointId ?? Guid.NewGuid().ToString("N");
 
-    // Single writer gate avoids "database is locked" 500
     await dbWriteGate.WaitAsync(req.HttpContext.RequestAborted);
     try
     {
         using var conn = OpenDbSafe(dbPath, vecExtPath);
         using var tx = conn.BeginTransaction();
 
-        // items: normal table => UPSERT OK
+        // items table => UPSERT OK
         using (var cmd = conn.CreateCommand())
         {
             cmd.Transaction = tx;
@@ -259,7 +252,7 @@ app.MapPost("/index/upsert", async (HttpRequest req, IHttpClientFactory hf) =>
             await cmd.ExecuteNonQueryAsync(req.HttpContext.RequestAborted);
         }
 
-        // item_vec: vec0 virtual table => delete + insert (NO UPSERT)
+        // vec0 virtual table => NO UPSERT. Delete + Insert.
         using (var cmd = conn.CreateCommand())
         {
             cmd.Transaction = tx;
@@ -272,7 +265,7 @@ app.MapPost("/index/upsert", async (HttpRequest req, IHttpClientFactory hf) =>
             cmd.Transaction = tx;
             cmd.CommandText = "insert into item_vec(point_id, embedding) values ($pid, $vec);";
             cmd.Parameters.AddWithValue("$pid", pointId);
-            cmd.Parameters.AddWithValue("$vec", JsonSerializer.Serialize(vector));
+            cmd.Parameters.AddWithValue("$vec", JsonSerializer.Serialize(emb.vector!, JsonOpts()));
             await cmd.ExecuteNonQueryAsync(req.HttpContext.RequestAborted);
         }
 
@@ -339,48 +332,6 @@ app.MapPost("/index/delete", async (HttpRequest req) =>
     return Results.Ok(new { ok = true, pointId });
 });
 
-app.MapDelete("/index/delete/{pointId}", async (HttpRequest req, string pointId) =>
-{
-    if (!Authorized(req)) return Results.Unauthorized();
-    if (string.IsNullOrWhiteSpace(pointId))
-        return Results.BadRequest(new { error = "Missing pointId" });
-
-    await dbWriteGate.WaitAsync(req.HttpContext.RequestAborted);
-    try
-    {
-        using var conn = OpenDbSafe(dbPath, vecExtPath);
-        using var tx = conn.BeginTransaction();
-
-        using (var cmd = conn.CreateCommand())
-        {
-            cmd.Transaction = tx;
-            cmd.CommandText = "delete from item_vec where point_id = $pid;";
-            cmd.Parameters.AddWithValue("$pid", pointId);
-            await cmd.ExecuteNonQueryAsync(req.HttpContext.RequestAborted);
-        }
-        using (var cmd = conn.CreateCommand())
-        {
-            cmd.Transaction = tx;
-            cmd.CommandText = "delete from items where point_id = $pid;";
-            cmd.Parameters.AddWithValue("$pid", pointId);
-            await cmd.ExecuteNonQueryAsync(req.HttpContext.RequestAborted);
-        }
-
-        tx.Commit();
-    }
-    catch (Exception ex)
-    {
-        app.Logger.LogError(ex, "Delete failed");
-        return Results.Json(new { ok = false, error = "db_delete_failed", detail = ex.Message }, statusCode: 503);
-    }
-    finally
-    {
-        dbWriteGate.Release();
-    }
-
-    return Results.Ok(new { ok = true, pointId });
-});
-
 app.MapPost("/search", async (HttpRequest req, IHttpClientFactory hf) =>
 {
     if (!Authorized(req)) return Results.Unauthorized();
@@ -390,11 +341,10 @@ app.MapPost("/search", async (HttpRequest req, IHttpClientFactory hf) =>
         return Results.BadRequest(new { error = "Missing queryText" });
 
     var embed = hf.CreateClient("embed");
-    var embRes = await LlamaEmbedSafeAsync(embed, body.QueryText!, embedGate, req.HttpContext.RequestAborted);
-    if (!embRes.ok)
-        return Results.Json(new { ok = false, error = "embed_failed", detail = embRes.error, status = embRes.status }, statusCode: 503);
+    var emb = await LlamaEmbedSafeAsync(embed, Clip(body.QueryText!, 9000), embedGate, req.HttpContext.RequestAborted);
+    if (!emb.ok)
+        return Results.Json(new { ok = false, error = "embed_failed", detail = emb.error, status = emb.status }, statusCode: 503);
 
-    var q = embRes.vector!;
     var limit = body.Limit <= 0 ? 20 : Math.Min(body.Limit, 100);
 
     using var conn = OpenDbSafe(dbPath, vecExtPath);
@@ -409,7 +359,7 @@ app.MapPost("/search", async (HttpRequest req, IHttpClientFactory hf) =>
         order by distance
         limit $k;
         """;
-        cmd.Parameters.AddWithValue("$q", JsonSerializer.Serialize(q));
+        cmd.Parameters.AddWithValue("$q", JsonSerializer.Serialize(emb.vector!, JsonOpts()));
         cmd.Parameters.AddWithValue("$k", limit);
 
         using var r = await cmd.ExecuteReaderAsync(req.HttpContext.RequestAborted);
@@ -476,25 +426,21 @@ Schema:
         maxSkills = Math.Clamp(body.MaxSkills <= 0 ? 20 : body.MaxSkills, 1, 60),
         knownSkills = body.KnownSkills ?? new List<string>(),
         text = Clip(body.Text!, 9000)
-    });
+    }, JsonOpts());
 
     var llm = hf.CreateClient("llm");
 
-    // Safe call (no 500)
-    var call1 = await LlamaChatSafeAsync(llm, sys, user, temperature: 0.2, maxTokens: 2600, llmGate, req.HttpContext.RequestAborted);
-    if (!call1.ok)
-        return Results.Json(new { ok = false, error = "llm_failed", detail = call1.error, status = call1.status }, statusCode: 503);
+    var call = await LlamaChatSafeAsync(llm, sys, user, temperature: 0.2, maxTokens: 2600, llmGate, req.HttpContext.RequestAborted);
+    if (!call.ok)
+        return Results.Json(new { ok = false, error = "llm_failed", detail = call.error, status = call.status }, statusCode: 503);
 
-    var extracted = ExtractFirstCompleteJsonValue(call1.content);
+    var extracted = ExtractFirstCompleteJsonValue(call.content);
 
-    // If truncated, retry with higher tokens
-    if (extracted is null || call1.finish == "length")
+    if (extracted is null || call.finish == "length")
     {
         var call2 = await LlamaChatSafeAsync(llm, sys, user, temperature: 0.2, maxTokens: 4200, llmGate, req.HttpContext.RequestAborted);
-        if (!call2.ok)
-            return Results.Json(new { ok = false, error = "llm_failed", detail = call2.error, status = call2.status }, statusCode: 503);
-
-        extracted = ExtractFirstCompleteJsonValue(call2.content);
+        if (call2.ok)
+            extracted = ExtractFirstCompleteJsonValue(call2.content);
     }
 
     if (extracted is null)
@@ -509,8 +455,7 @@ Schema:
 });
 
 // ======================================================================
-// NEW: LLM Generate Group Post Draft
-// (kept from your version; uses safe JSON retry already)
+// LLM: Generate Group Post Draft
 // ======================================================================
 app.MapPost("/llm/generate-post/group", async (HttpRequest req, IHttpClientFactory hf) =>
 {
@@ -523,8 +468,7 @@ app.MapPost("/llm/generate-post/group", async (HttpRequest req, IHttpClientFacto
     var opts = body.Options ?? new PostOptions(Language: null, MaxWords: null, Tone: null);
     var lang = string.IsNullOrWhiteSpace(opts.Language) ? "en" : opts.Language!.Trim();
     var tone = string.IsNullOrWhiteSpace(opts.Tone) ? "friendly" : opts.Tone!.Trim();
-    var maxWordsRaw = opts.MaxWords ?? POST_MAX_WORDS_DEFAULT;
-    var maxWords = Math.Clamp(maxWordsRaw, POST_MAX_WORDS_MIN, POST_MAX_WORDS_MAX);
+    var maxWords = Math.Clamp(opts.MaxWords ?? POST_MAX_WORDS_DEFAULT, POST_MAX_WORDS_MIN, POST_MAX_WORDS_MAX);
 
     var spec = ComputeGroupPostSpec(body);
 
@@ -544,12 +488,12 @@ OUTPUT LANGUAGE:
 
 RULES:
 - Do NOT invent skills.
-- Choose a specific positionNeed (NOT "Other") from allowedPositions.
+- Choose a specific positionNeed from allowedPositions.
 - Choose requiredSkills (3-6 items) from skillBank ONLY.
 - Prefer requiredSkills that are NOT already in teamTopSkills.
-- Mention what the team already has (teamTopSkills) and what is missing (requiredSkills).
+- Mention what the team already has and what is missing.
 - Keep description under maxWords words.
-- End with a clear call-to-action (DM / Apply).
+- End with a call-to-action (DM / Apply).
 
 Schema:
 {"title":"...","description":"...","positionNeed":"...","requiredSkills":["..."]}
@@ -558,9 +502,8 @@ Schema:
     var user = JsonSerializer.Serialize(new
     {
         language = lang,
-        tone = tone,
+        tone,
         maxWords,
-        suggestedBucket = spec.SuggestedBucket,
         allowedPositions,
         skillBank = spec.SkillBank,
         group = new
@@ -571,36 +514,26 @@ Schema:
             openSlots = body.Group.OpenSlots,
             teamTopSkills = body.Group.TeamTopSkills ?? Array.Empty<string>()
         },
-        project = body.Project is null ? null : new { title = body.Project.Title, summary = body.Project.Summary },
-        postSpec = spec
-    });
+        project = body.Project is null ? null : new { title = body.Project.Title, summary = body.Project.Summary }
+    }, JsonOpts());
 
     var llm = hf.CreateClient("llm");
-
-    var (ok, json, err, dbg) = await CallJsonWithRetrySafeAsync(
-        llm, sys, user,
-        temperature: 0.35,
-        maxTokens1: 650,
-        maxTokens2: 950,
-        llmGate,
-        req.HttpContext.RequestAborted);
-
+    var (ok, json, detail) = await CallJsonWithRetryAsync(llm, sys, user, llmGate, req.HttpContext.RequestAborted);
     if (!ok)
-        return Results.Ok(new { draft = (object?)null, error = "llm_invalid_json_or_incomplete", detail = new { err, dbg } });
+        return Results.Ok(new { draft = (object?)null, error = "llm_invalid_json_or_incomplete", detail });
 
     if (!TryParseJson(json!, out var parsed, out var perr))
-        return Results.Ok(new { draft = (object?)null, error = "llm_invalid_json", detail = new { perr, raw = Clip(json!, 1200) } });
+        return Results.Ok(new { draft = (object?)null, error = "llm_invalid_json", detail = perr });
 
     var root = parsed!.RootElement;
-
-    if (!HasRequiredKeys(root, "title", "description", "positionNeed", "requiredSkills") || IsBadPositionNeed(GetStringAny(root, "positionNeed", "PositionNeed")))
-        return Results.Ok(new { draft = (object?)null, error = "llm_missing_required_keys", detail = new { raw = Clip(root.GetRawText(), 1200) } });
+    if (!HasRequiredKeys(root, "title", "description", "positionNeed", "requiredSkills"))
+        return Results.Ok(new { draft = (object?)null, error = "llm_missing_required_keys", detail = Clip(root.GetRawText(), 1200) });
 
     return Results.Json(new { draft = BuildGroupDraftResponse(root, spec) });
 });
 
 // ======================================================================
-// NEW: LLM Generate Personal Post Draft
+// LLM: Generate Personal Post Draft
 // ======================================================================
 app.MapPost("/llm/generate-post/personal", async (HttpRequest req, IHttpClientFactory hf) =>
 {
@@ -613,8 +546,7 @@ app.MapPost("/llm/generate-post/personal", async (HttpRequest req, IHttpClientFa
     var opts = body.Options ?? new PostOptions(Language: null, MaxWords: null, Tone: null);
     var lang = string.IsNullOrWhiteSpace(opts.Language) ? "en" : opts.Language!.Trim();
     var tone = string.IsNullOrWhiteSpace(opts.Tone) ? "professional" : opts.Tone!.Trim();
-    var maxWordsRaw = opts.MaxWords ?? POST_MAX_WORDS_DEFAULT;
-    var maxWords = Math.Clamp(maxWordsRaw, POST_MAX_WORDS_MIN, POST_MAX_WORDS_MAX);
+    var maxWords = Math.Clamp(opts.MaxWords ?? POST_MAX_WORDS_DEFAULT, POST_MAX_WORDS_MIN, POST_MAX_WORDS_MAX);
 
     var skills = (body.User.Skills ?? new List<string>())
         .Where(s => !string.IsNullOrWhiteSpace(s))
@@ -632,12 +564,9 @@ OUTPUT LANGUAGE:
 - English (en) only.
 
 RULES:
-- Do NOT invent skills. Use the provided skills only.
-- Make the description engaging and attractive to project teams.
-- Title must be meaningful (NOT just the person's name).
-- Keep title to ~6-12 words.
+- Do NOT invent skills. Use provided skills only.
+- Title 6-12 words, meaningful.
 - Keep description under maxWords words.
-- Include goal and availability if provided.
 - End with a call-to-action (DM / connect).
 
 Schema:
@@ -647,7 +576,7 @@ Schema:
     var user = JsonSerializer.Serialize(new
     {
         language = lang,
-        tone = tone,
+        tone,
         maxWords,
         person = new
         {
@@ -656,35 +585,27 @@ Schema:
             availability = body.User.Availability,
             skills
         }
-    });
+    }, JsonOpts());
 
     var llm = hf.CreateClient("llm");
-
-    var (ok, json, err, dbg) = await CallJsonWithRetrySafeAsync(
-        llm, sys, user,
-        temperature: 0.35,
-        maxTokens1: 650,
-        maxTokens2: 950,
-        llmGate,
-        req.HttpContext.RequestAborted);
-
+    var (ok, json, detail) = await CallJsonWithRetryAsync(llm, sys, user, llmGate, req.HttpContext.RequestAborted);
     if (!ok)
-        return Results.Ok(new { draft = (object?)null, error = "llm_invalid_json_or_incomplete", detail = new { err, dbg } });
+        return Results.Ok(new { draft = (object?)null, error = "llm_invalid_json_or_incomplete", detail });
 
     if (!TryParseJson(json!, out var parsed, out var perr))
-        return Results.Ok(new { draft = (object?)null, error = "llm_invalid_json", detail = new { perr, raw = Clip(json!, 1200) } });
+        return Results.Ok(new { draft = (object?)null, error = "llm_invalid_json", detail = perr });
 
     var root = parsed!.RootElement;
     if (!HasRequiredKeys(root, "title", "description"))
-        return Results.Ok(new { draft = (object?)null, error = "llm_missing_required_keys", detail = new { raw = Clip(root.GetRawText(), 1200) } });
+        return Results.Ok(new { draft = (object?)null, error = "llm_missing_required_keys", detail = Clip(root.GetRawText(), 1200) });
 
-    return Results.Json(new { draft = BuildPersonalDraftResponse(root) });
+    return Results.Json(new { draft = new { title = GetStringAny(root, "title", "Title") ?? "", description = GetStringAny(root, "description", "Description") ?? "" } });
 });
 
 // ======================================================================
 // LLM: Rerank (topic / group_post / personal_post)
-// - SAFE upstream calls (no 500)
-// - BATCH reason generation (fast)
+// - mode=topic => ABSOLUTE score mapping
+// - mode=group_post/personal_post => RELATIVE score mapping (min-max in batch)
 // ======================================================================
 app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
 {
@@ -695,14 +616,6 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
     var root = doc.RootElement;
 
     var mode = NormalizeMode(GetStringAny(root, "mode", "Mode") ?? "topic");
-
-    // withReasons (default true)
-    var withReasons = true;
-    var withReasonsStr = GetStringAny(root, "withReasons", "WithReasons", "with_reasons", "With_Reasons");
-    if (!string.IsNullOrWhiteSpace(withReasonsStr) && bool.TryParse(withReasonsStr, out var wr))
-        withReasons = wr;
-    else if (root.TryGetProperty("withReasons", out var wrEl) && wrEl.ValueKind is JsonValueKind.True or JsonValueKind.False)
-        withReasons = wrEl.GetBoolean();
 
     var rawQueryText = GetStringAny(root, "queryText", "QueryText") ?? "";
     var policy = GetStringAny(root, "policy", "Policy") ?? "Explain match. Do not fabricate.";
@@ -715,8 +628,7 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
     if (string.IsNullOrWhiteSpace(queryText))
         return Results.BadRequest(new { error = "Missing queryText" });
 
-    var requestedTopN = GetIntAny(root, "topN", "TopN");
-    var topN = requestedTopN.HasValue ? Math.Clamp(requestedTopN.Value, 1, MAX_SUGGESTIONS) : MAX_SUGGESTIONS;
+    var topN = Math.Clamp(GetIntAny(root, "topN", "TopN") ?? MAX_SUGGESTIONS, 1, MAX_SUGGESTIONS);
 
     if (!TryGetArrayAny(root, out var candsEl, "candidates", "Candidates"))
         return Results.BadRequest(new { error = "Missing candidates[]" });
@@ -751,7 +663,7 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
     if (candidates.Count == 0)
         return Results.Json(new { ranked = Array.Empty<object>() });
 
-    // Phase A: Cross-encoder rerank (python) - SAFE
+    // Phase A: Cross-encoder rerank
     var rrClient = hf.CreateClient("rerank");
     var rrTexts = candidates.Select(c => BuildRerankText(c, RERANK_TEXT_MAX)).ToArray();
 
@@ -763,12 +675,11 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
     if (logits.Length != candidates.Count)
         return Results.Json(new { ok = false, error = "rerank_scores_mismatch", scores = logits.Length, candidates = candidates.Count }, statusCode: 200);
 
-    // Phase B: Score mapping (SEPARATED BY MODE)
+    // Phase B: score mapping (separated by mode)
     double[] ceScores = IsTopicMode(mode)
         ? ScoreTopicAbsolute(logits, TOPIC_PIVOT, TOPIC_SCALE)
         : ScorePostRelative(logits);
 
-    // Phase C: Mix baseline slightly
     double FinalScore(int i)
     {
         var ce = ceScores[i];
@@ -780,15 +691,15 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
         return (WEIGHT_POST_CE * ce) + (WEIGHT_POST_BASE * b);
     }
 
-    var minScore = mode == "auto_assign_team" ? 0.0 : (IsTopicMode(mode) ? TOPIC_MIN_SCORE : POST_MIN_SCORE);
+    var minScore = IsTopicMode(mode) ? TOPIC_MIN_SCORE : POST_MIN_SCORE;
 
     var seeds = candidates
         .Select((c, i) => new RankedSeed(
-            c.Key,
-            c.EntityId,
-            c.Title,
-            Clip(BuildReasonSnippet(c), REASON_SNIPPET_MAX),
-            Math.Round(FinalScore(i), 2)
+            Key: c.Key,
+            EntityId: c.EntityId,
+            Title: c.Title,
+            Text: Clip(BuildReasonSnippet(c), REASON_SNIPPET_MAX),
+            FinalScore: Math.Round(FinalScore(i), 2)
         ))
         .OrderByDescending(x => x.FinalScore)
         .Where(x => x.FinalScore >= minScore)
@@ -816,43 +727,22 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
     if (seeds.Count == 0)
         return Results.Json(new { ranked = Array.Empty<object>() });
 
-    if (!withReasons)
-    {
-        var rankedNoReasons = seeds.Select(s => new RerankResultItem(
-            Key: s.Key,
-            FinalScore: s.FinalScore,
-            Reason: "",
-            MatchedSkills: Array.Empty<string>(),
-            BalanceNote: BuildBalanceNote(mode, team, candidates.FirstOrDefault(x => x.Key == s.Key))
-        )).ToArray();
-
-        return Results.Json(new { ranked = rankedNoReasons });
-    }
-
-    // Phase D: LLM reasons (BATCH for speed)
+    // Phase D: LLM reasons (batch)
     var llm = hf.CreateClient("llm");
     var sysBatch = BuildReasonBatchSystemPrompt(mode);
 
-    // Keep snippet for reason, but still bounded
     var items = seeds.Select(s => new
     {
         key = s.Key,
         finalScore = s.FinalScore,
-        anchor = ExtractTitleAnchor(s.Text),
-        snippet = s.Text
+        snippet = BuildReasonSnippetForLlm(s.Text)
     }).ToArray();
 
-    var userBatch = JsonSerializer.Serialize(new
-    {
-        mode,
-        queryText,
-        policy,
-        items
-    });
+    var userBatch = JsonSerializer.Serialize(new { mode, queryText, policy, items }, JsonOpts());
 
-    var reasons = new Dictionary<string, SummaryInfo>(StringComparer.OrdinalIgnoreCase);
+    var reasonsByKey = new Dictionary<string, SummaryInfo>(StringComparer.OrdinalIgnoreCase);
 
-    var batchCall = await LlamaChatSafeAsync(llm, sysBatch, userBatch, temperature, maxTokens: 900, llmGate, req.HttpContext.RequestAborted);
+    var batchCall = await LlamaChatSafeAsync(llm, sysBatch, userBatch, temperature: 0.2, maxTokens: 1600, llmGate, req.HttpContext.RequestAborted);
     if (batchCall.ok)
     {
         var extracted = ExtractFirstCompleteJsonValue(batchCall.content);
@@ -862,91 +752,78 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
             if (TryParseBatchSummaries(extracted, out var dict) && dict.Count > 0)
             {
                 foreach (var kv in dict)
-                    reasons[kv.Key] = NormalizeReasonSoft(kv.Value);
-            }
-            else if (enableDebug)
-            {
-                last.SystemPreview = Clip(sysBatch, 1600);
-                last.UserPreview = Clip(userBatch, 1600);
-                last.RawResponsePreview = Clip(batchCall.content, 1600);
+                {
+                    var cleaned = NormalizeReasonFinal(kv.Value.Summary);
+                    var info = new SummaryInfo(cleaned, kv.Value.MatchedSkills ?? Array.Empty<string>());
+                    if (!IsBadReasonSummary(info.Summary))
+                        reasonsByKey[kv.Key] = info;
+                }
             }
         }
     }
 
-    // Fallback: per-item (only for missing keys), still safe + gated
-    if (reasons.Count < seeds.Count)
+    // Fallback per-item (only if missing/bad)
+    var sysOne = BuildReasonSystemPrompt(mode);
+    foreach (var s in seeds)
     {
-        var sysOne = BuildReasonSystemPrompt(mode);
+        if (reasonsByKey.ContainsKey(s.Key)) continue;
 
-        foreach (var s in seeds)
+        var userOne = JsonSerializer.Serialize(new
         {
-            if (reasons.ContainsKey(s.Key)) continue;
+            mode,
+            queryText,
+            policy,
+            item = new { key = s.Key, finalScore = s.FinalScore, snippet = BuildReasonSnippetForLlm(s.Text) }
+        }, JsonOpts());
 
-            var anchor = ExtractTitleAnchor(s.Text);
-            var userOne = JsonSerializer.Serialize(new
+        var oneCall = await LlamaChatSafeAsync(llm, sysOne, userOne, temperature: 0.15, maxTokens: 420, llmGate, req.HttpContext.RequestAborted);
+
+        SummaryInfo info;
+        if (oneCall.ok)
+        {
+            var j = ExtractFirstCompleteJsonValue(oneCall.content);
+            if (j is not null && TryParseSingleSummary(EscapeNewlinesInsideJsonStrings(j), out var parsedInfo))
             {
-                mode,
-                queryText,
-                policy,
-                item = new { key = s.Key, finalScore = s.FinalScore, anchor, snippet = s.Text }
-            });
-
-            var oneCall = await LlamaChatSafeAsync(llm, sysOne, userOne, temperature: 0.25, maxTokens: 320, llmGate, req.HttpContext.RequestAborted);
-            SummaryInfo info;
-
-            if (oneCall.ok)
-            {
-                var j = ExtractFirstCompleteJsonValue(oneCall.content);
-                if (j is not null && TryParseSingleSummary(EscapeNewlinesInsideJsonStrings(j), out var info2) && !string.IsNullOrWhiteSpace(info2.Summary))
-                {
-                    info = NormalizeReasonSoft(info2);
-                }
-                else
-                {
-                    var plain = CleanReasonText(oneCall.content);
-                    info = !string.IsNullOrWhiteSpace(plain)
-                        ? NormalizeReasonSoft(new SummaryInfo(plain!, FallbackMatchedSkillsFromSnippet(s.Text)))
-                        : new SummaryInfo(FallbackReasonFromSnippet(s.Title, s.Text), FallbackMatchedSkillsFromSnippet(s.Text));
-                }
+                info = new SummaryInfo(NormalizeReasonFinal(parsedInfo.Summary), parsedInfo.MatchedSkills ?? Array.Empty<string>());
             }
             else
             {
-                info = new SummaryInfo(FallbackReasonFromSnippet(s.Title, s.Text), FallbackMatchedSkillsFromSnippet(s.Text));
-            }
-
-            reasons[s.Key] = info;
-
-            if (enableDebug && last.SystemPreview is null)
-            {
-                last.SystemPreview = Clip(sysOne, 1600);
-                last.UserPreview = Clip(userOne, 1600);
-                last.RawResponsePreview = Clip(oneCall.ok ? oneCall.content : (oneCall.error ?? ""), 1600);
+                // plain text fallback
+                info = new SummaryInfo(NormalizeReasonFinal(CleanReasonText(oneCall.content) ?? "Strong match based on overlapping skills."), Array.Empty<string>());
             }
         }
+        else
+        {
+            info = new SummaryInfo("Strong match based on overlapping skills.", Array.Empty<string>());
+        }
+
+        if (IsBadReasonSummary(info.Summary))
+            info = new SummaryInfo("Strong match based on overlapping skills.", Array.Empty<string>());
+
+        reasonsByKey[s.Key] = info;
     }
 
-    var rankedOut = seeds.Select(s =>
+    var ranked = seeds.Select(s =>
     {
-        var info = reasons.TryGetValue(s.Key, out var v)
-            ? v
-            : new SummaryInfo(FallbackReasonFromSnippet(s.Title, s.Text), FallbackMatchedSkillsFromSnippet(s.Text));
+        reasonsByKey.TryGetValue(s.Key, out var info);
+        info ??= new SummaryInfo("Strong match based on overlapping skills.", Array.Empty<string>());
 
         return new RerankResultItem(
             Key: s.Key,
             FinalScore: s.FinalScore,
-            Reason: info.Summary,
-            MatchedSkills: info.MatchedSkills.Take(3).ToArray(),
-            BalanceNote: BuildBalanceNote(mode, team, candidates.FirstOrDefault(x => x.Key == s.Key))
+            Reason: NormalizeReasonFinal(info.Summary),
+            MatchedSkills: (info.MatchedSkills ?? Array.Empty<string>()).Take(3).ToArray(),
+            BalanceNote: BuildBalanceNote(mode, team)
         );
     }).ToArray();
 
-    return Results.Json(new { ranked = rankedOut });
+    return Results.Json(new { ranked });
 });
 
 app.Run();
 
 // ======================================================================
-// Small validation helpers
+// Helpers
 // ======================================================================
 
 static bool HasRequiredKeys(JsonElement root, params string[] keys)
@@ -960,11 +837,11 @@ static bool HasRequiredKeys(JsonElement root, params string[] keys)
 
 static object BuildGroupDraftResponse(JsonElement llmJson, GroupPostSpec spec)
 {
-    var title = GetStringAny(llmJson, "title", "Title")?.Trim() ?? "";
-    var description = GetStringAny(llmJson, "description", "Description", "body", "Body")?.Trim() ?? "";
+    var title = (GetStringAny(llmJson, "title", "Title") ?? "").Trim();
+    var description = (GetStringAny(llmJson, "description", "Description") ?? "").Trim();
+    var positionNeed = (GetStringAny(llmJson, "positionNeed", "PositionNeed") ?? "").Trim();
 
-    var positionNeed = GetStringAny(llmJson, "positionNeed", "PositionNeed", "position", "Position")?.Trim() ?? "";
-    if (IsBadPositionNeed(positionNeed))
+    if (string.IsNullOrWhiteSpace(positionNeed) || positionNeed.Equals("Other", StringComparison.OrdinalIgnoreCase))
         positionNeed = spec.SuggestedBucket switch
         {
             "Frontend" => "Frontend Developer",
@@ -975,7 +852,7 @@ static object BuildGroupDraftResponse(JsonElement llmJson, GroupPostSpec spec)
         };
 
     var requiredSkills = new List<string>();
-    if (TryGetArrayAny(llmJson, out var arr, "requiredSkills", "RequiredSkills", "required_skills"))
+    if (TryGetArrayAny(llmJson, out var arr, "requiredSkills", "RequiredSkills"))
     {
         foreach (var x in arr.EnumerateArray())
         {
@@ -989,128 +866,19 @@ static object BuildGroupDraftResponse(JsonElement llmJson, GroupPostSpec spec)
     if (requiredSkills.Count == 0)
         requiredSkills.AddRange(spec.SkillBank.Take(4));
 
-    var expiresAt = DateTime.UtcNow.AddDays(1).ToString("O", CultureInfo.InvariantCulture);
-
     return new
     {
         title,
         description,
         positionNeed,
         requiredSkills = requiredSkills.ToArray(),
-        expiresAt
+        expiresAt = DateTime.UtcNow.AddDays(1).ToString("O", CultureInfo.InvariantCulture)
     };
 }
-
-static bool IsBadPositionNeed(string? pos)
-{
-    if (string.IsNullOrWhiteSpace(pos)) return true;
-    var p = pos.Trim();
-    if (p.Equals("Other", StringComparison.OrdinalIgnoreCase)) return true;
-    if (p.Equals("Other Role", StringComparison.OrdinalIgnoreCase)) return true;
-    if (p.Contains("other role", StringComparison.OrdinalIgnoreCase)) return true;
-    return false;
-}
-
-static object BuildPersonalDraftResponse(JsonElement llmJson)
-{
-    var title = GetStringAny(llmJson, "title", "Title")?.Trim() ?? "";
-    var description = GetStringAny(llmJson, "description", "Description", "body", "Body")?.Trim() ?? "";
-    return new { title, description };
-}
-
-static string? CleanReasonText(string raw)
-{
-    if (string.IsNullOrWhiteSpace(raw))
-        return null;
-
-    raw = raw.Trim();
-
-    if (raw.StartsWith("```", StringComparison.Ordinal))
-    {
-        var firstNl = raw.IndexOf('\n');
-        if (firstNl >= 0) raw = raw[(firstNl + 1)..];
-        var endFence = raw.LastIndexOf("```", StringComparison.Ordinal);
-        if (endFence >= 0) raw = raw[..endFence];
-        raw = raw.Trim();
-    }
-
-    // If it's a JSON object/array, don't treat it as plain text.
-    if ((raw.Contains('{') && raw.Contains('}')) || (raw.Contains('[') && raw.Contains(']')))
-        return null;
-
-    raw = raw.Trim().Trim('"').Trim('\'');
-    raw = NormalizeWhitespace(raw);
-    if (raw.Length == 0)
-        return null;
-
-    raw = EnsureTrailingPeriod(raw);
-    return raw;
-}
-
-static SummaryInfo NormalizeReasonSoft(SummaryInfo info)
-{
-    var summary = NormalizeWhitespace(info.Summary ?? string.Empty);
-    summary = EnsureTrailingPeriod(summary);
-    return new SummaryInfo(summary, info.MatchedSkills);
-}
-
-static string NormalizeWhitespace(string s)
-{
-    if (string.IsNullOrEmpty(s)) return "";
-    var sb = new StringBuilder(s.Length);
-    bool prevSpace = false;
-    foreach (var ch in s)
-    {
-        if (char.IsWhiteSpace(ch))
-        {
-            if (!prevSpace) sb.Append(' ');
-            prevSpace = true;
-        }
-        else
-        {
-            sb.Append(ch);
-            prevSpace = false;
-        }
-    }
-    return sb.ToString().Trim();
-}
-
-static string EnsureTrailingPeriod(string s)
-{
-    s = (s ?? "").Trim();
-    if (s.Length == 0) return s;
-    if (!s.EndsWith('.')) return s + ".";
-    return s;
-}
-
-static string ExtractTitleAnchor(string snippet)
-{
-    var title = ExtractLine(snippet, "TITLE:") ?? "";
-    title = title.Trim();
-    if (title.Length == 0) return "Item";
-
-    var cut = title.IndexOfAny(['-', ':', '|']);
-    if (cut > 0) title = title[..cut].Trim();
-
-    var token = new string(title
-        .TakeWhile(ch => char.IsLetterOrDigit(ch) || ch == '_')
-        .ToArray());
-
-    if (string.IsNullOrWhiteSpace(token))
-        token = title.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "Item";
-
-    if (token.Length > 20) token = token[..20];
-    return token;
-}
-
-// ======================================================================
-// Group post spec (deterministic team gap -> skills)
-// ======================================================================
 
 static GroupPostSpec ComputeGroupPostSpec(GenerateGroupPostRequest req)
 {
     var g = req.Group;
-
     var open = g.OpenSlots ?? new Mix(0, 0, 0);
     var mix = g.CurrentMix ?? new Mix(0, 0, 0);
 
@@ -1122,25 +890,15 @@ static GroupPostSpec ComputeGroupPostSpec(GenerateGroupPostRequest req)
     var mobile = new[] { "Flutter", "React Native", "Android", "iOS" };
     var qa = new[] { "QA", "Testing", "Test Cases", "Bug Reporting", "Cypress" };
     var pm = new[] { "Project Management", "Agile", "Communication", "Planning", "Documentation" };
-    var data = new[] { "Analytics", "SQL", "Dashboards", "Reporting", "Data Visualization" };
-    var uiux = new[] { "UI", "UX", "Figma", "Wireframing", "Prototyping" };
-    var devops = new[] { "DevOps", "CI/CD", "Docker", "Kubernetes", "Monitoring" };
-    var ba = new[] { "Requirements", "User Stories", "Documentation", "Stakeholder Management" };
 
-    var skillBank = fe.Concat(be).Concat(ai).Concat(mobile).Concat(qa).Concat(pm).Concat(data).Concat(uiux).Concat(devops).Concat(ba)
-        .Where(s => !string.IsNullOrWhiteSpace(s))
+    var skillBank = fe.Concat(be).Concat(ai).Concat(mobile).Concat(qa).Concat(pm)
         .Select(s => s.Trim())
+        .Where(s => s.Length > 0)
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .Take(80)
         .ToArray();
 
-    var tags = new List<string> { "Teammy", roleBucket };
-
-    return new GroupPostSpec(
-        SuggestedBucket: roleBucket,
-        SkillBank: skillBank,
-        Tags: tags.Distinct(StringComparer.OrdinalIgnoreCase).Take(6).ToArray()
-    );
+    return new GroupPostSpec(roleBucket, skillBank);
 
     static string PickNeededRole(Mix open, string? primaryNeed, Mix mix)
     {
@@ -1164,56 +922,11 @@ static GroupPostSpec ComputeGroupPostSpec(GenerateGroupPostRequest req)
 }
 
 // ======================================================================
-// JSON call helper for post generation (retry) - SAFE + GATED
-// ======================================================================
-
-static async Task<(bool ok, string? json, string? err, object? dbg)> CallJsonWithRetrySafeAsync(
-    HttpClient llm,
-    string system,
-    string user,
-    double temperature,
-    int maxTokens1,
-    int maxTokens2,
-    SemaphoreSlim llmGate,
-    CancellationToken ct)
-{
-    var c1 = await LlamaChatSafeAsync(llm, system, user, temperature, maxTokens1, llmGate, ct);
-    if (!c1.ok)
-        return (false, null, "llm_http_failed", new { attempt = 1, c1.status, c1.error });
-
-    var j1 = ExtractFirstCompleteJsonValue(c1.content);
-    if (j1 is not null)
-    {
-        j1 = EscapeNewlinesInsideJsonStrings(j1);
-        if (TryParseJson(j1, out _, out _))
-            return (true, j1, null, new { attempt = 1, finish = c1.finish });
-    }
-
-    var sys2 = system + "\nIf JSON is missing/invalid, return ONE complete JSON object that matches the schema.";
-    var c2 = await LlamaChatSafeAsync(llm, sys2, user, temperature, maxTokens2, llmGate, ct);
-    if (!c2.ok)
-        return (false, null, "llm_http_failed", new { attempt = 2, c2.status, c2.error });
-
-    var j2 = ExtractFirstCompleteJsonValue(c2.content);
-    if (j2 is not null)
-    {
-        j2 = EscapeNewlinesInsideJsonStrings(j2);
-        if (TryParseJson(j2, out _, out _))
-            return (true, j2, null, new { attempt = 2, finish = c2.finish });
-    }
-
-    return (false, null, "no_complete_valid_json", new
-    {
-        attempt1 = new { finish = c1.finish, preview = Clip(c1.content, 900) },
-        attempt2 = new { finish = c2.finish, preview = Clip(c2.content, 900) }
-    });
-}
-
-// ======================================================================
-// Scoring (SEPARATED BY MODE)
+// Scoring
 // ======================================================================
 
 static bool IsTopicMode(string mode) => NormalizeMode(mode) == "topic";
+
 static double Sigmoid(double x) => 1.0 / (1.0 + Math.Exp(-x));
 
 static double[] ScoreTopicAbsolute(double[] logits, double pivot, double scale)
@@ -1236,7 +949,6 @@ static double[] ScorePostRelative(double[] logits)
     var denom = max - min;
 
     var scores = new double[logits.Length];
-
     if (denom < 1e-12)
     {
         for (int i = 0; i < scores.Length; i++) scores[i] = 100.0;
@@ -1250,7 +962,7 @@ static double[] ScorePostRelative(double[] logits)
 }
 
 // ======================================================================
-// Prompt builders (reason micro-summary)
+// Prompt builders + reason cleanup (NO "(Join)")
 // ======================================================================
 
 static string BuildReasonSystemPrompt(string mode)
@@ -1260,44 +972,23 @@ static string BuildReasonSystemPrompt(string mode)
     var common = """
 Return ONLY valid JSON. No markdown. No code fences. No extra keys.
 
-You are explaining WHY the finalScore (0-100) is what it is.
-Write ONE short justification sentence:
-- 1 sentence, <= 180 characters (including spaces).
-- Do NOT truncate with "...". If it's too long, rewrite shorter.
-- Do NOT restate the item's description/title.
-- Do NOT use the '|' character.
-- Include the provided anchor keyword at the very end in parentheses.
-- Mention 1-2 concrete technologies.
+Write ONE neutral justification sentence:
+- 1 sentence, <= 180 characters.
+- NEVER start with "Join".
+- No call-to-action (no DM, apply, connect).
+- Mention 1-2 technologies that appear in the snippet.
 - End with a period.
-
-GPA rule:
-- GPA is on a 0-10 scale (10 is best). 8+ strong, 6-8 moderate, <6 weak.
-- Do NOT call GPA >= 8 "low".
-
-matchedSkills:
-- 1 to 3 skills that appear in the snippet (exact tokens).
 
 Schema:
 {"summary":"...","matchedSkills":["..."]}
 """;
 
-    if (mode is "group_post" or "personal_post" or "auto_assign_team")
-    {
-        return common + """
+    if (mode is "group_post" or "personal_post")
+        return common + "\nFocus: Team gap matching (needed role + mix + matching skills).\n";
 
-Focus: Team gap matching.
-Prioritize NEEDED_ROLE and TEAM_MIX. Use MATCHING_SKILLS when present.
-""";
-    }
-
-    return common + """
-
-Focus: Topic matching query goals and skills overlap.
-Mention 1-2 matched skills and 1 missing/weak point if any.
-""";
+    return common + "\nFocus: Topic match to query goals and skills overlap.\n";
 }
 
-// Batch reasons: 1 call for all seeds (FAST)
 static string BuildReasonBatchSystemPrompt(string mode)
 {
     mode = NormalizeMode(mode);
@@ -1305,58 +996,161 @@ static string BuildReasonBatchSystemPrompt(string mode)
     var common = """
 Return ONLY valid JSON. No markdown. No code fences. No extra keys.
 
-You will receive: items[] each with key finalScore anchor snippet.
+For each item:
+- 1 neutral sentence, <= 180 characters, ends with a period.
+- NEVER start with "Join".
+- No call-to-action.
+- Mention 1-2 technologies present in snippet.
+- matchedSkills: 1-3 skills found in snippet.
 
-For EACH item:
-- Write ONE short sentence (<= 180 characters) ending with a period.
-- Include 1-2 technologies that appear in the snippet.
-- End with the anchor in parentheses, exactly: (anchor).
-- matchedSkills must contain 1-3 skills found in snippet.
-
-GPA rule:
-- GPA is on a 0-10 scale (10 is best). 8+ strong, 6-8 moderate, <6 weak.
-- Do NOT call GPA >= 8 "low".
-
-Do NOT invent skills. Do NOT copy full sentences from the snippet.
-Do NOT use the '|' character.
-
-Return EXACT schema:
+Return schema:
 {"items":[{"key":"...","summary":"...","matchedSkills":["..."]}]}
 """;
 
-    if (mode is "group_post" or "personal_post" or "auto_assign_team")
-    {
-        return common + """
+    if (mode is "group_post" or "personal_post")
+        return common + "\nFocus: Team gap matching (needed role + mix + matching skills).\n";
 
-Focus: Team gap matching.
-Prioritize NEEDED_ROLE and TEAM_MIX. Use MATCHING_SKILLS when present.
-""";
-    }
-
-    return common + """
-
-Focus: Topic matching query goals and skills overlap.
-""";
+    return common + "\nFocus: Topic match to query goals and skills overlap.\n";
 }
 
-static string? BuildBalanceNote(string mode, TeamContext? team, RerankCandidate? cand)
+static string NormalizeReasonFinal(string summary)
+{
+    var s = NormalizeWhitespace(summary);
+
+    // strip trailing "(Join)" / "(Something)" patterns
+    s = StripTrailingParen(s);
+
+    if (s.StartsWith("Join ", StringComparison.OrdinalIgnoreCase))
+        s = "Strong match based on overlapping skills and role needs.";
+
+    if (!s.EndsWith('.')) s += ".";
+    while (s.EndsWith("..", StringComparison.Ordinal)) s = s[..^1];
+
+    return s;
+
+    static string StripTrailingParen(string input)
+    {
+        var t = (input ?? "").Trim();
+        if (t.Length == 0) return t;
+
+        // remove final period to check trailing paren
+        var hadDot = t.EndsWith('.');
+        if (hadDot) t = t[..^1].TrimEnd();
+
+        if (!t.EndsWith(")", StringComparison.Ordinal))
+            return (hadDot ? (t + ".") : t);
+
+        var open = t.LastIndexOf('(');
+        if (open < 0) return (hadDot ? (t + ".") : t);
+
+        var inside = t[(open + 1)..^1].Trim();
+        if (inside.Length is > 0 and <= 20)
+        {
+            t = t[..open].TrimEnd();
+        }
+
+        return (t + ".");
+    }
+}
+
+static bool IsBadReasonSummary(string? summary)
+{
+    if (string.IsNullOrWhiteSpace(summary)) return true;
+    var s = NormalizeWhitespace(summary);
+    if (s.Length < 10) return true;
+    if (s.StartsWith("Join ", StringComparison.OrdinalIgnoreCase)) return true;
+    if (s.Contains("DM", StringComparison.OrdinalIgnoreCase)) return true;
+    if (s.Contains("apply", StringComparison.OrdinalIgnoreCase)) return true;
+    if (s.Contains("connect", StringComparison.OrdinalIgnoreCase)) return true;
+    return false;
+}
+
+static string NormalizeWhitespace(string s)
+{
+    if (string.IsNullOrWhiteSpace(s)) return "";
+    var sb = new StringBuilder(s.Length);
+    bool prev = false;
+    foreach (var ch in s)
+    {
+        if (char.IsWhiteSpace(ch))
+        {
+            if (!prev) sb.Append(' ');
+            prev = true;
+        }
+        else
+        {
+            sb.Append(ch);
+            prev = false;
+        }
+    }
+    return sb.ToString().Trim();
+}
+
+static string? CleanReasonText(string raw)
+{
+    if (string.IsNullOrWhiteSpace(raw)) return null;
+    raw = raw.Trim();
+
+    if (raw.StartsWith("```", StringComparison.Ordinal))
+    {
+        var firstNl = raw.IndexOf('\n');
+        if (firstNl >= 0) raw = raw[(firstNl + 1)..];
+        var endFence = raw.LastIndexOf("```", StringComparison.Ordinal);
+        if (endFence >= 0) raw = raw[..endFence];
+        raw = raw.Trim();
+    }
+
+    // if it contains JSON braces, refuse
+    if (raw.Contains('{') || raw.Contains('[')) return null;
+
+    raw = raw.Trim().Trim('"').Trim('\'');
+    raw = NormalizeWhitespace(raw);
+    if (raw.Length == 0) return null;
+    return NormalizeReasonFinal(raw);
+}
+
+static string BuildReasonSnippetForLlm(string seedSnippet)
+{
+    if (string.IsNullOrWhiteSpace(seedSnippet)) return "";
+    var kept = new List<string>();
+
+    foreach (var raw in seedSnippet.Split('\n'))
+    {
+        var line = raw.TrimEnd();
+        if (line.Length == 0) continue;
+
+        if (line.StartsWith("TITLE:", StringComparison.OrdinalIgnoreCase)
+            || line.StartsWith("ROLE:", StringComparison.OrdinalIgnoreCase)
+            || line.StartsWith("MAJOR:", StringComparison.OrdinalIgnoreCase)
+            || line.StartsWith("NEEDED_ROLE:", StringComparison.OrdinalIgnoreCase)
+            || line.StartsWith("DESIRED_POSITION:", StringComparison.OrdinalIgnoreCase)
+            || line.StartsWith("GPA:", StringComparison.OrdinalIgnoreCase)
+            || line.StartsWith("TEAM_MIX:", StringComparison.OrdinalIgnoreCase)
+            || line.StartsWith("BASELINE_SCORE:", StringComparison.OrdinalIgnoreCase)
+            || line.StartsWith("SKILLS:", StringComparison.OrdinalIgnoreCase)
+            || line.StartsWith("MATCHING_SKILLS:", StringComparison.OrdinalIgnoreCase))
+        {
+            kept.Add(line);
+        }
+    }
+
+    return Clip(string.Join("\n", kept), 2500);
+}
+
+static string BuildBalanceNote(string mode, TeamContext? team)
 {
     mode = NormalizeMode(mode);
-    if (mode is not ("group_post" or "personal_post" or "auto_assign_team")) return null;
-    if (team is null || cand is null) return null;
+    if (mode is not ("group_post" or "personal_post")) return "";
 
-    var needed = (cand.NeededRole ?? "").ToLowerInvariant();
+    if (team is null) return "";
 
-    if (team.CurrentMixBe >= 2 && needed.Contains("backend"))
-        return "Team already has strong backend coverage.";
-    if (team.CurrentMixFe >= 2 && needed.Contains("frontend"))
-        return "Team already has strong frontend coverage.";
-
-    return null;
+    if (team.CurrentMixBe >= 2) return "Backend already strong; prefer complementary roles.";
+    if (team.CurrentMixFe >= 2) return "Frontend already strong; prefer complementary roles.";
+    return "";
 }
 
 // ======================================================================
-// Query text building (team gap info)
+// Query + Team context
 // ======================================================================
 
 static string BuildQueryText(string mode, string rawQueryText, TeamContext? team)
@@ -1367,22 +1161,14 @@ static string BuildQueryText(string mode, string rawQueryText, TeamContext? team
     if (team is null) return rawQueryText;
 
     var sb = new StringBuilder();
-
     sb.AppendLine($"TEAM: {team.TeamName}");
     sb.AppendLine($"MODE: {mode}");
 
     if (!string.IsNullOrWhiteSpace(team.PrimaryNeed))
         sb.AppendLine($"PRIMARY_NEED: {team.PrimaryNeed}");
 
-    if (team.OpenFe + team.OpenBe + team.OpenOther > 0)
-        sb.AppendLine($"OPEN_SLOTS: FE {team.OpenFe}, BE {team.OpenBe}, Other {team.OpenOther}");
-
     sb.AppendLine($"CURRENT_MIX: FE {team.CurrentMixFe}, BE {team.CurrentMixBe}, Other {team.CurrentMixOther}");
 
-    if (team.PreferRoles.Count > 0)
-        sb.AppendLine($"PREFER: {string.Join(", ", team.PreferRoles)}");
-    if (team.AvoidRoles.Count > 0)
-        sb.AppendLine($"AVOID: {string.Join(", ", team.AvoidRoles)}");
     if (team.Skills.Count > 0)
         sb.AppendLine($"TEAM_SKILLS: {string.Join(", ", team.Skills.Take(28))}");
 
@@ -1403,33 +1189,9 @@ static TeamContext ParseTeamContext(JsonElement teamEl)
         skills = skillsArr.EnumerateArray()
             .Where(x => x.ValueKind == JsonValueKind.String)
             .Select(x => x.GetString()!.Trim())
-            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Where(x => x.Length > 0)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Take(80)
-            .ToList();
-    }
-
-    var preferRoles = new List<string>();
-    if (TryGetArrayAny(teamEl, out var prefArr, "preferRoles", "PreferRoles"))
-    {
-        preferRoles = prefArr.EnumerateArray()
-            .Where(x => x.ValueKind == JsonValueKind.String)
-            .Select(x => x.GetString()!.Trim())
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(20)
-            .ToList();
-    }
-
-    var avoidRoles = new List<string>();
-    if (TryGetArrayAny(teamEl, out var avoidArr, "avoidRoles", "AvoidRoles"))
-    {
-        avoidRoles = avoidArr.EnumerateArray()
-            .Where(x => x.ValueKind == JsonValueKind.String)
-            .Select(x => x.GetString()!.Trim())
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(20)
             .ToList();
     }
 
@@ -1441,15 +1203,7 @@ static TeamContext ParseTeamContext(JsonElement teamEl)
         mixOther = GetIntAny(mixEl, "other", "Other") ?? 0;
     }
 
-    int openFe = 0, openBe = 0, openOther = 0;
-    if (TryGetObjectAny(teamEl, out var openEl, "openSlots", "OpenSlots"))
-    {
-        openFe = GetIntAny(openEl, "fe", "FE", "frontend", "Frontend") ?? 0;
-        openBe = GetIntAny(openEl, "be", "BE", "backend", "Backend") ?? 0;
-        openOther = GetIntAny(openEl, "other", "Other") ?? 0;
-    }
-
-    return new TeamContext(teamName, primaryNeed, skills, preferRoles, avoidRoles, mixFe, mixBe, mixOther, openFe, openBe, openOther);
+    return new TeamContext(teamName, primaryNeed, skills, mixFe, mixBe, mixOther);
 }
 
 // ======================================================================
@@ -1458,31 +1212,12 @@ static TeamContext ParseTeamContext(JsonElement teamEl)
 
 static string BuildRerankText(RerankCandidate c, int maxChars)
 {
-    var (skills, matching) = ExtractSkillsLines(c.Text);
-    var summary = ExtractLine(c.Text, "SUMMARY:");
-    var major = ExtractLine(c.Text, "MAJOR:");
-    var role = ExtractLine(c.Text, "ROLE:");
-    var desiredPosition = ExtractLine(c.Text, "Desired position:") ?? ExtractLine(c.Text, "DESIRED_POSITION:");
-    var gpa = ExtractLine(c.Text, "GPA:");
-
     var sb = new StringBuilder();
 
     sb.Append("TITLE: ").AppendLine(TrimOneLine(c.Title, 180));
 
-    if (!string.IsNullOrWhiteSpace(role))
-        sb.Append("ROLE: ").AppendLine(TrimOneLine(role!, 140));
-
-    if (!string.IsNullOrWhiteSpace(major))
-        sb.Append("MAJOR: ").AppendLine(TrimOneLine(major!, 200));
-
     if (!string.IsNullOrWhiteSpace(c.NeededRole))
         sb.Append("NEEDED_ROLE: ").AppendLine(TrimOneLine(c.NeededRole!, 100));
-
-    if (!string.IsNullOrWhiteSpace(desiredPosition))
-        sb.Append("DESIRED_POSITION: ").AppendLine(TrimOneLine(desiredPosition!, 160));
-
-    if (!string.IsNullOrWhiteSpace(gpa))
-        sb.Append("GPA: ").AppendLine(TrimOneLine(gpa!, 40));
 
     if (c.GroupFrontend + c.GroupBackend + c.GroupOther > 0)
         sb.Append("TEAM_MIX: FE ").Append(c.GroupFrontend).Append(" BE ").Append(c.GroupBackend).Append(" Other ").Append(c.GroupOther).AppendLine();
@@ -1490,50 +1225,32 @@ static string BuildRerankText(RerankCandidate c, int maxChars)
     if (c.BaselineScore > 0)
         sb.Append("BASELINE_SCORE: ").Append(c.BaselineScore).AppendLine();
 
-    if (!string.IsNullOrWhiteSpace(skills))
-        sb.Append("SKILLS: ").AppendLine(TrimOneLine(skills!, 900));
+    // Keep original block lines if present
+    foreach (var line in c.Text.Split('\n'))
+    {
+        var l = line.TrimEnd();
+        if (l.StartsWith("SKILLS:", StringComparison.OrdinalIgnoreCase)
+            || l.StartsWith("MATCHING_SKILLS:", StringComparison.OrdinalIgnoreCase)
+            || l.StartsWith("SUMMARY:", StringComparison.OrdinalIgnoreCase)
+            || l.StartsWith("ROLE:", StringComparison.OrdinalIgnoreCase)
+            || l.StartsWith("MAJOR:", StringComparison.OrdinalIgnoreCase)
+            || l.StartsWith("DESIRED_POSITION:", StringComparison.OrdinalIgnoreCase)
+            || l.StartsWith("Desired position:", StringComparison.OrdinalIgnoreCase)
+            || l.StartsWith("GPA:", StringComparison.OrdinalIgnoreCase))
+        {
+            sb.AppendLine(l);
+        }
+    }
 
-    if (!string.IsNullOrWhiteSpace(matching))
-        sb.Append("MATCHING_SKILLS: ").AppendLine(TrimOneLine(matching!, 700));
-
-    if (!string.IsNullOrWhiteSpace(summary))
-        sb.Append("SUMMARY: ").AppendLine(TrimOneLine(summary!, 1200));
-
-    sb.Append("DETAILS: ").AppendLine(TrimOneLine(c.Text, 5000));
+    sb.Append("DETAILS: ").AppendLine(TrimOneLine(c.Text, 4500));
 
     return Clip(sb.ToString(), maxChars);
 }
 
 static string BuildReasonSnippet(RerankCandidate c) => BuildRerankText(c, REASON_SNIPPET_MAX);
 
-static (string? skills, string? matching) ExtractSkillsLines(string text)
-{
-    string? skills = null, matching = null;
-    foreach (var line in text.Split('\n'))
-    {
-        var l = line.Trim();
-        if (skills is null && l.StartsWith("SKILLS:", StringComparison.OrdinalIgnoreCase))
-            skills = l["SKILLS:".Length..].Trim();
-        if (matching is null && l.StartsWith("MATCHING_SKILLS:", StringComparison.OrdinalIgnoreCase))
-            matching = l["MATCHING_SKILLS:".Length..].Trim();
-        if (skills is not null && matching is not null) break;
-    }
-    return (skills, matching);
-}
-
-static string? ExtractLine(string text, string prefix)
-{
-    foreach (var line in text.Split('\n'))
-    {
-        var l = line.Trim();
-        if (l.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            return l[prefix.Length..].Trim();
-    }
-    return null;
-}
-
 // ======================================================================
-// SAFE upstream calls (NO EnsureSuccessStatusCode throwing 500)
+// SAFE upstream calls
 // ======================================================================
 
 static async Task<(bool ok, double[]? vector, int status, string? error)> LlamaEmbedSafeAsync(
@@ -1548,6 +1265,7 @@ static async Task<(bool ok, double[]? vector, int status, string? error)> LlamaE
             {
                 using var res = await embed.PostAsJsonAsync("/v1/embeddings", new { input = Clip(input, 9000) }, ct);
                 var json = await res.Content.ReadAsStringAsync(ct);
+
                 if (!res.IsSuccessStatusCode)
                 {
                     if (attempt < 2 && IsRetryableStatus(res.StatusCode))
@@ -1566,6 +1284,7 @@ static async Task<(bool ok, double[]? vector, int status, string? error)> LlamaE
             }
             catch (Exception ex) when (attempt < 2)
             {
+                _ = ex;
                 await Task.Delay(150, ct);
             }
             catch (Exception ex)
@@ -1611,6 +1330,7 @@ static async Task<(bool ok, double[]? logits, int status, string? error)> Rerank
             }
             catch (Exception ex) when (attempt < 2)
             {
+                _ = ex;
                 await Task.Delay(150, ct);
             }
             catch (Exception ex)
@@ -1647,6 +1367,7 @@ static async Task<(bool ok, string content, string finish, int status, string? e
                 new { role = "user", content = user }
             },
             temperature,
+            max_tokens = maxTokens
         };
 
         for (int attempt = 1; attempt <= 2; attempt++)
@@ -1674,6 +1395,7 @@ static async Task<(bool ok, string content, string finish, int status, string? e
             }
             catch (Exception ex) when (attempt < 2)
             {
+                _ = ex;
                 await Task.Delay(180, ct);
             }
             catch (Exception ex)
@@ -1700,13 +1422,12 @@ static bool IsRetryableStatus(HttpStatusCode code)
 // JSON extraction / parsing
 // ======================================================================
 
-// Extract FIRST complete JSON value (object OR array) from raw output
 static string? ExtractFirstCompleteJsonValue(string raw)
 {
     if (string.IsNullOrWhiteSpace(raw)) return null;
     raw = raw.Trim();
 
-    if (raw.StartsWith("```"))
+    if (raw.StartsWith("```", StringComparison.Ordinal))
     {
         var firstNl = raw.IndexOf('\n');
         if (firstNl >= 0) raw = raw[(firstNl + 1)..];
@@ -1719,8 +1440,7 @@ static string? ExtractFirstCompleteJsonValue(string raw)
     var startArr = raw.IndexOf('[');
 
     int start;
-    char open;
-    char close;
+    char open, close;
 
     if (startObj < 0 && startArr < 0) return null;
     if (startObj >= 0 && (startArr < 0 || startObj < startArr))
@@ -1756,10 +1476,6 @@ static string? ExtractFirstCompleteJsonValue(string raw)
             if (depth == 0)
                 return raw.Substring(start, i - start + 1);
         }
-
-        // handle nested object/array mix
-        if (open == '{' && ch == '[' && !inStr) { /* ok */ }
-        if (open == '[' && ch == '{' && !inStr) { /* ok */ }
     }
 
     return null;
@@ -1843,10 +1559,10 @@ static bool TryParseSingleSummary(string? json, out SummaryInfo info)
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        var summary = GetStringAny(root, "summary", "Summary", "reason", "Reason", "text", "Text") ?? "";
+        var summary = (GetStringAny(root, "summary", "Summary", "reason", "Reason") ?? "").Trim();
         var ms = new List<string>();
 
-        if (TryGetArrayAny(root, out var arr, "matchedSkills", "MatchedSkills", "matched_skills", "Matched_Skills"))
+        if (TryGetArrayAny(root, out var arr, "matchedSkills", "MatchedSkills"))
         {
             foreach (var x in arr.EnumerateArray())
             {
@@ -1857,18 +1573,8 @@ static bool TryParseSingleSummary(string? json, out SummaryInfo info)
                 if (ms.Count >= 3) break;
             }
         }
-        else
-        {
-            var one = GetStringAny(root, "matchedSkills", "MatchedSkills", "matched_skills", "Matched_Skills");
-            if (!string.IsNullOrWhiteSpace(one))
-                ms.AddRange(one.Split(',', StringSplitOptions.RemoveEmptyEntries)
-                    .Select(x => x.Trim())
-                    .Where(x => x.Length > 0)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Take(3));
-        }
 
-        info = new SummaryInfo(summary.Trim(), ms.ToArray());
+        info = new SummaryInfo(summary, ms.ToArray());
         return !string.IsNullOrWhiteSpace(info.Summary);
     }
     catch
@@ -1877,7 +1583,6 @@ static bool TryParseSingleSummary(string? json, out SummaryInfo info)
     }
 }
 
-// Parse {"items":[{key,summary,matchedSkills}...]} into dict
 static bool TryParseBatchSummaries(string json, out Dictionary<string, SummaryInfo> dict)
 {
     dict = new Dictionary<string, SummaryInfo>(StringComparer.OrdinalIgnoreCase);
@@ -1922,39 +1627,35 @@ static bool TryParseBatchSummaries(string json, out Dictionary<string, SummaryIn
     }
 }
 
-static string FallbackReasonFromSnippet(string title, string snippet)
+static async Task<(bool ok, string? json, object detail)> CallJsonWithRetryAsync(
+    HttpClient llm, string system, string user, SemaphoreSlim gate, CancellationToken ct)
 {
-    var tech = FallbackMatchedSkillsFromSnippet(snippet).Take(2).ToArray();
-    var t = tech.Length > 0 ? string.Join(" ", tech) : "core stack";
-    var s = $"Adds {t} capability aligned to team needs and project goals.";
-    return s.Replace(",", "");
-}
+    var c1 = await LlamaChatSafeAsync(llm, system, user, temperature: 0.35, maxTokens: 800, gate, ct);
+    if (!c1.ok)
+        return (false, null, new { attempt = 1, c1.status, c1.error });
 
-static string[] FallbackMatchedSkillsFromSnippet(string snippet)
-{
-    var (skills, matching) = ExtractSkillsLines(snippet);
-    var list = new List<string>();
+    var j1 = ExtractFirstCompleteJsonValue(c1.content);
+    if (j1 is not null && TryParseJson(EscapeNewlinesInsideJsonStrings(j1), out _, out _))
+        return (true, EscapeNewlinesInsideJsonStrings(j1), new { attempt = 1, finish = c1.finish });
 
-    void AddCsv(string? csv)
+    var sys2 = system + "\nReturn ONE complete JSON object matching the schema.";
+    var c2 = await LlamaChatSafeAsync(llm, sys2, user, temperature: 0.25, maxTokens: 1200, gate, ct);
+    if (!c2.ok)
+        return (false, null, new { attempt = 2, c2.status, c2.error });
+
+    var j2 = ExtractFirstCompleteJsonValue(c2.content);
+    if (j2 is not null && TryParseJson(EscapeNewlinesInsideJsonStrings(j2), out _, out _))
+        return (true, EscapeNewlinesInsideJsonStrings(j2), new { attempt = 2, finish = c2.finish });
+
+    return (false, null, new
     {
-        if (string.IsNullOrWhiteSpace(csv)) return;
-        foreach (var part in csv.Split(',', StringSplitOptions.RemoveEmptyEntries))
-        {
-            var p = part.Trim();
-            if (p.Length is < 2 or > 30) continue;
-            if (!list.Contains(p, StringComparer.OrdinalIgnoreCase))
-                list.Add(p);
-        }
-    }
-
-    AddCsv(matching);
-    AddCsv(skills);
-
-    return list.Take(3).ToArray();
+        attempt1 = new { finish = c1.finish, preview = Clip(c1.content, 600) },
+        attempt2 = new { finish = c2.finish, preview = Clip(c2.content, 600) }
+    });
 }
 
 // ======================================================================
-// DB helpers (WAL + busy_timeout => fewer locks => fewer 500)
+// DB helpers
 // ======================================================================
 
 static void InitDb(string dbPath, string vecExtPath, int dim)
@@ -1991,36 +1692,24 @@ static void InitDb(string dbPath, string vecExtPath, int dim)
 
 static SqliteConnection OpenDbSafe(string dbPath, string vecExtPath)
 {
-    // Pooling + default timeout helps a lot on multi-request
     var conn = new SqliteConnection($"Data Source={dbPath};Cache=Shared;Pooling=True;Default Timeout=5;");
     conn.Open();
 
-    try
-    {
-        conn.EnableExtensions(true);
-        conn.LoadExtension(vecExtPath);
+    conn.EnableExtensions(true);
+    conn.LoadExtension(vecExtPath);
 
-        // PRAGMAs to reduce locking & improve throughput
-        using (var cmd = conn.CreateCommand())
-        {
-            cmd.CommandText = """
-            pragma journal_mode = WAL;
-            pragma synchronous = NORMAL;
-            pragma temp_store = MEMORY;
-            pragma busy_timeout = 5000;
-            """;
-            cmd.ExecuteNonQuery();
-        }
-
-        return conn;
-    }
-    catch (Exception ex)
+    using (var cmd = conn.CreateCommand())
     {
-        conn.Dispose();
-        throw new InvalidOperationException(
-            $"Failed to load sqlite vec0 extension. vecExtPath={vecExtPath}, exists={File.Exists(vecExtPath)}. Inner={ex.Message}",
-            ex);
+        cmd.CommandText = """
+        pragma journal_mode = WAL;
+        pragma synchronous = NORMAL;
+        pragma temp_store = MEMORY;
+        pragma busy_timeout = 5000;
+        """;
+        cmd.ExecuteNonQuery();
     }
+
+    return conn;
 }
 
 // ======================================================================
@@ -2035,7 +1724,7 @@ static async Task<object> CheckHttpAsync(string name, HttpClient c, string path,
         using var res = await c.GetAsync(path, ct);
         var txt = await res.Content.ReadAsStringAsync(ct);
         sw.Stop();
-        return new { name, ok = res.IsSuccessStatusCode, status = (int)res.StatusCode, ms = sw.ElapsedMilliseconds, sample = TrimOneLine(txt, 180) };
+        return new { name, ok = res.IsSuccessStatusCode, status = (int)res.StatusCode, ms = sw.ElapsedMilliseconds, sample = TrimOneLine(txt, 160) };
     }
     catch (Exception ex)
     {
@@ -2052,16 +1741,7 @@ static async Task<object> CheckEmbeddingsAsync(HttpClient embed, CancellationTok
         using var res = await embed.PostAsJsonAsync("/v1/embeddings", new { input = "ping" }, ct);
         var txt = await res.Content.ReadAsStringAsync(ct);
         sw.Stop();
-
-        int? dim = null;
-        try
-        {
-            using var doc = JsonDocument.Parse(txt);
-            dim = doc.RootElement.GetProperty("data")[0].GetProperty("embedding").GetArrayLength();
-        }
-        catch { }
-
-        return new { name = "embeddings", ok = res.IsSuccessStatusCode, status = (int)res.StatusCode, ms = sw.ElapsedMilliseconds, embeddingDim = dim, sample = TrimOneLine(txt, 180) };
+        return new { name = "embeddings", ok = res.IsSuccessStatusCode, status = (int)res.StatusCode, ms = sw.ElapsedMilliseconds, sample = TrimOneLine(txt, 160) };
     }
     catch (Exception ex)
     {
@@ -2079,7 +1759,7 @@ static async Task<object> CheckRerankAsync(HttpClient rr, CancellationToken ct)
         using var res = await rr.PostAsJsonAsync("/rerank", payload, ct);
         var txt = await res.Content.ReadAsStringAsync(ct);
         sw.Stop();
-        return new { name = "rerank", ok = res.IsSuccessStatusCode, status = (int)res.StatusCode, ms = sw.ElapsedMilliseconds, sample = TrimOneLine(txt, 180) };
+        return new { name = "rerank", ok = res.IsSuccessStatusCode, status = (int)res.StatusCode, ms = sw.ElapsedMilliseconds, sample = TrimOneLine(txt, 160) };
     }
     catch (Exception ex)
     {
@@ -2107,14 +1787,14 @@ static object CheckDb(string dbPath, string vecExtPath)
     }
 }
 
-static bool GetBool(object obj, string prop)
+static bool GetBoolProp(object obj, string prop)
 {
     var pi = obj.GetType().GetProperty(prop);
     return pi is not null && pi.PropertyType == typeof(bool) && (bool)(pi.GetValue(obj) ?? false);
 }
 
 // ======================================================================
-// General helpers
+// Generic helpers (NO char->string issues)
 // ======================================================================
 
 static JsonSerializerOptions JsonOpts() => new()
@@ -2204,9 +1884,6 @@ static string NormalizeMode(string mode)
 
     return mode switch
     {
-        "auto_assign_team" => "auto_assign_team",
-        "auto_assign" => "auto_assign_team",
-        "team_auto_assign" => "auto_assign_team",
         "grouppost" => "group_post",
         "group_post" => "group_post",
         "personalpost" => "personal_post",
@@ -2229,14 +1906,9 @@ record TeamContext(
     string TeamName,
     string PrimaryNeed,
     List<string> Skills,
-    List<string> PreferRoles,
-    List<string> AvoidRoles,
     int CurrentMixFe,
     int CurrentMixBe,
-    int CurrentMixOther,
-    int OpenFe,
-    int OpenBe,
-    int OpenOther
+    int CurrentMixOther
 );
 
 record RerankCandidate(
@@ -2258,10 +1930,9 @@ record RerankResultItem(
     [property: JsonPropertyName("finalScore")] double FinalScore,
     [property: JsonPropertyName("reason")] string Reason,
     [property: JsonPropertyName("matchedSkills")] string[] MatchedSkills,
-    [property: JsonPropertyName("balanceNote")] string? BalanceNote
+    [property: JsonPropertyName("balanceNote")] string BalanceNote
 );
 
-// Post generation DTOs
 record GenerateGroupPostRequest(GroupInfo Group, ProjectInfo? Project, PostOptions? Options);
 record GeneratePersonalPostRequest(PersonalUser User, PostOptions? Options);
 
@@ -2270,16 +1941,15 @@ record GroupInfo(
     string? PrimaryNeed,
     Mix? CurrentMix,
     Mix? OpenSlots,
-    string[]? TeamTopSkills,
-    string[]? PreferRoles,
-    string[]? AvoidRoles
+    string[]? TeamTopSkills
 );
 
 record Mix(int Fe, int Be, int Other);
 record ProjectInfo(string? Title, string? Summary);
 record PersonalUser(string DisplayName, List<string>? Skills, string? Goal, string? Availability);
 record PostOptions(string? Language, int? MaxWords, string? Tone);
-record GroupPostSpec(string SuggestedBucket, string[] SkillBank, string[] Tags);
+
+record GroupPostSpec(string SuggestedBucket, string[] SkillBank);
 
 sealed class LastDebug
 {
