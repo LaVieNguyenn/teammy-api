@@ -19,6 +19,7 @@ public sealed record AdminUpdateUserRequest(
     string? StudentCode,
     string? Gender,
     Guid? MajorId,
+    double? Gpa,
     bool IsActive,
     string? PortfolioUrl
 );

@@ -467,6 +467,7 @@ public sealed class AiMatchingService(
         var mix = mixes.TryGetValue(request.GroupId, out var snapshot)
             ? snapshot
             : new GroupRoleMixSnapshot(request.GroupId, 0, 0, 0);
+        var desiredPositions = await aiQueries.ListGroupMemberDesiredPositionsAsync(request.GroupId, ct);
 
         var posts = await aiQueries.ListOpenProfilePostsAsync(detail.SemesterId, detail.MajorId, ct);
         if (posts.Count == 0)
@@ -509,7 +510,7 @@ public sealed class AiMatchingService(
         // Provide a structured payload for the AI gateway/host to understand the team context for personal-post rerank.
         // This is sent via context so it remains backward compatible with the existing gateway contract.
         var needsText = BuildRecruitmentNeedsText(groupRecruitmentPosts);
-        var teamJson = BuildGroupPostTeamContext(detail.Name, maxMembers - activeCount, mix, groupSkillProfile, needsProfile, needsText);
+        var teamJson = BuildGroupPostTeamContext(detail.Name, maxMembers - activeCount, mix, groupSkillProfile, needsProfile, needsText, desiredPositions);
         context = BuildLlmContext(
             ("semesterId", detail.SemesterId.ToString()),
             ("groupId", detail.Id.ToString()),
@@ -530,12 +531,31 @@ public sealed class AiMatchingService(
                 requireAiReason: true,
             ct);
 
-        var finalSuggestions = reranked
-            .Take(limit)
-            .ToList();
+            var finalSuggestions = reranked
+                .Take(limit)
+                .ToList();
 
         if (finalSuggestions.Count == 0)
             return finalSuggestions;
+
+        var avoidRoles = InferAvoidRolesFromMix(mix);
+        if (avoidRoles.Count > 0)
+        {
+            var avoidEnums = avoidRoles
+                .Select(AiRoleHelper.Parse)
+                .Where(r => r != AiPrimaryRole.Unknown)
+                .ToHashSet();
+
+            var hasAvoid = finalSuggestions.Any(s => avoidEnums.Contains(AiRoleHelper.Parse(s.PrimaryRole)));
+            if (!hasAvoid)
+            {
+                var extra = reranked
+                    .Skip(limit)
+                    .FirstOrDefault(s => avoidEnums.Contains(AiRoleHelper.Parse(s.PrimaryRole)));
+                if (extra is not null)
+                    finalSuggestions.Add(extra);
+            }
+        }
 
         return await HydrateProfilePostSuggestionsAsync(finalSuggestions, currentUserId, ct);
     }
@@ -1988,24 +2008,34 @@ public sealed class AiMatchingService(
 
     private static AiLlmCandidate BuildProfileCandidate(ProfilePostSuggestionDto suggestion)
     {
-        var profileSkills = SplitSkillTokens(suggestion.SkillsText).Concat(suggestion.MatchingSkills);
+        var desiredPosition = string.IsNullOrWhiteSpace(suggestion.DesiredPosition)
+            ? null
+            : suggestion.DesiredPosition;
+        var profileSkills = suggestion.MatchingSkills;
         var description = string.IsNullOrWhiteSpace(suggestion.Description)
-            ? suggestion.SkillsText
+            ? desiredPosition
             : suggestion.Description;
 
         var payload = BuildStructuredCandidateText(
             suggestion.Title,
             description,
             profileSkills,
-            suggestion.PrimaryRole,
+            string.IsNullOrWhiteSpace(desiredPosition) ? suggestion.PrimaryRole : desiredPosition,
             null,
-            suggestion.MatchingSkills);
+            suggestion.MatchingSkills,
+            extraLines: new[]
+            {
+                string.IsNullOrWhiteSpace(desiredPosition)
+                    ? null
+                    : $"DESIRED_POSITION: {desiredPosition}."
+            });
 
         var metadata = BuildMetadata(
             ("majorId", suggestion.MajorId?.ToString()),
             ("score", suggestion.Score.ToString(CultureInfo.InvariantCulture)),
             ("ownerUserId", suggestion.OwnerUserId.ToString()),
-            ("neededRole", suggestion.PrimaryRole));
+            ("neededRole", suggestion.PrimaryRole),
+            ("desiredPosition", desiredPosition));
 
         return new AiLlmCandidate(
             string.Empty,
@@ -2074,7 +2104,8 @@ public sealed class AiMatchingService(
         GroupRoleMixSnapshot mix,
         AiSkillProfile profile,
         AiSkillProfile needsProfile,
-        string? needsText)
+        string? needsText,
+        IReadOnlyList<string>? desiredPositions)
     {
         var primaryNeed = InferPrimaryNeedFromMix(mix);
         var prefer = string.IsNullOrWhiteSpace(primaryNeed)
@@ -2082,6 +2113,7 @@ public sealed class AiMatchingService(
             : (primaryNeed is "frontend" or "backend"
                 ? new[] { primaryNeed, "fullstack" }
                 : new[] { primaryNeed });
+        var avoid = InferAvoidRolesFromMix(mix);
 
         var payload = new
         {
@@ -2106,8 +2138,9 @@ public sealed class AiMatchingService(
                 other = mix.OtherCount
             },
             preferRoles = prefer,
-            avoidRoles = Array.Empty<string>(),
-            teamTopSkills = profile.Tags.Take(15).ToList()
+            avoidRoles = avoid,
+            teamTopSkills = profile.Tags.Take(15).ToList(),
+            desiredPositions = desiredPositions?.Take(15).ToList() ?? new List<string>()
         };
 
         return JsonSerializer.Serialize(payload);
@@ -2122,6 +2155,27 @@ public sealed class AiMatchingService(
         if (mix.OtherCount == 0)
             return "other";
         return null;
+    }
+
+    private static IReadOnlyList<string> InferAvoidRolesFromMix(GroupRoleMixSnapshot mix)
+    {
+        var avoid = new List<string>();
+
+        var frontendHeavy = mix.FrontendCount >= 2
+                            && mix.FrontendCount >= mix.BackendCount + 1
+                            && mix.FrontendCount >= mix.OtherCount + 1;
+        var backendHeavy = mix.BackendCount >= 2
+                           && mix.BackendCount >= mix.FrontendCount + 1
+                           && mix.BackendCount >= mix.OtherCount + 1;
+        var otherHeavy = mix.OtherCount >= 2
+                         && mix.OtherCount >= mix.FrontendCount + 1
+                         && mix.OtherCount >= mix.BackendCount + 1;
+
+        if (frontendHeavy) avoid.Add("frontend");
+        if (backendHeavy) avoid.Add("backend");
+        if (otherHeavy) avoid.Add("other");
+
+        return avoid;
     }
 
     private static IEnumerable<string> NormalizeSkillTokens(IEnumerable<string>? source)
@@ -2615,7 +2669,12 @@ public sealed class AiMatchingService(
     {
         var parts = new List<string>();
 
-        if (!string.IsNullOrWhiteSpace(suggestion.PrimaryRole))
+        var desiredPosition = string.IsNullOrWhiteSpace(suggestion.DesiredPosition)
+            ? null
+            : suggestion.DesiredPosition;
+        if (!string.IsNullOrWhiteSpace(desiredPosition))
+            parts.Add($"Vị trí mong muốn: {desiredPosition}.");
+        else if (!string.IsNullOrWhiteSpace(suggestion.PrimaryRole))
             parts.Add($"Vai trò phù hợp: {suggestion.PrimaryRole}.");
 
         var matchList = matches.Where(x => !string.IsNullOrWhiteSpace(x)).Take(5).ToList();
@@ -2988,9 +3047,9 @@ public sealed class AiMatchingService(
                 .ToList();
         }
 
-        var needsFrontend = mix.FrontendCount == 0;
-        var needsBackend = mix.BackendCount == 0;
-        var role = candidateProfile.PrimaryRole;
+        var desiredPosition = string.IsNullOrWhiteSpace(post.DesiredPositionName) ? null : post.DesiredPositionName.Trim();
+        var roleFromDesired = InferRoleFromDesiredPosition(desiredPosition);
+        var role = roleFromDesired != AiPrimaryRole.Unknown ? roleFromDesired : candidateProfile.PrimaryRole;
 
         var searchable = string.Join(" ", new[]
         {
@@ -2998,30 +3057,51 @@ public sealed class AiMatchingService(
             post.Description,
             post.SkillsText
         }.Where(x => !string.IsNullOrWhiteSpace(x))).ToLowerInvariant();
-        var isFullStack = searchable.Contains("fullstack")
+        var desiredNormalized = desiredPosition?.ToLowerInvariant();
+        var isFullStack = (desiredNormalized is not null
+                           && (desiredNormalized.Contains("fullstack")
+                               || desiredNormalized.Contains("full stack")
+                               || desiredNormalized.Contains("full-stack")))
+                          || searchable.Contains("fullstack")
                           || searchable.Contains("full stack")
                           || searchable.Contains("full-stack");
 
-        var roleScore = 20;
-        if (needsFrontend || needsBackend)
+        var frontendHeavy = mix.FrontendCount >= 2
+                            && mix.FrontendCount >= mix.BackendCount + 1
+                            && mix.FrontendCount >= mix.OtherCount + 1;
+        var frontendNeeded = mix.FrontendCount == 0;
+        var backendNeeded = mix.BackendCount == 0
+                            || (mix.FrontendCount >= 2 && mix.BackendCount + 1 <= mix.FrontendCount - 1);
+        var mobileNeeded = mix.OtherCount == 0 && mix.FrontendCount >= 2;
+
+        var roleScore = 18;
+        if (frontendNeeded || backendNeeded || mobileNeeded || frontendHeavy)
         {
-            if (isFullStack && (needsFrontend || needsBackend))
-                roleScore = 40;
-            else if (role == AiPrimaryRole.Frontend && needsFrontend)
-                roleScore = 40;
-            else if (role == AiPrimaryRole.Backend && needsBackend)
-                roleScore = 40;
+            if (isFullStack && (frontendNeeded || backendNeeded))
+                roleScore = 55;
+            else if (role == AiPrimaryRole.Frontend && frontendNeeded)
+                roleScore = 55;
+            else if (role == AiPrimaryRole.Backend && backendNeeded)
+                roleScore = 55;
+            else if (role == AiPrimaryRole.Other && mobileNeeded)
+                roleScore = 45;
             else if (role == AiPrimaryRole.Unknown)
-                roleScore = 15;
+                roleScore = 22;
+            else if (frontendHeavy && role == AiPrimaryRole.Frontend)
+                roleScore = 6;
             else
-                roleScore = 10;
+                roleScore = 12;
         }
         else if (role == AiPrimaryRole.Unknown)
         {
-            roleScore = 12;
+            roleScore = 15;
+        }
+        else
+        {
+            roleScore = 25;
         }
 
-        var overlapScore = Math.Min(matchingSkills.Count, 5) * 12;
+        var overlapScore = Math.Min(matchingSkills.Count, 5) * 8;
         var recencyDays = Math.Clamp((int)(DateTime.UtcNow - post.CreatedAt).TotalDays, 0, 30);
         var recencyBoost = Math.Max(5, 30 - recencyDays);
         var totalScore = roleScore + overlapScore + recencyBoost;
@@ -3034,20 +3114,24 @@ public sealed class AiMatchingService(
             ? "fullstack"
             : AiRoleHelper.ToDisplayString(role);
 
-        var inferredNeeds = new List<string>(2);
-        if (needsFrontend)
+        var inferredNeeds = new List<string>(3);
+        if (frontendNeeded)
             inferredNeeds.Add("frontend");
-        if (needsBackend)
+        if (backendNeeded)
             inferredNeeds.Add("backend");
+        if (mobileNeeded)
+            inferredNeeds.Add("mobile");
 
         var reasonParts = new List<string>(3);
         if (inferredNeeds.Count > 0)
         {
             // If group is missing FE/BE, explicitly call out that match.
-            if (isFullStack || (needsFrontend && role == AiPrimaryRole.Frontend) || (needsBackend && role == AiPrimaryRole.Backend))
+            if (isFullStack || (frontendNeeded && role == AiPrimaryRole.Frontend) || (backendNeeded && role == AiPrimaryRole.Backend) || (mobileNeeded && role == AiPrimaryRole.Other))
                 reasonParts.Add($"Nhóm đang thiếu {string.Join("/", inferredNeeds)}; vai trò {displayRole} phù hợp.");
+            else if (frontendHeavy && role == AiPrimaryRole.Frontend)
+                reasonParts.Add("Nhóm đã nhiều frontend; ưu tiên backend/fullstack/mobile.");
             else
-                reasonParts.Add($"Nhóm đang thiếu {string.Join("/", inferredNeeds)}; ưu tiên các hồ sơ đúng vai trò hoặc fullstack.");
+                reasonParts.Add($"Nhóm đang ưu tiên {string.Join("/", inferredNeeds)} hoặc fullstack.");
         }
         else if (!string.IsNullOrWhiteSpace(displayRole))
         {
@@ -3070,7 +3154,8 @@ public sealed class AiMatchingService(
             normalizedScore,
             post.SkillsText,
             displayRole,
-            matchingSkills)
+            matchingSkills,
+            desiredPosition)
         {
             AiReason = heuristicReason
         };
@@ -3099,6 +3184,24 @@ public sealed class AiMatchingService(
         if (normalized.Contains("backend") || normalized.Contains("api") || normalized.Contains("server") || normalized.Contains("database") || normalized.Contains("microservice"))
             return AiPrimaryRole.Backend;
         return AiPrimaryRole.Other;
+    }
+
+    private static AiPrimaryRole InferRoleFromDesiredPosition(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return AiPrimaryRole.Unknown;
+
+        var normalized = text.ToLowerInvariant();
+        if (normalized.Contains("fullstack") || normalized.Contains("full stack") || normalized.Contains("full-stack"))
+            return AiPrimaryRole.Other;
+        if (normalized.Contains("frontend") || normalized.Contains("ui") || normalized.Contains("ux") || normalized.Contains("react") || normalized.Contains("figma"))
+            return AiPrimaryRole.Frontend;
+        if (normalized.Contains("backend") || normalized.Contains("api") || normalized.Contains("server") || normalized.Contains("database"))
+            return AiPrimaryRole.Backend;
+        if (normalized.Contains("mobile") || normalized.Contains("android") || normalized.Contains("ios") || normalized.Contains("flutter"))
+            return AiPrimaryRole.Other;
+
+        return AiPrimaryRole.Unknown;
     }
 
     private async Task<SemesterContext> ResolveSemesterAsync(Guid? semesterId, CancellationToken ct)

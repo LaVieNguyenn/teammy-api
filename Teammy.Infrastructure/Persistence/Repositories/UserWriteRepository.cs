@@ -84,6 +84,7 @@ public sealed class UserWriteRepository : IUserWriteRepository
         string? studentCode,
         string? gender,
         Guid? majorId,
+        double? gpa,
         bool isActive,
         string? portfolioUrl,
         CancellationToken ct)
@@ -96,6 +97,7 @@ public sealed class UserWriteRepository : IUserWriteRepository
         entity.student_code = studentCode;
         entity.gender = gender;
         entity.major_id = majorId;
+        entity.gpa = gpa;
         entity.is_active = isActive;
         entity.portfolio_url = NormalizePortfolio(portfolioUrl);
         entity.updated_at = DateTime.UtcNow;

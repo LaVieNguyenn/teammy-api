@@ -244,12 +244,19 @@ public sealed class UsersController : ControllerBase
         if (!roleId.HasValue)
             return BadRequest("Invalid role.");
 
+        if (request.Gpa.HasValue && request.Gpa.Value < 0)
+            return BadRequest("GPA must be >= 0.");
+
+        if (request.Gpa.HasValue && request.Gpa.Value > 10)
+            return BadRequest("GPA must be <= 10.");
+
         await _userWrite.UpdateUserAsync(
             userId,
             request.DisplayName,
             request.StudentCode,
             request.Gender,
             request.MajorId,
+            request.Gpa,
             request.IsActive,
             request.PortfolioUrl,
             ct);

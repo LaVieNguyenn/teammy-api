@@ -226,8 +226,13 @@ public sealed class AiMatchingController : ControllerBase
         foreach (var suggestion in suggestions)
         {
             var profileData = suggestion.Detail is not null
-                ? await BuildProfilePostShapeAsync(suggestion.Detail, ct)
+                ? await BuildProfilePostShapeAsync(suggestion.Detail, ct, suggestion)
                 : BuildFallbackProfilePostShape(suggestion);
+
+            // desired_position: ưu tiên lấy từ bài post.
+            var desiredPosition = suggestion.DesiredPosition;
+            if (string.IsNullOrWhiteSpace(desiredPosition))
+                desiredPosition = suggestion.Detail?.DesiredPosition ?? suggestion.Detail?.Skills ?? suggestion.SkillsText;
 
             shaped.Add(new
             {
@@ -236,6 +241,7 @@ public sealed class AiMatchingController : ControllerBase
                 aiBalanceNote = suggestion.AiBalanceNote,
                 primaryRole = suggestion.PrimaryRole,
                 matchingSkills = suggestion.MatchingSkills,
+                desired_position = desiredPosition,
                 profilePost = profileData
             });
         }
@@ -243,7 +249,7 @@ public sealed class AiMatchingController : ControllerBase
         return shaped;
     }
 
-    private async Task<object> BuildProfilePostShapeAsync(ProfilePostDetailDto detail, CancellationToken ct)
+    private async Task<object> BuildProfilePostShapeAsync(ProfilePostDetailDto detail, CancellationToken ct, ProfilePostSuggestionDto? suggestion = null)
     {
         Guid[]? memberUserIds = null;
         Guid? userGroupId = null;
@@ -258,6 +264,11 @@ public sealed class AiMatchingController : ControllerBase
             }
         }
 
+        // desired_position: ưu tiên lấy từ bài post.
+        var desiredPosition = detail.DesiredPosition ?? detail.Skills;
+        if (string.IsNullOrWhiteSpace(desiredPosition))
+            desiredPosition = suggestion?.DesiredPosition ?? suggestion?.SkillsText;
+
         return new
         {
             id = detail.Id,
@@ -266,6 +277,7 @@ public sealed class AiMatchingController : ControllerBase
             title = detail.Title,
             description = detail.Description,
             position_needed = detail.Skills,
+            desired_position = desiredPosition,
             createdAt = detail.CreatedAt,
             hasApplied = detail.HasApplied,
             myApplicationId = detail.MyApplicationId,
@@ -286,6 +298,7 @@ public sealed class AiMatchingController : ControllerBase
             title = suggestion.Title,
             description = suggestion.Description,
             position_needed = suggestion.SkillsText,
+            desired_position = suggestion.DesiredPosition ?? suggestion.SkillsText,
             createdAt = suggestion.CreatedAt,
             hasApplied = false,
             myApplicationId = (Guid?)null,

@@ -35,7 +35,8 @@ public sealed record ProfilePostSuggestionDto(
     int Score,
     string? SkillsText,
     string? PrimaryRole,
-    IReadOnlyList<string> MatchingSkills
+    IReadOnlyList<string> MatchingSkills,
+    string? DesiredPosition
 )
 {
     public ProfilePostDetailDto? Detail { get; init; }

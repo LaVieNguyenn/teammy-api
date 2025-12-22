@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using Teammy.Application.Announcements.Dtos;
 using Teammy.Application.Common.Dtos;
 
@@ -10,6 +12,8 @@ public interface IAnnouncementRecipientQueries
         Guid? semesterId,
         string? targetRole,
         Guid? targetGroupId,
+        IReadOnlyList<Guid>? targetGroupIds,
+        IReadOnlyList<Guid>? targetUserIds,
         CancellationToken ct);
 
     Task<PaginatedResult<AnnouncementRecipient>> ListRecipientsAsync(
@@ -17,6 +21,8 @@ public interface IAnnouncementRecipientQueries
         Guid? semesterId,
         string? targetRole,
         Guid? targetGroupId,
+        IReadOnlyList<Guid>? targetGroupIds,
+        IReadOnlyList<Guid>? targetUserIds,
         int page,
         int pageSize,
         CancellationToken ct);
