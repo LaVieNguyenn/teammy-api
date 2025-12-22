@@ -218,10 +218,39 @@ public sealed class GroupsController : ControllerBase
     {
         try
         {
-            await _service.CloseGroupAsync(id, GetUserId(), ct);
+            await _service.RequestCloseGroupAsync(id, GetUserId(), ct);
             return NoContent();
         }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    [HttpPost("{id:guid}/close/confirm")]
+    [Authorize]
+    public async Task<ActionResult> ConfirmClose([FromRoute] Guid id, CancellationToken ct)
+    {
+        try
+        {
+            await _service.ConfirmCloseGroupAsync(id, GetUserId(), ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    [HttpPost("{id:guid}/close/reject")]
+    [Authorize]
+    public async Task<ActionResult> RejectClose([FromRoute] Guid id, CancellationToken ct)
+    {
+        try
+        {
+            await _service.RejectCloseGroupAsync(id, GetUserId(), ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
         catch (KeyNotFoundException) { return NotFound(); }
     }
 

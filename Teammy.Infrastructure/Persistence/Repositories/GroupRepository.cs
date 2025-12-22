@@ -141,33 +141,13 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
     }
     public async Task CloseGroupAsync(Guid groupId, CancellationToken ct)
     {
-        // Set group status to 'closed' and mark active memberships as left; remove pendings
         var g = await db.groups.FirstOrDefaultAsync(x => x.group_id == groupId, ct)
             ?? throw new KeyNotFoundException("Group not found");
 
         g.status = "closed";
         g.updated_at = DateTime.UtcNow;
 
-        var actives = await db.group_members
-            .Where(x => x.group_id == groupId && (x.status == "member" || x.status == "leader"))
-            .ToListAsync(ct);
-        foreach (var m in actives)
-        {
-            m.status = "left";
-            m.left_at = DateTime.UtcNow;
-        }
-
-        var pendings = await db.group_members
-            .Where(x => x.group_id == groupId && x.status == "pending")
-            .ToListAsync(ct);
-        if (pendings.Count > 0)
-        {
-            db.group_members.RemoveRange(pendings);
-        }
-
         await db.SaveChangesAsync(ct);
-
-        await UpdateGroupSkillsFromActiveMembersAsync(groupId, ct);
     }
 
     public async Task TransferLeadershipAsync(Guid groupId, Guid currentLeaderUserId, Guid newLeaderUserId, CancellationToken ct)

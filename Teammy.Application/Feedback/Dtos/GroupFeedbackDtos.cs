@@ -44,6 +44,12 @@ public sealed record GroupFeedbackDto(
     DateTime UpdatedAt,
     DateTime? AcknowledgedAt);
 
+public sealed record GroupFeedbackPageDto(
+    IReadOnlyList<GroupFeedbackDto> Items,
+    int Page,
+    int PageSize,
+    int Total);
+
 public sealed class UpdateGroupFeedbackStatusRequest
 {
     [Required]

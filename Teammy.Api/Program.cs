@@ -84,6 +84,7 @@ builder.Services.AddScoped<IGroupChatNotifier, GroupChatNotifier>();
 builder.Services.AddScoped<IInvitationNotifier, InvitationNotifier>();
 builder.Services.AddScoped<IAnnouncementNotifier, AnnouncementNotifier>();
 builder.Services.AddScoped<IActivityLogNotifier, ActivityLogNotifier>();
+builder.Services.AddScoped<IGroupStatusNotifier, GroupStatusNotifier>();
 builder.Services.AddScoped<MentorFeedbackService>();
 builder.Services.AddSingleton<IAppUrlProvider, Teammy.Api.App.AppUrlProvider>();
 builder.Services.AddSingleton<IChatPresenceTracker, ChatPresenceTracker>();

@@ -63,7 +63,7 @@ public sealed class MentorFeedbackService(
         return feedbackId;
     }
 
-    public async Task<IReadOnlyList<GroupFeedbackDto>> ListAsync(Guid groupId, Guid currentUserId, CancellationToken ct)
+    public async Task<GroupFeedbackPageDto> ListAsync(Guid groupId, Guid currentUserId, string? status, int page, int pageSize, CancellationToken ct)
     {
         _ = await groupQueries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
         var isMember = await groupAccess.IsMemberAsync(groupId, currentUserId, ct);
@@ -72,8 +72,19 @@ public sealed class MentorFeedbackService(
         if (!isLeader && !isMentor && !isMember)
             throw new UnauthorizedAccessException("Only members, leaders, or mentors can view mentor feedback");
 
-        var list = await feedbackQueries.ListForGroupAsync(groupId, ct);
-        return list;
+        var normalizedStatus = string.IsNullOrWhiteSpace(status) ? null : status.Trim().ToLowerInvariant();
+        if (normalizedStatus is not null && !AllowedStatusUpdates.Contains(normalizedStatus) && !string.Equals(normalizedStatus, "submitted", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Unsupported status filter. Allowed: submitted, acknowledged, follow_up_requested, resolved");
+
+        var normalizedPage = page < 1 ? 1 : page;
+        var normalizedPageSize = pageSize < 1 ? 20 : pageSize;
+        if (normalizedPageSize > 100)
+            normalizedPageSize = 100;
+
+        var skip = (normalizedPage - 1) * normalizedPageSize;
+        var total = await feedbackQueries.CountForGroupAsync(groupId, normalizedStatus, ct);
+        var list = await feedbackQueries.ListForGroupAsync(groupId, normalizedStatus, skip, normalizedPageSize, ct);
+        return new GroupFeedbackPageDto(list, normalizedPage, normalizedPageSize, total);
     }
 
     public async Task UpdateStatusAsync(Guid groupId, Guid feedbackId, Guid leaderUserId, UpdateGroupFeedbackStatusRequest req, CancellationToken ct)
