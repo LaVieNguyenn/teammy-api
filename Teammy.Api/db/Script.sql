@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS teammy.groups (
   name         TEXT NOT NULL,
   description  TEXT,
   max_members  INT  NOT NULL CHECK (max_members > 0),
-  status       TEXT NOT NULL DEFAULT 'recruiting' CHECK (status IN ('recruiting','active','closed')),
+  status       TEXT NOT NULL DEFAULT 'recruiting' CHECK (status IN ('recruiting','active','pending_close','closed')),
   skills       JSONB,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),

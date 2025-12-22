@@ -33,15 +33,16 @@ public sealed class MentorFeedbackController(MentorFeedbackService service) : Co
 
     [HttpGet]
     [Authorize]
-    public async Task<ActionResult<IReadOnlyList<GroupFeedbackDto>>> List([FromRoute] Guid groupId, CancellationToken ct)
+    public async Task<ActionResult<GroupFeedbackPageDto>> List([FromRoute] Guid groupId, [FromQuery] string? status, [FromQuery] int page = 1, [FromQuery] int pageSize = 20, CancellationToken ct = default)
     {
         try
         {
-            var list = await service.ListAsync(groupId, GetUserId(), ct);
+            var list = await service.ListAsync(groupId, GetUserId(), status, page, pageSize, ct);
             return Ok(list);
         }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ex.Message); }
     }
 
     [HttpPost("{feedbackId:guid}/status")]
