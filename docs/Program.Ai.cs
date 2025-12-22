@@ -63,6 +63,8 @@ const double WEIGHT_TOPIC_CE = 0.85;
 const double WEIGHT_TOPIC_BASE = 0.15;
 const double WEIGHT_POST_CE = 0.90;
 const double WEIGHT_POST_BASE = 0.10;
+const double WEIGHT_PERSONAL_POST_CE = 0.30;
+const double WEIGHT_PERSONAL_POST_BASE = 0.70;
 
 // LLM
 var temperature = 0.25;
@@ -678,7 +680,7 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
     // Phase B: score mapping (separated by mode)
     double[] ceScores = IsTopicMode(mode)
         ? ScoreTopicAbsolute(logits, TOPIC_PIVOT, TOPIC_SCALE)
-        : ScorePostRelative(logits);
+        : (mode == "personal_post" ? ScorePostAbsolute(logits) : ScorePostRelative(logits));
 
     double FinalScore(int i)
     {
@@ -690,7 +692,10 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
 
         var score = (WEIGHT_POST_CE * ce) + (WEIGHT_POST_BASE * b);
         if (mode == "personal_post")
+        {
+            score = (WEIGHT_PERSONAL_POST_CE * ce) + (WEIGHT_PERSONAL_POST_BASE * b);
             score = AdjustPersonalPostScore(score, team, candidates[i]);
+        }
         return score;
     }
 
@@ -966,6 +971,14 @@ static double[] ScorePostRelative(double[] logits)
     return scores;
 }
 
+static double[] ScorePostAbsolute(double[] logits)
+{
+    var scores = new double[logits.Length];
+    for (int i = 0; i < logits.Length; i++)
+        scores[i] = 100.0 * Sigmoid(logits[i]);
+    return scores;
+}
+
 // ======================================================================
 // Prompt builders + reason cleanup (NO "(Join)")
 // ======================================================================
@@ -1182,12 +1195,13 @@ static double AdjustPersonalPostScore(double baseScore, TeamContext? team, Reran
     var gap = ComputeRoleGap(team, role);
     if (affinity > 0)
     {
-        score = score + (100 - score) * (affinity * gap);
+        var boost = 0.35 + (0.35 * gap);
+        score = score + (100 - score) * boost;
     }
     else
     {
-        var penalty = Math.Abs(affinity) * (1 - gap);
-        score = score - score * penalty;
+        var factor = 0.55 + (0.25 * gap);
+        score = score * factor;
     }
 
     return Math.Clamp(score, 0, 100);

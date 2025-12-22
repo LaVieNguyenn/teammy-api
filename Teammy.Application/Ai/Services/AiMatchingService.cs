@@ -2108,11 +2108,7 @@ public sealed class AiMatchingService(
         IReadOnlyList<string>? desiredPositions)
     {
         var primaryNeed = InferPrimaryNeedFromMix(mix);
-        var prefer = string.IsNullOrWhiteSpace(primaryNeed)
-            ? Array.Empty<string>()
-            : (primaryNeed is "frontend" or "backend"
-                ? new[] { primaryNeed, "fullstack" }
-                : new[] { primaryNeed });
+        var prefer = InferPreferRolesFromMix(mix, primaryNeed);
         var avoid = InferAvoidRolesFromMix(mix);
 
         var payload = new
@@ -2176,6 +2172,38 @@ public sealed class AiMatchingService(
         if (otherHeavy) avoid.Add("other");
 
         return avoid;
+    }
+
+    private static IReadOnlyList<string> InferPreferRolesFromMix(GroupRoleMixSnapshot mix, string? primaryNeed)
+    {
+        var prefer = new List<string>();
+
+        var frontendHeavy = mix.FrontendCount >= 2
+                            && mix.FrontendCount >= mix.BackendCount + 1
+                            && mix.FrontendCount >= mix.OtherCount + 1;
+        var backendHeavy = mix.BackendCount >= 2
+                           && mix.BackendCount >= mix.FrontendCount + 1
+                           && mix.BackendCount >= mix.OtherCount + 1;
+        var otherHeavy = mix.OtherCount >= 2
+                         && mix.OtherCount >= mix.FrontendCount + 1
+                         && mix.OtherCount >= mix.BackendCount + 1;
+
+        if (frontendHeavy)
+            prefer.AddRange(new[] { "backend", "fullstack", "other" });
+        else if (backendHeavy)
+            prefer.AddRange(new[] { "frontend", "fullstack", "other" });
+        else if (otherHeavy)
+            prefer.AddRange(new[] { "frontend", "backend", "fullstack" });
+        else if (!string.IsNullOrWhiteSpace(primaryNeed))
+        {
+            prefer.Add(primaryNeed);
+            if (primaryNeed is "frontend" or "backend")
+                prefer.Add("fullstack");
+        }
+
+        return prefer
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private static IEnumerable<string> NormalizeSkillTokens(IEnumerable<string>? source)
