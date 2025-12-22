@@ -2166,7 +2166,7 @@ public sealed class AiMatchingService(
 
         // IMPORTANT: recruitment-post matching skills are deterministic overlap between
         // student skills and post requirements. Do not allow the LLM to overwrite them.
-        var matches = suggestion.MatchingSkills;
+        var matches = suggestion.MatchingSkills.Count == 0 ? reranked.MatchedSkills : suggestion.MatchingSkills;
         var chosenReason = ChooseAiReason(
             llmReason: reranked.Reason,
             existingReason: suggestion.AiReason,
