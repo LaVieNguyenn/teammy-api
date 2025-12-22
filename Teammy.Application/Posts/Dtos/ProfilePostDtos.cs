@@ -75,7 +75,8 @@ public sealed record ProfilePostDetailDto(
     string? Skills,
     bool   HasApplied,
     Guid?  MyApplicationId,
-    string? MyApplicationStatus
+    string? MyApplicationStatus,
+    string? DesiredPosition // <-- new field
 );
 
 public sealed record ProfilePostInvitationDto(

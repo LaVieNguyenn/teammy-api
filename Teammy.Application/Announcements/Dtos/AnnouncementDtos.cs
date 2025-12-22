@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using Teammy.Application.Common.Dtos;
 
 namespace Teammy.Application.Announcements.Dtos;
@@ -47,6 +49,8 @@ public sealed record CreateAnnouncementRequest(
     string Content,
     string? TargetRole,
     Guid? TargetGroupId,
+    IReadOnlyList<Guid>? TargetGroupIds,
+    IReadOnlyList<Guid>? TargetUserIds,
     DateTime? PublishAt,
     DateTime? ExpireAt,
     bool Pinned
@@ -79,6 +83,8 @@ public sealed record AnnouncementRecipientPreviewRequest(
     Guid? SemesterId,
     string? TargetRole,
     Guid? TargetGroupId,
+    IReadOnlyList<Guid>? TargetGroupIds,
+    IReadOnlyList<Guid>? TargetUserIds,
     int Page = 1,
     int PageSize = 50
 );

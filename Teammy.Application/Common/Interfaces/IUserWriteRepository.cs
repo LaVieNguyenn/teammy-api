@@ -18,6 +18,7 @@ public interface IUserWriteRepository
         string? studentCode,
         string? gender,
         Guid? majorId,
+        double? gpa,
         bool isActive,
         string? portfolioUrl,
         CancellationToken ct);

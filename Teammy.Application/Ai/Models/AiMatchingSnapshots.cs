@@ -58,7 +58,8 @@ public sealed record ProfilePostSnapshot(
     string? SkillsJson,
     string? SkillsText,
     string? PrimaryRole,
-    DateTime CreatedAt
+    DateTime CreatedAt,
+    string? DesiredPositionName
 );
 
 public sealed record TopicAvailabilitySnapshot(

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Net;
 using System.Text;
@@ -54,7 +55,7 @@ public sealed class AnnouncementService(
         );
 
         var created = await repository.CreateAsync(command, ct);
-        var recipients = await ResolveRecipientsAsync(created, ct);
+        var recipients = await ResolveRecipientsAsync(created, request.TargetGroupIds, request.TargetUserIds, ct);
 
         if (recipients.Count > 0)
         {
@@ -71,11 +72,20 @@ public sealed class AnnouncementService(
             throw new ArgumentNullException(nameof(request));
 
         var scope = NormalizeScope(request.Scope);
-        ValidateScopeFilters(scope, request.SemesterId, request.TargetRole, request.TargetGroupId);
+        ValidateScopeFilters(scope, request.SemesterId, request.TargetRole, request.TargetGroupId, request.TargetGroupIds, request.TargetUserIds);
         var normalizedRole = NormalizeRole(request.TargetRole);
         var (page, pageSize) = NormalizePagination(request.Page, request.PageSize);
 
-        var recipients = await recipientQueries.ListRecipientsAsync(scope, request.SemesterId, normalizedRole, request.TargetGroupId, page, pageSize, ct);
+        var recipients = await recipientQueries.ListRecipientsAsync(
+            scope,
+            request.SemesterId,
+            normalizedRole,
+            request.TargetGroupId,
+            request.TargetGroupIds,
+            request.TargetUserIds,
+            page,
+            pageSize,
+            ct);
         return new AnnouncementRecipientPreviewDto(scope, request.SemesterId, normalizedRole, request.TargetGroupId, recipients);
     }
 
@@ -103,11 +113,22 @@ public sealed class AnnouncementService(
         if (string.IsNullOrWhiteSpace(request.Content))
             throw new ValidationException("Content is required");
 
-        ValidateScopeFilters(scope, request.SemesterId, request.TargetRole, request.TargetGroupId);
+        ValidateScopeFilters(scope, request.SemesterId, request.TargetRole, request.TargetGroupId, request.TargetGroupIds, request.TargetUserIds);
     }
 
-    private static void ValidateScopeFilters(string scope, Guid? semesterId, string? targetRole, Guid? targetGroupId)
+    private static void ValidateScopeFilters(
+        string scope,
+        Guid? semesterId,
+        string? targetRole,
+        Guid? targetGroupId,
+        IReadOnlyList<Guid>? targetGroupIds,
+        IReadOnlyList<Guid>? targetUserIds)
     {
+        if (targetGroupIds is { Count: 0 })
+            throw new ValidationException("TargetGroupIds must be null or non-empty.");
+        if (targetUserIds is { Count: 0 })
+            throw new ValidationException("TargetUserIds must be null or non-empty.");
+
         switch (scope)
         {
             case AnnouncementScopes.Semester:
@@ -126,6 +147,15 @@ public sealed class AnnouncementService(
                     throw new ValidationException("TargetGroupId is required for group scope");
                 break;
         }
+
+        if (scope == AnnouncementScopes.Group && targetGroupIds is { Count: > 0 })
+            throw new ValidationException("TargetGroupIds is not supported for group scope.");
+        if (scope == AnnouncementScopes.Group && targetUserIds is { Count: > 0 })
+            throw new ValidationException("TargetUserIds is not supported for group scope.");
+        if (targetGroupIds is { Count: > 0 } && scope is not (AnnouncementScopes.GroupsWithoutTopic or AnnouncementScopes.GroupsUnderstaffed))
+            throw new ValidationException("TargetGroupIds is only supported for groups_without_topic and groups_understaffed scopes.");
+        if (targetUserIds is { Count: > 0 } && scope != AnnouncementScopes.StudentsWithoutGroup)
+            throw new ValidationException("TargetUserIds is only supported for students_without_group scope.");
     }
 
     private static (int Page, int PageSize) NormalizePagination(int page, int pageSize)
@@ -137,13 +167,19 @@ public sealed class AnnouncementService(
         return (page, Math.Min(pageSize, MaxPreviewPageSize));
     }
 
-    private Task<IReadOnlyList<AnnouncementRecipient>> ResolveRecipientsAsync(AnnouncementDto announcement, CancellationToken ct)
+    private Task<IReadOnlyList<AnnouncementRecipient>> ResolveRecipientsAsync(
+        AnnouncementDto announcement,
+        IReadOnlyList<Guid>? targetGroupIds,
+        IReadOnlyList<Guid>? targetUserIds,
+        CancellationToken ct)
     {
         return recipientQueries.ResolveRecipientsAsync(
             announcement.Scope,
             announcement.SemesterId,
             announcement.TargetRole,
             announcement.TargetGroupId,
+            targetGroupIds,
+            targetUserIds,
             ct);
     }
 

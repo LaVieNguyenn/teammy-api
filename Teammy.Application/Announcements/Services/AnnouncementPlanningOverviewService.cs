@@ -33,6 +33,7 @@ public sealed class AnnouncementPlanningOverviewService(
 
         var groupsWithoutTopicAll = await aiQueries.ListGroupsWithoutTopicAsync(semesterId, ct);
         var groupsWithoutTopic = groupsWithoutTopicAll
+            .Where(g => !string.Equals(g.Status, "closed", StringComparison.OrdinalIgnoreCase))
             .Where(g => g.MajorId.HasValue && g.MajorId.Value == request.MajorId)
             .Select(ToGroupItem)
             .ToList();
@@ -41,6 +42,7 @@ public sealed class AnnouncementPlanningOverviewService(
         var allMajorGroups = await groupQueries.ListGroupsAsync(status: null, majorId: request.MajorId, topicId: null, ct);
         var groupsWithoutMember = allMajorGroups
             .Where(g => g.Semester.SemesterId == semesterId)
+            .Where(g => !string.Equals(g.Status, "closed", StringComparison.OrdinalIgnoreCase))
             .Where(g => g.CurrentMembers < g.MaxMembers)
             .Select(g => new PlanningGroupItemDto(
                 g.Id,

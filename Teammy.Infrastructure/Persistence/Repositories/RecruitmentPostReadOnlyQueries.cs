@@ -567,8 +567,18 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
             .SelectMany(x => x.ms.DefaultIfEmpty(), (x, m) => new { x.ps.p, x.ps.s, m })
             .GroupJoin(db.users.AsNoTracking(), t => t.p.user_id, u => u.user_id, (t, us) => new { t.p, t.s, t.m, us })
             .SelectMany(x => x.us.DefaultIfEmpty(), (x, u) => new { x.p, x.s, x.m, u })
-            .GroupJoin(db.majors.AsNoTracking(), t => t.u != null ? (Guid?)t.u.major_id : null, um => (Guid?)um.major_id, (t, ums) => new { t.p, t.s, t.m, t.u, ums })
-            .SelectMany(x => x.ums.DefaultIfEmpty(), (x, um) => new { x.p, x.s, x.m, x.u, um })
+            .GroupJoin(db.position_lists.AsNoTracking(),
+                t => t.u != null ? t.u.desired_position_id : null,
+                pos => (Guid?)pos.position_id,
+                (t, poss) => new { t.p, t.s, t.m, t.u, poss })
+            .SelectMany(x => x.poss.DefaultIfEmpty(), (x, pos) => new { x.p, x.s, x.m, x.u, pos })
+            .GroupJoin(db.mv_students_pools.AsNoTracking(),
+                t => new { user_id = t.u != null ? (Guid?)t.u.user_id : null, semester_id = (Guid?)t.p.semester_id },
+                sp => new { user_id = sp.user_id, semester_id = sp.semester_id },
+                (t, sps) => new { t.p, t.s, t.m, t.u, t.pos, sps })
+            .SelectMany(x => x.sps.DefaultIfEmpty(), (x, sp) => new { x.p, x.s, x.m, x.u, x.pos, SpDesiredPositionName = sp.desired_position_name })
+            .GroupJoin(db.majors.AsNoTracking(), t => t.u != null ? (Guid?)t.u.major_id : null, um => (Guid?)um.major_id, (t, ums) => new { t.p, t.s, t.m, t.u, t.pos, t.SpDesiredPositionName, ums })
+            .SelectMany(x => x.ums.DefaultIfEmpty(), (x, um) => new { x.p, x.s, x.m, x.u, x.pos, x.SpDesiredPositionName, um })
             .Select(x => new ProfilePostDetailDto(
                 x.p.post_id,
                 x.p.semester_id,
@@ -631,7 +641,8 @@ public sealed class RecruitmentPostReadOnlyQueries(AppDbContext db) : IRecruitme
                         .OrderByDescending(c => c.created_at)
                         .Select(c => c.status)
                         .FirstOrDefault()
-                    : null
+                    : null,
+                x.pos != null ? x.pos.position_name : x.SpDesiredPositionName
             ))
             .FirstOrDefaultAsync(ct);
     private static IReadOnlyList<string>? ParseSkills(string? json)

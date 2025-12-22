@@ -122,9 +122,9 @@ public sealed class ExcelUserImportService(
                         continue;
                     }
 
-                    if (numericGpa > 4)
+                    if (numericGpa > 10)
                     {
-                        errors.Add(new ImportUsersError(r, "GPA must be <= 4"));
+                        errors.Add(new ImportUsersError(r, "GPA must be <= 10"));
                         continue;
                     }
 
@@ -143,9 +143,9 @@ public sealed class ExcelUserImportService(
                                 continue;
                             }
 
-                            if (parsedGpa > 4)
+                            if (parsedGpa > 10)
                             {
-                                errors.Add(new ImportUsersError(r, "GPA must be <= 4"));
+                                errors.Add(new ImportUsersError(r, "GPA must be <= 10"));
                                 continue;
                             }
 
@@ -425,10 +425,10 @@ public sealed class ExcelUserImportService(
                     gpaValid = false;
                     gpaError = "GPA must be >= 0";
                 }
-                else if (gpa > 4)
+                else if (gpa > 10)
                 {
                     gpaValid = false;
-                    gpaError = "GPA must be <= 4";
+                    gpaError = "GPA must be <= 10";
                 }
             }
             columns.Add(new UserColumnValidation("GPA", gpaValid, gpaError));

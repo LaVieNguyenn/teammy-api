@@ -137,6 +137,8 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
         var rows = await (
                 from post in query
                 join owner in _db.users.AsNoTracking() on post.user_id equals owner.user_id
+                join pos in _db.position_lists.AsNoTracking() on owner.desired_position_id equals pos.position_id into posJoin
+                from pos in posJoin.DefaultIfEmpty()
                 join pool in _db.mv_students_pools.AsNoTracking()
                     on new { user_id = post.user_id, semester_id = (Guid?)post.semester_id }
                     equals new { user_id = pool.user_id, semester_id = pool.semester_id } into poolJoin
@@ -153,7 +155,8 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
                     pool.skills ?? owner.skills,
                     post.position_needed,
                     pool.primary_role,
-                    post.created_at))
+                    post.created_at,
+                    pos.position_name ?? pool.desired_position_name))
             .ToListAsync(ct);
 
         return rows;
@@ -174,6 +177,24 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
         return rows;
     }
 
+    public async Task<IReadOnlyList<string>> ListGroupMemberDesiredPositionsAsync(Guid groupId, CancellationToken ct)
+    {
+        var rows = await (
+                from gm in _db.group_members.AsNoTracking()
+                join u in _db.users.AsNoTracking() on gm.user_id equals u.user_id
+                join pos in _db.position_lists.AsNoTracking() on u.desired_position_id equals pos.position_id into posJoin
+                from pos in posJoin.DefaultIfEmpty()
+                where gm.group_id == groupId && (gm.status == "leader" || gm.status == "member")
+                select pos.position_name)
+            .ToListAsync(ct);
+
+        return rows
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     public async Task<IReadOnlyDictionary<Guid, GroupRoleMixSnapshot>> GetGroupRoleMixAsync(IEnumerable<Guid> groupIds, CancellationToken ct)
     {
         var ids = groupIds.Where(x => x != Guid.Empty).Distinct().ToList();
@@ -185,12 +206,15 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
             join u in _db.users on gm.user_id equals u.user_id
             join sp in _db.mv_students_pools on gm.user_id equals sp.user_id into spj
             from sp in spj.Where(x => x.semester_id == gm.semester_id).DefaultIfEmpty()
+            join pos in _db.position_lists on u.desired_position_id equals pos.position_id into posJoin
+            from pos in posJoin.DefaultIfEmpty()
             where ids.Contains(gm.group_id)
                   && (gm.status == "leader" || gm.status == "member")
             select new
             {
                 gm.group_id,
                 Role = sp.primary_role,
+                DesiredPositionName = pos.position_name ?? sp.desired_position_name,
                 u.skills
             }).ToListAsync(ct);
 
@@ -201,7 +225,16 @@ public sealed class AiMatchingQueries : IAiMatchingQueries
             if (!result.TryGetValue(row.group_id, out var current))
                 continue;
 
-            var normalized = AiRoleHelper.Parse(row.Role ?? ExtractRoleFromJson(row.skills));
+            var desiredRole = AiRoleHelper.Parse(row.DesiredPositionName);
+            var normalized = desiredRole != AiPrimaryRole.Unknown
+                ? desiredRole
+                : AiRoleHelper.Parse(row.Role ?? ExtractRoleFromJson(row.skills));
+            if (normalized == AiPrimaryRole.Unknown && !string.IsNullOrWhiteSpace(row.skills))
+            {
+                var tags = ParseSkillList(row.skills);
+                if (tags.Count > 0)
+                    normalized = AiRoleHelper.InferFromTags(tags);
+            }
             result[row.group_id] = normalized switch
             {
                 AiPrimaryRole.Frontend => current with { FrontendCount = current.FrontendCount + 1 },

@@ -688,10 +688,15 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
         if (IsTopicMode(mode))
             return (WEIGHT_TOPIC_CE * ce) + (WEIGHT_TOPIC_BASE * b);
 
-        return (WEIGHT_POST_CE * ce) + (WEIGHT_POST_BASE * b);
+        var score = (WEIGHT_POST_CE * ce) + (WEIGHT_POST_BASE * b);
+        if (mode == "personal_post")
+            score = AdjustPersonalPostScore(score, team, candidates[i]);
+        return score;
     }
 
     var minScore = IsTopicMode(mode) ? TOPIC_MIN_SCORE : POST_MIN_SCORE;
+    if (mode == "personal_post")
+        minScore = 0;
 
     var seeds = candidates
         .Select((c, i) => new RankedSeed(
@@ -978,6 +983,7 @@ Write ONE neutral justification sentence:
 - 1 sentence, <= 180 characters.
 - NEVER start with "Join".
 - No call-to-action (no DM, apply, connect).
+- Do not mention numeric scores or baseline/final scores.
 - Mention 1-2 technologies that appear in the snippet.
 - End with a period.
 
@@ -985,8 +991,10 @@ Schema:
 {"summary":"...","matchedSkills":["..."]}
 """;
 
-    if (mode is "group_post" or "personal_post")
-        return common + "\nFocus: Team gap matching (needed role + mix + matching skills).\n";
+    if (mode is "group_post")
+        return common + "\nFocus: Match student to group post needs (role gaps + required skills). GROUP_NAME is a team name, not a person.\n";
+    if (mode is "personal_post")
+        return common + "\nFocus: Match student desired position to group role gaps; avoid overrepresented roles. GROUP_NAME is a team name, not a person.\n";
 
     return common + "\nFocus: Topic match to query goals and skills overlap.\n";
 }
@@ -1002,6 +1010,7 @@ For each item:
 - 1 neutral sentence, <= 180 characters, ends with a period.
 - NEVER start with "Join".
 - No call-to-action.
+- Do not mention numeric scores or baseline/final scores.
 - Mention 1-2 technologies present in snippet.
 - matchedSkills: 1-3 skills found in snippet.
 
@@ -1009,8 +1018,10 @@ Return schema:
 {"items":[{"key":"...","summary":"...","matchedSkills":["..."]}]}
 """;
 
-    if (mode is "group_post" or "personal_post")
-        return common + "\nFocus: Team gap matching (needed role + mix + matching skills).\n";
+    if (mode is "group_post")
+        return common + "\nFocus: Match student to group post needs (role gaps + required skills). GROUP_NAME is a team name, not a person.\n";
+    if (mode is "personal_post")
+        return common + "\nFocus: Match student desired position to group role gaps; avoid overrepresented roles. GROUP_NAME is a team name, not a person.\n";
 
     return common + "\nFocus: Topic match to query goals and skills overlap.\n";
 }
@@ -1128,7 +1139,6 @@ static string BuildReasonSnippetForLlm(string seedSnippet)
             || line.StartsWith("DESIRED_POSITION:", StringComparison.OrdinalIgnoreCase)
             || line.StartsWith("GPA:", StringComparison.OrdinalIgnoreCase)
             || line.StartsWith("TEAM_MIX:", StringComparison.OrdinalIgnoreCase)
-            || line.StartsWith("BASELINE_SCORE:", StringComparison.OrdinalIgnoreCase)
             || line.StartsWith("SKILLS:", StringComparison.OrdinalIgnoreCase)
             || line.StartsWith("MATCHING_SKILLS:", StringComparison.OrdinalIgnoreCase))
         {
@@ -1151,6 +1161,103 @@ static string BuildBalanceNote(string mode, TeamContext? team)
     return "";
 }
 
+static double AdjustPersonalPostScore(double baseScore, TeamContext? team, RerankCandidate candidate)
+{
+    if (team is null || string.IsNullOrWhiteSpace(candidate.NeededRole))
+        return Math.Clamp(baseScore, 0, 100);
+
+    var role = NormalizeRole(candidate.NeededRole);
+    if (string.IsNullOrWhiteSpace(role))
+        return Math.Clamp(baseScore, 0, 100);
+
+    var prefer = team.PreferRoles ?? new List<string>();
+    var avoid = team.AvoidRoles ?? new List<string>();
+
+    bool IsIn(IReadOnlyList<string> list, string value)
+        => list.Any(x => string.Equals(NormalizeRole(x), value, StringComparison.OrdinalIgnoreCase));
+
+    var score = Math.Clamp(baseScore, 0, 100);
+    var affinity = ComputeRoleAffinity(role, prefer, avoid, IsIn);
+    if (Math.Abs(affinity) < 1e-9)
+        return score;
+
+    var gap = ComputeRoleGap(team, role);
+    if (affinity > 0)
+    {
+        score = score + (100 - score) * (affinity * gap);
+    }
+    else
+    {
+        var penalty = Math.Abs(affinity) * (1 - gap);
+        score = score - score * penalty;
+    }
+
+    return Math.Clamp(score, 0, 100);
+}
+
+static double ComputeRoleAffinity(
+    string role,
+    IReadOnlyList<string> prefer,
+    IReadOnlyList<string> avoid,
+    Func<IReadOnlyList<string>, string, bool> isIn)
+{
+    if (isIn(prefer, role)) return 1.0;
+    if (isIn(avoid, role)) return -1.0;
+
+    if (role == "fullstack")
+    {
+        if (isIn(prefer, "backend") || isIn(prefer, "frontend")) return 0.6;
+        if (isIn(avoid, "backend") || isIn(avoid, "frontend")) return -0.6;
+    }
+
+    return 0.0;
+}
+
+static double ComputeRoleGap(TeamContext team, string role)
+{
+    var fe = Math.Max(0, team.CurrentMixFe);
+    var be = Math.Max(0, team.CurrentMixBe);
+    var other = Math.Max(0, team.CurrentMixOther);
+
+    var max = Math.Max(fe, Math.Max(be, other));
+    if (max == 0) return 1.0;
+
+    if (role == "fullstack")
+    {
+        var gapFe = (max - fe) / (double)max;
+        var gapBe = (max - be) / (double)max;
+        return Math.Clamp(Math.Max(gapFe, gapBe), 0.0, 1.0);
+    }
+
+    var count = role switch
+    {
+        "frontend" => fe,
+        "backend" => be,
+        "other" => other,
+        _ => 0
+    };
+
+    return Math.Clamp((max - count) / (double)max, 0.0, 1.0);
+}
+
+static string NormalizeRole(string? role)
+{
+    if (string.IsNullOrWhiteSpace(role))
+        return "";
+    var r = role.Trim().ToLowerInvariant();
+    if (r.Contains("fullstack") || r.Contains("full stack") || r.Contains("full-stack"))
+        return "fullstack";
+    if (r.Contains("frontend") || r.Contains("front-end") || r == "fe" || r == "front")
+        return "frontend";
+    if (r.Contains("backend") || r.Contains("back-end") || r == "be" || r == "back")
+        return "backend";
+    if (r.Contains("mobile"))
+        return "other";
+    if (r == "other")
+        return "other";
+    return r;
+}
+
 // ======================================================================
 // Query + Team context
 // ======================================================================
@@ -1163,7 +1270,7 @@ static string BuildQueryText(string mode, string rawQueryText, TeamContext? team
     if (team is null) return rawQueryText;
 
     var sb = new StringBuilder();
-    sb.AppendLine($"TEAM: {team.TeamName}");
+    sb.AppendLine($"GROUP_NAME: {team.TeamName}");
     sb.AppendLine($"MODE: {mode}");
 
     if (!string.IsNullOrWhiteSpace(team.PrimaryNeed))
@@ -1173,6 +1280,14 @@ static string BuildQueryText(string mode, string rawQueryText, TeamContext? team
 
     if (team.Skills.Count > 0)
         sb.AppendLine($"TEAM_SKILLS: {string.Join(", ", team.Skills.Take(28))}");
+
+    // Only use team desired positions for group_post mode.
+    if (mode == "group_post" && team.DesiredPositions != null && team.DesiredPositions.Count > 0)
+        sb.AppendLine($"TEAM_DESIRED_POSITIONS: {string.Join(", ", team.DesiredPositions.Take(20))}");
+    if (team.PreferRoles != null && team.PreferRoles.Count > 0)
+        sb.AppendLine($"PREFER_ROLES: {string.Join(", ", team.PreferRoles.Take(10))}");
+    if (team.AvoidRoles != null && team.AvoidRoles.Count > 0)
+        sb.AppendLine($"AVOID_ROLES: {string.Join(", ", team.AvoidRoles.Take(10))}");
 
     if (!string.IsNullOrWhiteSpace(rawQueryText))
         sb.AppendLine($"QUERY: {rawQueryText}");
@@ -1197,6 +1312,43 @@ static TeamContext ParseTeamContext(JsonElement teamEl)
             .ToList();
     }
 
+    // Parse desired_positions if present
+    var desiredPositions = new List<string>();
+    if (TryGetArrayAny(teamEl, out var posArr, "desiredPositions", "desired_positions", "teamDesiredPositions", "TeamDesiredPositions"))
+    {
+        desiredPositions = posArr.EnumerateArray()
+            .Where(x => x.ValueKind == JsonValueKind.String)
+            .Select(x => x.GetString()!.Trim())
+            .Where(x => x.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(40)
+            .ToList();
+    }
+
+    var preferRoles = new List<string>();
+    if (TryGetArrayAny(teamEl, out var preferArr, "preferRoles", "PreferRoles"))
+    {
+        preferRoles = preferArr.EnumerateArray()
+            .Where(x => x.ValueKind == JsonValueKind.String)
+            .Select(x => x.GetString()!.Trim())
+            .Where(x => x.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(20)
+            .ToList();
+    }
+
+    var avoidRoles = new List<string>();
+    if (TryGetArrayAny(teamEl, out var avoidArr, "avoidRoles", "AvoidRoles"))
+    {
+        avoidRoles = avoidArr.EnumerateArray()
+            .Where(x => x.ValueKind == JsonValueKind.String)
+            .Select(x => x.GetString()!.Trim())
+            .Where(x => x.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(20)
+            .ToList();
+    }
+
     int mixFe = 0, mixBe = 0, mixOther = 0;
     if (TryGetObjectAny(teamEl, out var mixEl, "currentMix", "CurrentMix", "mix", "Mix"))
     {
@@ -1205,7 +1357,7 @@ static TeamContext ParseTeamContext(JsonElement teamEl)
         mixOther = GetIntAny(mixEl, "other", "Other") ?? 0;
     }
 
-    return new TeamContext(teamName, primaryNeed, skills, mixFe, mixBe, mixOther);
+    return new TeamContext(teamName, primaryNeed, skills, mixFe, mixBe, mixOther, desiredPositions, preferRoles, avoidRoles);
 }
 
 // ======================================================================
@@ -1910,7 +2062,10 @@ record TeamContext(
     List<string> Skills,
     int CurrentMixFe,
     int CurrentMixBe,
-    int CurrentMixOther
+    int CurrentMixOther,
+    List<string> DesiredPositions,
+    List<string> PreferRoles,
+    List<string> AvoidRoles
 );
 
 record RerankCandidate(

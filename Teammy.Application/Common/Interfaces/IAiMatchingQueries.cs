@@ -12,6 +12,7 @@ public interface IAiMatchingQueries
     Task<IReadOnlyList<RecruitmentPostSnapshot>> ListOpenRecruitmentPostsAsync(Guid semesterId, Guid? majorId, CancellationToken ct);
     Task<IReadOnlyList<ProfilePostSnapshot>> ListOpenProfilePostsAsync(Guid semesterId, Guid? majorId, CancellationToken ct);
     Task<IReadOnlyList<GroupMemberSkillSnapshot>> ListGroupMemberSkillsAsync(Guid groupId, CancellationToken ct);
+    Task<IReadOnlyList<string>> ListGroupMemberDesiredPositionsAsync(Guid groupId, CancellationToken ct);
     Task<IReadOnlyList<TopicAvailabilitySnapshot>> ListTopicAvailabilityAsync(Guid semesterId, Guid? majorId, CancellationToken ct);
     Task<int> CountGroupsWithoutTopicAsync(Guid semesterId, CancellationToken ct);
     Task<int> CountGroupsUnderCapacityAsync(Guid semesterId, CancellationToken ct);
