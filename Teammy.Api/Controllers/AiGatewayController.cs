@@ -149,7 +149,7 @@ public sealed class AiGatewayController(AiGatewayClient gateway, AppDbContext db
 
         var user = await db.users.AsNoTracking()
             .Where(u => u.user_id == userId)
-            .Select(u => new { u.user_id, u.display_name, u.skills, u.portfolio_url })
+            .Select(u => new { u.user_id, u.display_name, u.skills, u.portfolio_url, u.desired_position_id })
             .FirstOrDefaultAsync(ct);
 
         if (user is null)
@@ -159,7 +159,7 @@ public sealed class AiGatewayController(AiGatewayClient gateway, AppDbContext db
         var pool = await (from p in db.mv_students_pools.AsNoTracking()
                           join s in db.semesters.AsNoTracking() on p.semester_id equals s.semester_id
                           where s.is_active && p.user_id == userId
-                          select new { p.skills, p.primary_role })
+                          select new { p.skills, p.primary_role, p.desired_position_name })
             .FirstOrDefaultAsync(ct);
 
         var skills = ParseSkillsList(pool?.skills) ?? ParseSkillsList(user.skills) ?? new List<string>();
@@ -169,6 +169,15 @@ public sealed class AiGatewayController(AiGatewayClient gateway, AppDbContext db
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Take(20)
             .ToList();
+
+        var desiredPosition = pool?.desired_position_name;
+        if (string.IsNullOrWhiteSpace(desiredPosition) && user.desired_position_id.HasValue)
+        {
+            desiredPosition = await db.position_lists.AsNoTracking()
+                .Where(p => p.position_id == user.desired_position_id.Value)
+                .Select(p => p.position_name)
+                .FirstOrDefaultAsync(ct);
+        }
 
         var inferredRole = pool?.primary_role;
         if (string.IsNullOrWhiteSpace(inferredRole))
@@ -183,6 +192,7 @@ public sealed class AiGatewayController(AiGatewayClient gateway, AppDbContext db
         var req = new AiGatewayGeneratePersonalPostRequest(
             User: new AiGatewayPersonalUser(
                 DisplayName: user.display_name,
+                DesiredPosition: desiredPosition,
                 Skills: skills,
                 Goal: goal,
                 Availability: null),
