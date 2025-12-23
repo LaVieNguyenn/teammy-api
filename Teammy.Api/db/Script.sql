@@ -512,7 +512,9 @@ CREATE TABLE IF NOT EXISTS teammy.chat_sessions (
   members         INT NOT NULL DEFAULT 0,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-  last_message    TEXT
+  last_message    TEXT,
+  is_pinned       BOOLEAN NOT NULL DEFAULT FALSE,
+  pinned_at       TIMESTAMPTZ
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_chat_project_single
   ON teammy.chat_sessions(group_id) WHERE (type='project');
@@ -525,6 +527,16 @@ CREATE TABLE IF NOT EXISTS teammy.chat_session_participants (
 );
 CREATE INDEX IF NOT EXISTS ix_chat_session_participants_user
   ON teammy.chat_session_participants(user_id);
+
+CREATE TABLE IF NOT EXISTS teammy.chat_session_reads (
+  chat_session_id UUID NOT NULL REFERENCES teammy.chat_sessions(chat_session_id) ON DELETE CASCADE,
+  user_id         UUID NOT NULL REFERENCES teammy.users(user_id) ON DELETE CASCADE,
+  last_read_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_read_message_id UUID REFERENCES teammy.messages(message_id) ON DELETE SET NULL,
+  PRIMARY KEY(chat_session_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS ix_chat_session_reads_user
+  ON teammy.chat_session_reads(user_id);
 
 CREATE TABLE IF NOT EXISTS teammy.messages (
   message_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),

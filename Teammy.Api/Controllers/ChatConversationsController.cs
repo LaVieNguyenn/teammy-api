@@ -34,4 +34,16 @@ public sealed class ChatConversationsController(ChatConversationService service)
         }
         catch (ArgumentException ex) { return BadRequest(ex.Message); }
     }
+
+    [HttpPost("{sessionId:guid}/pin")]
+    public async Task<ActionResult> Pin([FromRoute] Guid sessionId, [FromBody] PinChatSessionRequest request, CancellationToken ct)
+    {
+        try
+        {
+            await service.SetPinAsync(sessionId, GetUserId(), request?.Pin ?? true, ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
 }

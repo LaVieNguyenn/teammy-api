@@ -23,6 +23,10 @@ public partial class chat_session
 
     public string? last_message { get; set; }
 
+    public bool is_pinned { get; set; }
+
+    public DateTime? pinned_at { get; set; }
+
     public virtual group? group { get; set; }
 
     public virtual ICollection<message> messages { get; set; } = new List<message>();
