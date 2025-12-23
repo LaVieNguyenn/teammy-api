@@ -63,6 +63,21 @@ public sealed class ChatSessionMessageService(IChatRepository repo, IGroupReadOn
         return dto;
     }
 
+    public async Task MarkReadAsync(Guid sessionId, Guid currentUserId, Guid? messageId, CancellationToken ct)
+    {
+        var info = await _repo.GetSessionInfoAsync(sessionId, ct) ?? throw new KeyNotFoundException("Session not found");
+        await EnsureAccessAsync(sessionId, info, currentUserId, ct);
+
+        if (messageId.HasValue)
+        {
+            var meta = await _repo.GetMessageMetaAsync(messageId.Value, ct) ?? throw new KeyNotFoundException("Message not found");
+            if (meta.ChatSessionId != sessionId)
+                throw new InvalidOperationException("Message does not belong to this session");
+        }
+
+        await _repo.MarkSessionReadAsync(sessionId, currentUserId, messageId, ct);
+    }
+
     private async Task EnsureAccessAsync(Guid sessionId, (string Type, Guid? GroupId) info, Guid currentUserId, CancellationToken ct)
     {
         if (info.Type == "group")

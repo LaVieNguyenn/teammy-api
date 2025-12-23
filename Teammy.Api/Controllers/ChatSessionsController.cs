@@ -68,4 +68,17 @@ public sealed class ChatSessionsController(ChatSessionMessageService service) : 
         catch (ArgumentException ex) { return BadRequest(ex.Message); }
         catch (KeyNotFoundException) { return NotFound(); }
     }
+
+    [HttpPost("{sessionId:guid}/read")]
+    public async Task<ActionResult> MarkRead([FromRoute] Guid sessionId, [FromBody] MarkChatSessionReadRequest request, CancellationToken ct)
+    {
+        try
+        {
+            await service.MarkReadAsync(sessionId, GetUserId(), request?.MessageId, ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
 }

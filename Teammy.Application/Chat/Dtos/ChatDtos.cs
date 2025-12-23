@@ -25,7 +25,10 @@ public sealed record ConversationSummaryDto(
     string? OtherDisplayName,
     string? OtherAvatarUrl,
     string? LastMessage,
-    DateTime UpdatedAt);
+    DateTime UpdatedAt,
+    int UnreadCount,
+    bool IsPinned,
+    DateTime? PinnedAt);
 
 public sealed class SendChatMessageRequest
 {
@@ -41,4 +44,14 @@ public sealed class PinChatMessageRequest
 public sealed class CreateDirectConversationRequest
 {
     public Guid UserId { get; set; }
+}
+
+public sealed class PinChatSessionRequest
+{
+    public bool Pin { get; set; } = true;
+}
+
+public sealed class MarkChatSessionReadRequest
+{
+    public Guid? MessageId { get; set; }
 }
