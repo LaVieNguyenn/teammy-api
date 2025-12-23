@@ -191,8 +191,8 @@ public sealed class UsersController : ControllerBase
         if (request.Gpa.HasValue && request.Gpa.Value < 0)
             return BadRequest("GPA must be >= 0.");
 
-        if (request.Gpa.HasValue && request.Gpa.Value > 4)
-            return BadRequest("GPA must be <= 4.");
+        if (request.Gpa.HasValue && request.Gpa.Value > 10)
+            return BadRequest("GPA must be <= 10.");
 
         Guid? desiredPositionId = null;
         if (!string.IsNullOrWhiteSpace(request.Position))
