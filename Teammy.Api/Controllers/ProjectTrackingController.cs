@@ -83,4 +83,9 @@ public sealed class ProjectTrackingController(ProjectTrackingService service) : 
     [Authorize]
     public Task<ProjectReportVm> GetProjectReport(Guid groupId, [FromQuery] Guid? milestoneId, CancellationToken ct)
         => service.GetProjectReportAsync(groupId, GetUserId(), milestoneId, ct);
+
+    [HttpGet("scores")]
+    [Authorize]
+    public Task<MemberScoreReportVm> GetMemberScores(Guid groupId, [FromQuery] MemberScoreQuery req, CancellationToken ct)
+        => service.GetMemberScoresAsync(groupId, GetUserId(), req, ct);
 }

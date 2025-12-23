@@ -9,4 +9,5 @@ public interface IProjectTrackingReadOnlyQueries
     Task<IReadOnlyList<MilestoneVm>> ListMilestonesAsync(Guid groupId, CancellationToken ct);
     Task<MilestoneVm?> GetMilestoneAsync(Guid milestoneId, CancellationToken ct);
     Task<ProjectReportVm> BuildProjectReportAsync(Guid groupId, Guid? milestoneId, CancellationToken ct);
+    Task<MemberScoreReportVm> BuildMemberScoresReportAsync(Guid groupId, DateTime fromUtc, DateTime toUtc, MemberScoreWeightsVm weights, CancellationToken ct);
 }

@@ -200,6 +200,141 @@ public sealed class ProjectTrackingReadOnlyQueries(AppDbContext db) : IProjectTr
         return new ProjectReportVm(summary, tasksReport, snapshot);
     }
 
+    public async Task<MemberScoreReportVm> BuildMemberScoresReportAsync(
+        Guid groupId,
+        DateTime fromUtc,
+        DateTime toUtc,
+        MemberScoreWeightsVm weights,
+        CancellationToken ct)
+    {
+        var members = await db.group_members.AsNoTracking()
+            .Where(m => m.group_id == groupId && (m.status == "leader" || m.status == "member"))
+            .Select(m => new
+            {
+                m.user_id,
+                Name = m.user.display_name ?? m.user.email ?? string.Empty
+            })
+            .Distinct()
+            .OrderBy(m => m.Name)
+            .ToListAsync(ct);
+
+        if (members.Count == 0)
+        {
+            return new MemberScoreReportVm(
+                new MemberScoreRangeVm(DateOnly.FromDateTime(fromUtc), DateOnly.FromDateTime(toUtc)),
+                weights,
+                Array.Empty<MemberScoreVm>()
+            );
+        }
+
+        var memberIds = members.Select(m => m.user_id).ToArray();
+
+        var assignments = await (
+                from ta in db.task_assignments.AsNoTracking()
+                join t in db.tasks.AsNoTracking() on ta.task_id equals t.task_id
+                join c in db.columns.AsNoTracking() on t.column_id equals c.column_id
+                where t.group_id == groupId && memberIds.Contains(ta.user_id)
+                select new TaskAssignmentRow(
+                    ta.user_id,
+                    ta.assigned_at,
+                    t.task_id,
+                    t.title,
+                    t.priority,
+                    t.status,
+                    t.updated_at,
+                    c.is_done
+                ))
+            .ToListAsync(ct);
+
+        var grouped = assignments
+            .GroupBy(a => a.UserId)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        var reportMembers = new List<MemberScoreVm>(members.Count);
+
+        foreach (var member in members)
+        {
+            grouped.TryGetValue(member.user_id, out var rows);
+            rows ??= new List<TaskAssignmentRow>();
+
+            var assignedRows = rows
+                .Where(r => r.AssignedAt >= fromUtc && r.AssignedAt <= toUtc)
+                .ToList();
+
+            var assignedIds = assignedRows
+                .Select(r => r.TaskId)
+                .Distinct()
+                .ToList();
+
+            var doneRows = assignedRows
+                .Where(r => r.IsDone && r.UpdatedAt >= fromUtc && r.UpdatedAt <= toUtc)
+                .GroupBy(r => r.TaskId)
+                .Select(g => g.First())
+                .ToList();
+
+            var byPriority = new Dictionary<string, MemberPriorityScoreVm>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["high"] = new MemberPriorityScoreVm(0, 0),
+                ["medium"] = new MemberPriorityScoreVm(0, 0),
+                ["low"] = new MemberPriorityScoreVm(0, 0)
+            };
+
+            var taskDetails = new List<MemberTaskDetailVm>();
+            var totalScore = 0;
+
+            foreach (var row in doneRows)
+            {
+                var priority = NormalizePriority(row.Priority);
+                var weight = WeightForPriority(priority, weights);
+                totalScore += weight;
+
+                if (byPriority.TryGetValue(priority, out var bucket))
+                    byPriority[priority] = new MemberPriorityScoreVm(bucket.Done + 1, bucket.Score + weight);
+            }
+
+            var detailRows = assignedRows
+                .GroupBy(r => r.TaskId)
+                .Select(g => g.OrderByDescending(x => x.UpdatedAt).First())
+                .ToList();
+
+            foreach (var row in detailRows)
+            {
+                var priority = NormalizePriority(row.Priority);
+                var weight = WeightForPriority(priority, weights);
+                var isDone = row.IsDone && row.UpdatedAt >= fromUtc && row.UpdatedAt <= toUtc;
+                var contributed = isDone ? weight : 0;
+
+                taskDetails.Add(new MemberTaskDetailVm(
+                    row.TaskId,
+                    row.Title,
+                    priority,
+                    weight,
+                    isDone ? "DONE" : (row.Status ?? "TODO"),
+                    isDone ? row.UpdatedAt : null,
+                    contributed
+                ));
+            }
+
+            reportMembers.Add(new MemberScoreVm(
+                member.user_id,
+                member.Name,
+                totalScore,
+                totalScore,
+                0,
+                0,
+                new MemberTaskCountsVm(assignedIds.Count, doneRows.Count),
+                byPriority,
+                taskDetails
+            ));
+        }
+
+        return new MemberScoreReportVm(
+            new MemberScoreRangeVm(DateOnly.FromDateTime(fromUtc), DateOnly.FromDateTime(toUtc)),
+            weights,
+            reportMembers
+        );
+    }
+
     private async Task<TaskReportVm> BuildTaskReportInternalAsync(Guid groupId, Guid? milestoneId, CancellationToken ct)
     {
         var backlogQuery = db.backlog_items.AsNoTracking().Where(b => b.group_id == groupId);
@@ -343,6 +478,40 @@ public sealed class ProjectTrackingReadOnlyQueries(AppDbContext db) : IProjectTr
 
         return new TaskReportVm(backlogSummary, columnProgress, milestoneVms);
     }
+
+    private static string NormalizePriority(string? priority)
+    {
+        if (string.IsNullOrWhiteSpace(priority))
+            return "low";
+
+        var p = priority.Trim().ToLowerInvariant();
+        if (p.Contains("high") || p.Contains("urgent") || p.Contains("p0") || p.Contains("p1"))
+            return "high";
+        if (p.Contains("medium") || p.Contains("p2"))
+            return "medium";
+        if (p.Contains("low") || p.Contains("p3"))
+            return "low";
+        return "low";
+    }
+
+    private static int WeightForPriority(string priority, MemberScoreWeightsVm weights)
+        => priority switch
+        {
+            "high" => weights.High,
+            "medium" => weights.Medium,
+            _ => weights.Low
+        };
+
+    private sealed record TaskAssignmentRow(
+        Guid UserId,
+        DateTime AssignedAt,
+        Guid TaskId,
+        string Title,
+        string? Priority,
+        string? Status,
+        DateTime UpdatedAt,
+        bool IsDone
+    );
 
     private IQueryable<BacklogProjection> BuildBacklogQuery(Guid groupId, Guid? backlogItemId = null)
     {
