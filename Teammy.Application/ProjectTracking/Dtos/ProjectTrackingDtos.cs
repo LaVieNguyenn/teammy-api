@@ -73,6 +73,50 @@ public sealed record ProjectReportVm(
     TeamSnapshotVm Team
 );
 
+public sealed record MemberScoreQuery(
+    DateOnly From,
+    DateOnly To,
+    int? High,
+    int? Medium,
+    int? Low
+);
+
+public sealed record MemberScoreReportVm(
+    MemberScoreRangeVm Range,
+    MemberScoreWeightsVm Weights,
+    IReadOnlyList<MemberScoreVm> Members
+);
+
+public sealed record MemberScoreRangeVm(DateOnly From, DateOnly To);
+
+public sealed record MemberScoreWeightsVm(int High, int Medium, int Low);
+
+public sealed record MemberTaskCountsVm(int Assigned, int Done);
+
+public sealed record MemberPriorityScoreVm(int Done, int Score);
+
+public sealed record MemberTaskDetailVm(
+    Guid TaskId,
+    string Title,
+    string Priority,
+    int Weight,
+    string Status,
+    DateTime? CompletedAt,
+    int ScoreContributed
+);
+
+public sealed record MemberScoreVm(
+    Guid MemberId,
+    string MemberName,
+    int ScoreTotal,
+    int DeliveryScore,
+    int QualityScore,
+    int CollabScore,
+    MemberTaskCountsVm Tasks,
+    IReadOnlyDictionary<string, MemberPriorityScoreVm> ByPriority,
+    IReadOnlyList<MemberTaskDetailVm> TaskDetails
+);
+
 public sealed record ProjectSummaryVm(
     Guid GroupId,
     string GroupName,

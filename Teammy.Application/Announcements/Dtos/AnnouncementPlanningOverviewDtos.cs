@@ -1,3 +1,5 @@
+using Teammy.Application.Semesters.Dtos;
+
 namespace Teammy.Application.Announcements.Dtos;
 
 public sealed record AnnouncementPlanningOverviewRequest(
@@ -7,6 +9,7 @@ public sealed record AnnouncementPlanningOverviewRequest(
 public sealed record AnnouncementPlanningOverviewDto(
     Guid SemesterId,
     string SemesterLabel,
+    SemesterDetailDto Semester,
     Guid MajorId,
     string? MajorName,
     int GroupsWithoutTopicCount,

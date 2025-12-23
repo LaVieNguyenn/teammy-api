@@ -139,6 +139,27 @@ public sealed class ProjectTrackingService(
         return await read.BuildProjectReportAsync(groupId, milestoneId, ct);
     }
 
+    public async Task<MemberScoreReportVm> GetMemberScoresAsync(Guid groupId, Guid currentUserId, MemberScoreQuery req, CancellationToken ct)
+    {
+        await EnsureViewerAccessAsync(groupId, currentUserId, ct);
+        if (req.From > req.To)
+            throw new ArgumentException("From must be before To", nameof(req));
+
+        static int ClampWeight(int? value, int fallback)
+            => value.HasValue ? Math.Max(0, value.Value) : fallback;
+
+        var weights = new MemberScoreWeightsVm(
+            ClampWeight(req.High, 5),
+            ClampWeight(req.Medium, 3),
+            ClampWeight(req.Low, 1)
+        );
+
+        var fromUtc = DateTime.SpecifyKind(req.From.ToDateTime(TimeOnly.MinValue), DateTimeKind.Utc);
+        var toUtc = DateTime.SpecifyKind(req.To.ToDateTime(TimeOnly.MaxValue), DateTimeKind.Utc);
+
+        return await read.BuildMemberScoresReportAsync(groupId, fromUtc, toUtc, weights, ct);
+    }
+
     private async Task EnsureViewerAccessAsync(Guid groupId, Guid userId, CancellationToken ct)
     {
         if (await access.IsMemberAsync(groupId, userId, ct)) return;

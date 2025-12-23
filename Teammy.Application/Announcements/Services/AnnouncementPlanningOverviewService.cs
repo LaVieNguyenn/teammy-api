@@ -8,7 +8,8 @@ namespace Teammy.Application.Announcements.Services;
 public sealed class AnnouncementPlanningOverviewService(
     IAiMatchingQueries aiQueries,
     IGroupReadOnlyQueries groupQueries,
-    IMajorReadOnlyQueries majorQueries)
+    IMajorReadOnlyQueries majorQueries,
+    ISemesterReadOnlyQueries semesterQueries)
 {
     public async Task<AnnouncementPlanningOverviewDto> GetOverviewAsync(
         AnnouncementPlanningOverviewRequest request,
@@ -22,6 +23,9 @@ public sealed class AnnouncementPlanningOverviewService(
 
         var semesterInfo = await groupQueries.GetSemesterAsync(semesterId, ct)
             ?? throw new InvalidOperationException("Active semester not found");
+
+        var semesterDetail = await semesterQueries.GetByIdAsync(semesterId, ct)
+            ?? throw new InvalidOperationException("Semester detail not found");
 
         var label = BuildSemesterLabel(semesterInfo.Season, semesterInfo.Year)
             ?? semesterId.ToString();
@@ -68,6 +72,7 @@ public sealed class AnnouncementPlanningOverviewService(
         return new AnnouncementPlanningOverviewDto(
             semesterId,
             label,
+            semesterDetail,
             request.MajorId,
             majorName,
             groupsWithoutTopic.Count,
