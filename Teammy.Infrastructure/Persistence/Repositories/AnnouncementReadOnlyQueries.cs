@@ -1,3 +1,4 @@
+using System.Linq;
 using Microsoft.EntityFrameworkCore;
 using Teammy.Application.Announcements.Dtos;
 using Teammy.Application.Common.Interfaces;
@@ -28,7 +29,8 @@ public sealed class AnnouncementReadOnlyQueries(AppDbContext db) : IAnnouncement
                 a.semester_id,
                 a.scope,
                 a.target_role,
-                a.target_group_id,
+                a.target_group_ids,
+                a.target_user_ids,
                 a.title,
                 a.content,
                 a.pinned,
@@ -37,7 +39,8 @@ public sealed class AnnouncementReadOnlyQueries(AppDbContext db) : IAnnouncement
                 a.created_by,
                 u.display_name ?? u.email ?? string.Empty);
 
-        return await queryWithAuthor.ToListAsync(ct);
+        var items = await queryWithAuthor.ToListAsync(ct);
+        return items.Select(a => SanitizeForUser(a, ctx)).ToList();
     }
 
     public async Task<AnnouncementDto?> GetForUserAsync(Guid announcementId, Guid userId, CancellationToken ct)
@@ -53,7 +56,8 @@ public sealed class AnnouncementReadOnlyQueries(AppDbContext db) : IAnnouncement
                 a.semester_id,
                 a.scope,
                 a.target_role,
-                a.target_group_id,
+                a.target_group_ids,
+                a.target_user_ids,
                 a.title,
                 a.content,
                 a.pinned,
@@ -62,19 +66,28 @@ public sealed class AnnouncementReadOnlyQueries(AppDbContext db) : IAnnouncement
                 a.created_by,
                 u.display_name ?? u.email ?? string.Empty);
 
-        return await query.FirstOrDefaultAsync(ct);
+        var item = await query.FirstOrDefaultAsync(ct);
+        return item is null ? null : SanitizeForUser(item, ctx);
     }
 
     private IQueryable<announcement> ApplyAccessFilter(AnnouncementAccessContext ctx)
     {
         var roles = ctx.Roles.Select(r => r.ToLowerInvariant()).ToList();
         var groupIds = ctx.GroupIds.ToList();
+        var groupIdsArr = groupIds.ToArray();
         var semesterIds = ctx.SemesterIds.ToList();
 
         return db.announcements.AsNoTracking().Where(a =>
             a.scope == AnnouncementScopes.Global
             || (a.scope == AnnouncementScopes.Role && a.target_role != null && roles.Contains(a.target_role.ToLower()))
-            || (a.scope == AnnouncementScopes.Group && a.target_group_id.HasValue && groupIds.Contains(a.target_group_id.Value))
+            || (a.scope == AnnouncementScopes.Group && a.target_group_ids != null && groupIdsArr.Length > 0
+                && a.target_group_ids.Any(gid => groupIdsArr.Contains(gid)))
+            || (a.scope == AnnouncementScopes.GroupsUnderstaffed && a.target_group_ids != null && groupIdsArr.Length > 0
+                && a.target_group_ids.Any(gid => groupIdsArr.Contains(gid)))
+            || (a.scope == AnnouncementScopes.GroupsWithoutTopic && a.target_group_ids != null && groupIdsArr.Length > 0
+                && a.target_group_ids.Any(gid => groupIdsArr.Contains(gid)))
+            || (a.scope == AnnouncementScopes.StudentsWithoutGroup && a.target_user_ids != null
+                && a.target_user_ids.Any(uid => uid == ctx.UserId))
             || (a.scope == AnnouncementScopes.Semester && a.semester_id.HasValue && semesterIds.Contains(a.semester_id.Value))
         );
     }
@@ -102,12 +115,33 @@ public sealed class AnnouncementReadOnlyQueries(AppDbContext db) : IAnnouncement
         var semesterSet = members.Select(m => m.semester_id).Concat(mentorGroups.Select(m => m.semester_id)).ToHashSet();
         var roleSet = roles.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        return new AnnouncementAccessContext(roleSet, groupSet, semesterSet);
+        return new AnnouncementAccessContext(roleSet, groupSet, semesterSet, userId);
     }
 
     private sealed record AnnouncementAccessContext(
         HashSet<string> Roles,
         HashSet<Guid> GroupIds,
-        HashSet<Guid> SemesterIds
+        HashSet<Guid> SemesterIds,
+        Guid UserId
     );
+
+    private static AnnouncementDto SanitizeForUser(AnnouncementDto dto, AnnouncementAccessContext ctx)
+    {
+        IReadOnlyList<Guid>? groupTargets = null;
+        if (dto.TargetGroupIds is not null && ctx.GroupIds.Count > 0)
+        {
+            var filtered = dto.TargetGroupIds.Where(ctx.GroupIds.Contains).ToArray();
+            groupTargets = filtered.Length == 0 ? null : filtered;
+        }
+
+        IReadOnlyList<Guid>? userTargets = null;
+        if (dto.TargetUserIds is not null && dto.TargetUserIds.Contains(ctx.UserId))
+            userTargets = new[] { ctx.UserId };
+
+        return dto with
+        {
+            TargetGroupIds = groupTargets,
+            TargetUserIds = userTargets
+        };
+    }
 }

@@ -26,4 +26,16 @@ public interface IAnnouncementRecipientQueries
         int page,
         int pageSize,
         CancellationToken ct);
+
+    Task<IReadOnlyList<Guid>> ResolveTargetGroupIdsAsync(
+        string scope,
+        Guid semesterId,
+        IReadOnlyList<Guid>? targetGroupIds,
+        CancellationToken ct);
+
+    Task<IReadOnlyList<Guid>> ResolveTargetUserIdsAsync(
+        string scope,
+        Guid semesterId,
+        IReadOnlyList<Guid>? targetUserIds,
+        CancellationToken ct);
 }

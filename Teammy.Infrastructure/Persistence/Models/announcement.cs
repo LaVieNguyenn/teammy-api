@@ -13,7 +13,9 @@ public partial class announcement
 
     public string? target_role { get; set; }
 
-    public Guid? target_group_id { get; set; }
+    public Guid[]? target_group_ids { get; set; }
+
+    public Guid[]? target_user_ids { get; set; }
 
     public string title { get; set; } = null!;
 
@@ -31,5 +33,4 @@ public partial class announcement
 
     public virtual semester? semester { get; set; }
 
-    public virtual group? target_group { get; set; }
 }
