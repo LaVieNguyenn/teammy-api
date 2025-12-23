@@ -48,7 +48,6 @@ public sealed record CreateAnnouncementRequest(
     string Title,
     string Content,
     string? TargetRole,
-    Guid? TargetGroupId,
     IReadOnlyList<Guid>? TargetGroupIds,
     IReadOnlyList<Guid>? TargetUserIds,
     DateTime? PublishAt,
@@ -66,7 +65,8 @@ public sealed record AnnouncementDto(
     Guid? SemesterId,
     string Scope,
     string? TargetRole,
-    Guid? TargetGroupId,
+    IReadOnlyList<Guid>? TargetGroupIds,
+    IReadOnlyList<Guid>? TargetUserIds,
     string Title,
     string Content,
     bool Pinned,
@@ -82,7 +82,6 @@ public sealed record AnnouncementRecipientPreviewRequest(
     string Scope,
     Guid? SemesterId,
     string? TargetRole,
-    Guid? TargetGroupId,
     IReadOnlyList<Guid>? TargetGroupIds,
     IReadOnlyList<Guid>? TargetUserIds,
     int Page = 1,
@@ -93,7 +92,8 @@ public sealed record AnnouncementRecipientPreviewDto(
     string Scope,
     Guid? SemesterId,
     string? TargetRole,
-    Guid? TargetGroupId,
+    IReadOnlyList<Guid>? TargetGroupIds,
+    IReadOnlyList<Guid>? TargetUserIds,
     PaginatedResult<AnnouncementRecipient> Recipients
 );
 
@@ -104,7 +104,8 @@ public sealed record CreateAnnouncementCommand(
     string Title,
     string Content,
     string? TargetRole,
-    Guid? TargetGroupId,
+    IReadOnlyList<Guid>? TargetGroupIds,
+    IReadOnlyList<Guid>? TargetUserIds,
     DateTime PublishAt,
     DateTime? ExpireAt,
     bool Pinned

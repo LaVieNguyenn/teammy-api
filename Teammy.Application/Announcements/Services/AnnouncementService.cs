@@ -12,6 +12,7 @@ public sealed class AnnouncementService(
     IAnnouncementRepository repository,
     IAnnouncementReadOnlyQueries readQueries,
     IAnnouncementRecipientQueries recipientQueries,
+    ISemesterReadOnlyQueries semesterQueries,
     IEmailSender emailSender,
     IAnnouncementNotifier notifier
 )
@@ -32,6 +33,38 @@ public sealed class AnnouncementService(
         var normalizedScope = NormalizeScope(request.Scope);
         ValidateRequest(normalizedScope, request);
 
+        if (request.SemesterId.HasValue)
+        {
+            var semester = await semesterQueries.GetByIdAsync(request.SemesterId.Value, ct);
+            if (semester is null)
+                throw new ValidationException("SemesterId not found.");
+        }
+
+        var targetGroupIds = request.TargetGroupIds;
+        var targetUserIds = request.TargetUserIds;
+        if (request.SemesterId.HasValue)
+        {
+            if (normalizedScope is AnnouncementScopes.GroupsUnderstaffed or AnnouncementScopes.GroupsWithoutTopic
+                && (targetGroupIds is null || targetGroupIds.Count == 0))
+            {
+                targetGroupIds = await recipientQueries.ResolveTargetGroupIdsAsync(
+                    normalizedScope,
+                    request.SemesterId.Value,
+                    request.TargetGroupIds,
+                    ct);
+            }
+
+            if (normalizedScope == AnnouncementScopes.StudentsWithoutGroup
+                && (targetUserIds is null || targetUserIds.Count == 0))
+            {
+                targetUserIds = await recipientQueries.ResolveTargetUserIdsAsync(
+                    normalizedScope,
+                    request.SemesterId.Value,
+                    request.TargetUserIds,
+                    ct);
+            }
+        }
+
         var publishAt = (request.PublishAt ?? DateTime.UtcNow).ToUniversalTime();
         DateTime? expireAt = request.ExpireAt?.ToUniversalTime();
         if (expireAt.HasValue && expireAt.Value <= publishAt)
@@ -47,14 +80,15 @@ public sealed class AnnouncementService(
             title,
             content,
             NormalizeRole(request.TargetRole),
-            request.TargetGroupId,
+            targetGroupIds,
+            targetUserIds,
             publishAt,
             expireAt,
             request.Pinned
         );
 
         var created = await repository.CreateAsync(command, ct);
-        var recipients = await ResolveRecipientsAsync(created, request.TargetGroupIds, request.TargetUserIds, ct);
+        var recipients = await ResolveRecipientsAsync(created, targetGroupIds, targetUserIds, ct);
 
         if (recipients.Count > 0)
         {
@@ -71,7 +105,7 @@ public sealed class AnnouncementService(
             throw new ArgumentNullException(nameof(request));
 
         var scope = NormalizeScope(request.Scope);
-        ValidateScopeFilters(scope, request.SemesterId, request.TargetRole, request.TargetGroupId, request.TargetGroupIds, request.TargetUserIds);
+        ValidateScopeFilters(scope, request.SemesterId, request.TargetRole, request.TargetGroupIds, request.TargetUserIds);
         var normalizedRole = NormalizeRole(request.TargetRole);
         var (page, pageSize) = NormalizePagination(request.Page, request.PageSize);
 
@@ -79,13 +113,13 @@ public sealed class AnnouncementService(
             scope,
             request.SemesterId,
             normalizedRole,
-            request.TargetGroupId,
+            null,
             request.TargetGroupIds,
             request.TargetUserIds,
             page,
             pageSize,
             ct);
-        return new AnnouncementRecipientPreviewDto(scope, request.SemesterId, normalizedRole, request.TargetGroupId, recipients);
+        return new AnnouncementRecipientPreviewDto(scope, request.SemesterId, normalizedRole, request.TargetGroupIds, request.TargetUserIds, recipients);
     }
 
     private static string NormalizeScope(string scope)
@@ -112,14 +146,13 @@ public sealed class AnnouncementService(
         if (string.IsNullOrWhiteSpace(request.Content))
             throw new ValidationException("Content is required");
 
-        ValidateScopeFilters(scope, request.SemesterId, request.TargetRole, request.TargetGroupId, request.TargetGroupIds, request.TargetUserIds);
+        ValidateScopeFilters(scope, request.SemesterId, request.TargetRole, request.TargetGroupIds, request.TargetUserIds);
     }
 
     private static void ValidateScopeFilters(
         string scope,
         Guid? semesterId,
         string? targetRole,
-        Guid? targetGroupId,
         IReadOnlyList<Guid>? targetGroupIds,
         IReadOnlyList<Guid>? targetUserIds)
     {
@@ -142,17 +175,15 @@ public sealed class AnnouncementService(
                     throw new ValidationException("TargetRole is required for role scope");
                 break;
             case AnnouncementScopes.Group:
-                if (!targetGroupId.HasValue)
-                    throw new ValidationException("TargetGroupId is required for group scope");
+                if (targetGroupIds is not { Count: > 0 })
+                    throw new ValidationException("TargetGroupIds is required for group scope.");
                 break;
         }
 
-        if (scope == AnnouncementScopes.Group && targetGroupIds is { Count: > 0 })
-            throw new ValidationException("TargetGroupIds is not supported for group scope.");
         if (scope == AnnouncementScopes.Group && targetUserIds is { Count: > 0 })
             throw new ValidationException("TargetUserIds is not supported for group scope.");
-        if (targetGroupIds is { Count: > 0 } && scope is not (AnnouncementScopes.GroupsWithoutTopic or AnnouncementScopes.GroupsUnderstaffed))
-            throw new ValidationException("TargetGroupIds is only supported for groups_without_topic and groups_understaffed scopes.");
+        if (targetGroupIds is { Count: > 0 } && scope is not (AnnouncementScopes.Group or AnnouncementScopes.GroupsWithoutTopic or AnnouncementScopes.GroupsUnderstaffed))
+            throw new ValidationException("TargetGroupIds is only supported for group, groups_without_topic and groups_understaffed scopes.");
         if (targetUserIds is { Count: > 0 } && scope != AnnouncementScopes.StudentsWithoutGroup)
             throw new ValidationException("TargetUserIds is only supported for students_without_group scope.");
     }
@@ -176,11 +207,12 @@ public sealed class AnnouncementService(
             announcement.Scope,
             announcement.SemesterId,
             announcement.TargetRole,
-            announcement.TargetGroupId,
+            null,
             targetGroupIds,
             targetUserIds,
             ct);
     }
+
 
     private async Task SendEmailsAsync(AnnouncementDto announcement, IReadOnlyList<AnnouncementRecipient> recipients, CancellationToken ct)
     {

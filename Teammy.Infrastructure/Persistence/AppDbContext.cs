@@ -145,10 +145,6 @@ public partial class AppDbContext : DbContext
                 .OnDelete(DeleteBehavior.SetNull)
                 .HasConstraintName("announcements_semester_id_fkey");
 
-            entity.HasOne(d => d.target_group).WithMany(p => p.announcements)
-                .HasForeignKey(d => d.target_group_id)
-                .OnDelete(DeleteBehavior.Cascade)
-                .HasConstraintName("announcements_target_group_id_fkey");
         });
 
         modelBuilder.Entity<backlog_item>(entity =>
@@ -359,6 +355,9 @@ public partial class AppDbContext : DbContext
                 .HasForeignKey<group>(d => d.topic_id)
                 .OnDelete(DeleteBehavior.SetNull)
                 .HasConstraintName("groups_topic_id_fkey");
+
+            // announcements are no longer linked to groups via FK
+            entity.Ignore(e => e.announcements);
         });
 
         modelBuilder.Entity<group_member>(entity =>

@@ -1,3 +1,4 @@
+using System.Linq;
 using Microsoft.EntityFrameworkCore;
 using Teammy.Application.Announcements.Dtos;
 using Teammy.Application.Common.Interfaces;
@@ -16,7 +17,8 @@ public sealed class AnnouncementRepository(AppDbContext db) : IAnnouncementRepos
             semester_id = command.SemesterId,
             scope = command.Scope,
             target_role = command.TargetRole,
-            target_group_id = command.TargetGroupId,
+            target_group_ids = command.TargetGroupIds?.ToArray(),
+            target_user_ids = command.TargetUserIds?.ToArray(),
             title = command.Title,
             content = command.Content,
             pinned = command.Pinned,
@@ -38,7 +40,8 @@ public sealed class AnnouncementRepository(AppDbContext db) : IAnnouncementRepos
             entity.semester_id,
             entity.scope,
             entity.target_role,
-            entity.target_group_id,
+            entity.target_group_ids,
+            entity.target_user_ids,
             entity.title,
             entity.content,
             entity.pinned,

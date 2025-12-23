@@ -543,9 +543,10 @@ CREATE INDEX IF NOT EXISTS ix_activity_logs_actor
 CREATE TABLE IF NOT EXISTS teammy.announcements (
   announcement_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   semester_id     UUID REFERENCES teammy.semesters(semester_id) ON DELETE SET NULL,
-  scope           TEXT NOT NULL DEFAULT 'semester' CHECK (scope IN ('global','semester','role','group')),
+  scope           TEXT NOT NULL DEFAULT 'semester' CHECK (scope IN ('global','semester','role','group','groups_without_topic','groups_understaffed','students_without_group')),
   target_role     TEXT CHECK (target_role IN ('student','leader','mentor','moderator','admin')),
-  target_group_id UUID REFERENCES teammy.groups(group_id) ON DELETE CASCADE,
+  target_group_ids UUID[],
+  target_user_ids  UUID[],
   title           TEXT NOT NULL,
   content         TEXT NOT NULL,
   pinned          BOOLEAN NOT NULL DEFAULT FALSE,
