@@ -528,7 +528,7 @@ Schema:
         return Results.Ok(new { draft = (object?)null, error = "llm_invalid_json", detail = perr });
 
     var root = parsed!.RootElement;
-    if (!HasRequiredKeys(root, "title", "description", "positionNeed", "requiredSkills"))
+    if (!HasRequiredKeys(root, "title", "description", "requiredSkills"))
         return Results.Ok(new { draft = (object?)null, error = "llm_missing_required_keys", detail = Clip(root.GetRawText(), 1200) });
 
     return Results.Json(new { draft = BuildGroupDraftResponse(root, spec) });
@@ -568,6 +568,7 @@ OUTPUT LANGUAGE:
 RULES:
 - Do NOT invent skills. Use provided skills only.
 - Title 6-12 words, meaningful.
+- If desiredPosition is provided, reflect it in the goal and description.
 - Keep description under maxWords words.
 - End with a call-to-action (DM / connect).
 
@@ -583,6 +584,7 @@ Schema:
         person = new
         {
             displayName = body.User.DisplayName,
+            desiredPosition = body.User.DesiredPosition,
             goal = body.User.Goal,
             availability = body.User.Availability,
             skills
@@ -2117,7 +2119,7 @@ record GroupInfo(
 
 record Mix(int Fe, int Be, int Other);
 record ProjectInfo(string? Title, string? Summary);
-record PersonalUser(string DisplayName, List<string>? Skills, string? Goal, string? Availability);
+record PersonalUser(string DisplayName, string? DesiredPosition, List<string>? Skills, string? Goal, string? Availability);
 record PostOptions(string? Language, int? MaxWords, string? Tone);
 
 record GroupPostSpec(string SuggestedBucket, string[] SkillBank);

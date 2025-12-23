@@ -199,6 +199,7 @@ public sealed record AiGatewayProjectInfo(
 
 public sealed record AiGatewayPersonalUser(
     [property: JsonPropertyName("displayName")] string DisplayName,
+    [property: JsonPropertyName("desiredPosition")] string? DesiredPosition,
     [property: JsonPropertyName("skills")] IReadOnlyList<string>? Skills,
     [property: JsonPropertyName("goal")] string? Goal,
     [property: JsonPropertyName("availability")] string? Availability);

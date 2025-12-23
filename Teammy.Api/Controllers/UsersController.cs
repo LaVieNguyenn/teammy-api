@@ -82,7 +82,7 @@ public sealed class UsersController : ControllerBase
     {
         if (majorId == Guid.Empty) return BadRequest("majorId is required");
         var list = await _positions.ListByMajorAsync(majorId, ct);
-        return Ok(list.Select(x => new { x.PositionId, x.PositionName }));
+        return Ok(list.Select(x => new { x.PositionId, x.PositionName, MajorId = majorId }));
     }
 
     [HttpPost("me/avatar")]
