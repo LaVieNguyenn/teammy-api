@@ -4,14 +4,22 @@ namespace Teammy.Application.Feedback.Dtos;
 
 public sealed class SubmitGroupFeedbackRequest
 {
+    [Required]
     public string? Category { get; init; }
 
     [Required]
     public string Summary { get; init; } = string.Empty;
 
+    [Required]
     public string? Details { get; init; }
+
+    [Required]
     public int? Rating { get; init; }
+
+    [Required]
     public string? Blockers { get; init; }
+
+    [Required]
     public string? NextSteps { get; init; }
 }
 

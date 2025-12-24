@@ -1,5 +1,6 @@
 using System.Globalization;
 using ClosedXML.Excel;
+using Microsoft.EntityFrameworkCore;
 using Teammy.Application.Activity.Dtos;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Groups.Dtos;
@@ -7,6 +8,7 @@ using Teammy.Application.Posts.Dtos;
 using Teammy.Application.ProjectTracking.Interfaces;
 using Teammy.Application.Reports;
 using Teammy.Application.Reports.Dtos;
+using Teammy.Infrastructure.Persistence;
 
 namespace Teammy.Infrastructure.Reports;
 
@@ -14,12 +16,14 @@ public sealed class ExcelReportExportService(
     IGroupReadOnlyQueries groupQueries,
     IRecruitmentPostReadOnlyQueries postQueries,
     IActivityLogRepository activityLogRepository,
-    IProjectTrackingReadOnlyQueries projectTrackingQueries) : IReportExportService
+    IProjectTrackingReadOnlyQueries projectTrackingQueries,
+    AppDbContext db) : IReportExportService
 {
     private readonly IGroupReadOnlyQueries _groupQueries = groupQueries;
     private readonly IRecruitmentPostReadOnlyQueries _postQueries = postQueries;
     private readonly IActivityLogRepository _activityLogRepository = activityLogRepository;
     private readonly IProjectTrackingReadOnlyQueries _projectTrackingQueries = projectTrackingQueries;
+    private readonly AppDbContext _db = db;
 
     public async Task<ReportFileResult> ExportAsync(ReportRequest? request, CancellationToken ct)
     {
@@ -28,7 +32,7 @@ public sealed class ExcelReportExportService(
         using var workbook = new XLWorkbook();
 
         IReadOnlyList<GroupSummaryDto> groupSummaries = Array.Empty<GroupSummaryDto>();
-        var shouldLoadGroups = request.IncludeGroups || request.IncludeGroupMembers || request.IncludeMilestones;
+        var shouldLoadGroups = request.IncludeGroups || request.IncludeGroupMembers || request.IncludeMilestones || request.IncludeTasks;
         if (shouldLoadGroups)
         {
             var groups = await _groupQueries.ListGroupsAsync(
@@ -57,6 +61,11 @@ public sealed class ExcelReportExportService(
         if (request.IncludeMilestones)
         {
             await WriteMilestonesSheetAsync(workbook, groupSummaries, ct);
+        }
+
+        if (request.IncludeTasks)
+        {
+            await WriteTasksSheetAsync(workbook, groupSummaries, request, ct);
         }
 
         if (request.IncludeRecruitmentPosts)
@@ -196,6 +205,101 @@ public sealed class ExcelReportExportService(
             ws.Cell(row, 10).Value = post.ApplicationsCount;
             ws.Cell(row, 11).Value = post.CreatedAt.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
             ws.Cell(row, 12).Value = post.ApplicationDeadline?.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+            row++;
+        }
+
+        ws.Columns().AdjustToContents();
+    }
+
+    private async Task WriteTasksSheetAsync(
+        XLWorkbook workbook,
+        IReadOnlyList<GroupSummaryDto> groups,
+        ReportRequest request,
+        CancellationToken ct)
+    {
+        var ws = workbook.Worksheets.Add("Tasks");
+        var headers = new[]
+        {
+            "Task Id", "Group Id", "Group Name", "Board Id",
+            "Column Id", "Column Name", "Title", "Description",
+            "Status", "Priority", "Due Date", "Assignees",
+            "Created At", "Updated At"
+        };
+        WriteHeader(ws, headers);
+
+        if (groups.Count == 0)
+        {
+            ws.Columns().AdjustToContents();
+            return;
+        }
+
+        var groupIds = groups.Select(g => g.Id).ToList();
+        var groupNameMap = groups.ToDictionary(g => g.Id, g => g.Name);
+
+        var taskRows = await (
+            from t in _db.tasks.AsNoTracking()
+            join c in _db.columns.AsNoTracking() on t.column_id equals c.column_id into cc
+            from c in cc.DefaultIfEmpty()
+            join b in _db.boards.AsNoTracking() on c.board_id equals b.board_id into bb
+            from b in bb.DefaultIfEmpty()
+            where groupIds.Contains(t.group_id)
+            select new
+            {
+                t.task_id,
+                t.group_id,
+                t.column_id,
+                ColumnName = c != null ? c.column_name : null,
+                BoardId = b != null ? (Guid?)b.board_id : null,
+                t.title,
+                t.description,
+                t.status,
+                t.priority,
+                t.due_date,
+                t.created_at,
+                t.updated_at
+            }
+        ).ToListAsync(ct);
+
+        if (request.StartDateUtc.HasValue || request.EndDateUtc.HasValue)
+        {
+            taskRows = taskRows
+                .Where(t => MatchesDate(t.created_at, request))
+                .ToList();
+        }
+
+        var taskIds = taskRows.Select(t => t.task_id).ToList();
+        var assignees = await (
+            from a in _db.task_assignments.AsNoTracking()
+            join u in _db.users.AsNoTracking() on a.user_id equals u.user_id
+            where taskIds.Contains(a.task_id)
+            select new { a.task_id, u.display_name, u.email }
+        ).ToListAsync(ct);
+
+        var assigneeMap = assignees
+            .GroupBy(x => x.task_id)
+            .ToDictionary(
+                g => g.Key,
+                g => string.Join(", ", g.Select(x => x.display_name ?? x.email).Where(x => !string.IsNullOrWhiteSpace(x)))
+            );
+
+        var row = 2;
+        foreach (var t in taskRows.OrderBy(t => groupNameMap.TryGetValue(t.group_id, out var name) ? name : string.Empty)
+                                  .ThenBy(t => t.created_at))
+        {
+            ws.Cell(row, 1).Value = t.task_id.ToString();
+            ws.Cell(row, 2).Value = t.group_id.ToString();
+            ws.Cell(row, 3).Value = groupNameMap.TryGetValue(t.group_id, out var gname) ? gname : "-";
+            ws.Cell(row, 4).Value = t.BoardId?.ToString() ?? "-";
+            ws.Cell(row, 5).Value = t.column_id.ToString();
+            ws.Cell(row, 6).Value = t.ColumnName ?? "-";
+            ws.Cell(row, 7).Value = t.title;
+            ws.Cell(row, 8).Value = t.description ?? "-";
+            ws.Cell(row, 9).Value = t.status ?? "-";
+            ws.Cell(row, 10).Value = t.priority ?? "-";
+            ws.Cell(row, 11).Value = t.due_date?.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+            ws.Cell(row, 12).Value = assigneeMap.TryGetValue(t.task_id, out var list) ? list : string.Empty;
+            ws.Cell(row, 13).Value = t.created_at.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+            ws.Cell(row, 14).Value = t.updated_at.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
             row++;
         }
 

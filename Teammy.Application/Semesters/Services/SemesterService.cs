@@ -124,8 +124,8 @@ public sealed class SemesterService(
     {
         void Check(DateOnly date, string fieldName)
         {
-            if (date.Year != semester.Year)
-                throw new ArgumentException($"{fieldName} must be semester year.");
+            if (date.Year < semester.Year - 1 || date.Year > semester.Year)
+                throw new ArgumentException($"{fieldName} must be within one year of semester year.");
 
             if (date >= semester.StartDate)
                 throw new ArgumentException($"{fieldName} must be before semester start date.");

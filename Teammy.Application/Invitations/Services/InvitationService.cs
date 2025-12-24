@@ -19,6 +19,7 @@ public sealed class InvitationService(
     IAppUrlProvider urlProvider,
     ITopicReadOnlyQueries topicQueries,
     ITopicWriteRepository topicWrite,
+    ISemesterReadOnlyQueries semesterQueries,
     IInvitationNotifier invitationNotifier,
     ActivityLogService activityLogService
 )
@@ -26,6 +27,7 @@ public sealed class InvitationService(
     private const string AppName = "TEAMMY";
     private readonly ITopicReadOnlyQueries _topicQueries = topicQueries;
     private readonly ITopicWriteRepository _topicWrite = topicWrite;
+    private readonly ISemesterReadOnlyQueries _semesterQueries = semesterQueries;
     private readonly IInvitationNotifier _invitationNotifier = invitationNotifier;
     private readonly ActivityLogService _activityLog = activityLogService;
 
@@ -103,6 +105,12 @@ public sealed class InvitationService(
         var detail = await groupQueries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
         if (string.Equals(detail.Status, "active", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Group is already active");
+
+        var policy = await _semesterQueries.GetPolicyAsync(detail.SemesterId, ct);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        if (policy is null || today < policy.TopicSelfSelectStart || today > policy.TopicSelfSelectEnd)
+            throw new InvalidOperationException("Topic self-select is closed");
+
         if (detail.TopicId.HasValue && detail.TopicId.Value != topicId)
             throw new InvalidOperationException("Group already assigned topic");
         var pendingTopicId = await queries.GetPendingMentorTopicAsync(groupId, ct);
