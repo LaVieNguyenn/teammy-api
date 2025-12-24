@@ -1,6 +1,5 @@
 using ClosedXML.Excel;
 using System.IO;
-using System.Linq;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Teammy.Application.Common.Dtos;
@@ -9,26 +8,22 @@ using Teammy.Application.Common.Interfaces;
 namespace Teammy.Api.Controllers;
 
 [ApiController]
-[Route("api/majors")]
-public sealed class MajorsController(IMajorReadOnlyQueries queries, IMajorWriteRepository writeRepo) : ControllerBase
+[Route("api/positions")]
+public sealed class PositionsController(
+    IPositionReadOnlyQueries read,
+    IPositionWriteRepository write,
+    IMajorReadOnlyQueries majors) : ControllerBase
 {
-    [HttpGet]
-    [AllowAnonymous]
-    public async Task<ActionResult> List(CancellationToken ct)
-    {
-        var majors = await queries.ListAsync(ct);
-        var shaped = majors.Select(m => new { majorId = m.MajorId, majorName = m.MajorName }).ToList();
-        return Ok(shaped);
-    }
+    public sealed record CreatePositionRequest(Guid MajorId, string PositionName);
+    public sealed record UpdatePositionRequest(Guid MajorId, string PositionName);
 
-    [HttpGet("{id:guid}")]
-    [AllowAnonymous]
-    public async Task<ActionResult> GetById([FromRoute] Guid id, CancellationToken ct)
+    [HttpGet]
+    [Authorize]
+    public async Task<ActionResult> List([FromQuery] Guid majorId, CancellationToken ct)
     {
-        var m = await queries.GetAsync(id, ct);
-        if (!m.HasValue) return NotFound();
-        var (majorId, majorName) = m.Value;
-        return Ok(new { majorId, majorName });
+        if (majorId == Guid.Empty) return BadRequest("majorId is required");
+        var list = await read.ListByMajorAsync(majorId, ct);
+        return Ok(list.Select(x => new { x.PositionId, x.PositionName, MajorId = majorId }));
     }
 
     [HttpGet("template")]
@@ -36,29 +31,30 @@ public sealed class MajorsController(IMajorReadOnlyQueries queries, IMajorWriteR
     public IActionResult DownloadTemplate()
     {
         using var wb = new XLWorkbook();
-        var ws = wb.AddWorksheet("Majors");
+        var ws = wb.AddWorksheet("Positions");
         ws.Cell(1, 1).Value = "Major";
+        ws.Cell(1, 2).Value = "Position";
         ws.Cell(2, 1).Value = "Software Engineering";
+        ws.Cell(2, 2).Value = "Backend Developer";
 
         using var stream = new MemoryStream();
         wb.SaveAs(stream);
         return File(stream.ToArray(),
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "MajorsImportTemplate.xlsx");
+            "PositionsImportTemplate.xlsx");
     }
-
-
-    public sealed record CreateMajorRequest(string Name);
-    public sealed record UpdateMajorRequest(string Name);
 
     [HttpPost]
     [Authorize(Roles = "admin")]
-    public async Task<ActionResult> Create([FromBody] CreateMajorRequest req, CancellationToken ct)
+    public async Task<ActionResult> Create([FromBody] CreatePositionRequest req, CancellationToken ct)
     {
+        if (req.MajorId == Guid.Empty) return BadRequest("MajorId is required.");
+        if (string.IsNullOrWhiteSpace(req.PositionName)) return BadRequest("PositionName is required.");
+
         try
         {
-            var id = await writeRepo.CreateAsync(req.Name, ct);
-            return CreatedAtAction(nameof(GetById), new { id }, new { id });
+            var id = await write.CreateAsync(req.MajorId, req.PositionName, ct);
+            return CreatedAtAction(nameof(List), new { majorId = req.MajorId }, new { positionId = id });
         }
         catch (ArgumentException ex) { return BadRequest(ex.Message); }
         catch (InvalidOperationException ex) { return Conflict(ex.Message); }
@@ -66,11 +62,15 @@ public sealed class MajorsController(IMajorReadOnlyQueries queries, IMajorWriteR
 
     [HttpPut("{id:guid}")]
     [Authorize(Roles = "admin")]
-    public async Task<ActionResult> Update([FromRoute] Guid id, [FromBody] UpdateMajorRequest req, CancellationToken ct)
+    public async Task<ActionResult> Update([FromRoute] Guid id, [FromBody] UpdatePositionRequest req, CancellationToken ct)
     {
+        if (id == Guid.Empty) return BadRequest("PositionId is required.");
+        if (req.MajorId == Guid.Empty) return BadRequest("MajorId is required.");
+        if (string.IsNullOrWhiteSpace(req.PositionName)) return BadRequest("PositionName is required.");
+
         try
         {
-            await writeRepo.UpdateAsync(id, req.Name, ct);
+            await write.UpdateAsync(id, req.MajorId, req.PositionName, ct);
             return NoContent();
         }
         catch (ArgumentException ex) { return BadRequest(ex.Message); }
@@ -82,12 +82,8 @@ public sealed class MajorsController(IMajorReadOnlyQueries queries, IMajorWriteR
     [Authorize(Roles = "admin")]
     public async Task<ActionResult> Delete([FromRoute] Guid id, CancellationToken ct)
     {
-        try
-        {
-            await writeRepo.DeleteAsync(id, ct);
-            return NoContent();
-        }
-        catch (KeyNotFoundException) { return NotFound(); }
+        await write.DeleteAsync(id, ct);
+        return NoContent();
     }
 
     [HttpPost("import")]
@@ -104,8 +100,8 @@ public sealed class MajorsController(IMajorReadOnlyQueries queries, IMajorWriteR
         if (ws is null) return BadRequest("No worksheet found.");
 
         var header = ReadHeader(ws);
-        if (!header.TryGetValue("major", out var majorCol))
-            return BadRequest("Columns required: Major");
+        if (!header.TryGetValue("major", out var majorCol) || !header.TryGetValue("position", out var posCol))
+            return BadRequest("Columns required: Major, Position");
 
         var errors = new List<ImportErrorDto>();
         var skippedReasons = new List<ImportErrorDto>();
@@ -118,20 +114,34 @@ public sealed class MajorsController(IMajorReadOnlyQueries queries, IMajorWriteR
         for (var r = 2; r <= lastRow; r++)
         {
             var majorName = ws.Cell(r, majorCol).GetString().Trim();
-            if (string.IsNullOrWhiteSpace(majorName)) continue;
+            var positionName = ws.Cell(r, posCol).GetString().Trim();
+            if (string.IsNullOrWhiteSpace(majorName) && string.IsNullOrWhiteSpace(positionName)) continue;
             total++;
 
-            var existing = await queries.FindMajorIdByNameAsync(majorName, ct);
-            if (existing.HasValue)
+            if (string.IsNullOrWhiteSpace(majorName) || string.IsNullOrWhiteSpace(positionName))
+            {
+                errors.Add(new ImportErrorDto(r, "Major and Position are required"));
+                continue;
+            }
+
+            var majorId = await majors.FindMajorIdByNameAsync(majorName, ct);
+            if (!majorId.HasValue)
+            {
+                errors.Add(new ImportErrorDto(r, $"Major not found: {majorName}"));
+                continue;
+            }
+
+            var existingId = await read.FindPositionIdByNameAsync(majorId.Value, positionName, ct);
+            if (existingId.HasValue)
             {
                 skipped++;
-                skippedReasons.Add(new ImportErrorDto(r, $"Major already exists: {majorName}"));
+                skippedReasons.Add(new ImportErrorDto(r, $"Position already exists for major: {majorName}"));
                 continue;
             }
 
             try
             {
-                await writeRepo.CreateAsync(majorName, ct);
+                await write.CreateAsync(majorId.Value, positionName, ct);
                 created++;
             }
             catch (Exception ex)

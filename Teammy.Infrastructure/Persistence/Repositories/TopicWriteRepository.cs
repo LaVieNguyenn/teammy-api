@@ -26,7 +26,6 @@ namespace Teammy.Infrastructure.Persistence.Repositories
         public async Task<Guid> CreateAsync(CreateTopicRequest req, Guid createdBy, CancellationToken ct)
         {
             var status = NormalizeStatus(req.Status);
-            var source = NormalizeSource(req.Source);
 
             var titleTrim = req.Title.Trim();
             var dup = await _db.topics.AsNoTracking()
@@ -44,8 +43,6 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 major_id    = req.MajorId,
                 title       = titleTrim,
                 description = string.IsNullOrWhiteSpace(req.Description) ? null : req.Description,
-                source      = source,
-                skills      = SerializeSkills(req.Skills),
                 status      = status,
                 created_by  = createdBy,
                 created_at  = DateTime.UtcNow
@@ -79,11 +76,8 @@ namespace Teammy.Infrastructure.Persistence.Repositories
 
             entity.title       = titleTrim;
             entity.description = string.IsNullOrWhiteSpace(req.Description) ? null : req.Description;
-            entity.source      = NormalizeSource(req.Source);
             entity.status      = status;
             entity.major_id    = req.MajorId;
-            if (req.Skills is not null)
-                entity.skills = SerializeSkills(req.Skills);
 
             await _db.SaveChangesAsync(ct);
         }

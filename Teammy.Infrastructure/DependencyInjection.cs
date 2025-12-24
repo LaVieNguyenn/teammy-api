@@ -85,6 +85,7 @@ public static class DependencyInjection
 
         // Positions
         services.AddScoped<IPositionReadOnlyQueries, PositionReadOnlyQueries>();
+        services.AddScoped<IPositionWriteRepository, PositionWriteRepository>();
 
         // Semesters
         services.AddScoped<ISemesterWriteRepository, SemesterWriteRepository>();

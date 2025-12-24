@@ -99,10 +99,8 @@ namespace Teammy.Application.Topics.Dtos
         Guid?  MajorId,
         string Title,
         string? Description,
-        string? Source,
         string Status,               // open/closed/archived
-        List<string> MentorEmails,
-        List<string>? Skills
+        List<string> MentorEmails
     );
 
     // Request update topic
@@ -110,10 +108,8 @@ namespace Teammy.Application.Topics.Dtos
         Guid?  MajorId,
         string Title,
         string? Description,
-        string? Source,
         string Status,               // open/closed/archived
-        List<string> MentorEmails,
-        List<string>? Skills
+        List<string> MentorEmails
     );
 
     public sealed record TopicImportResult(

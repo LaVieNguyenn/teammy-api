@@ -91,10 +91,8 @@ namespace Teammy.Api.Controllers
                     form.MajorId,
                     form.Title,
                     form.Description,
-                    form.Source,
                     form.Status,
-                    form.MentorEmails ?? new System.Collections.Generic.List<string>(),
-                    form.Skills);
+                    form.MentorEmails ?? new System.Collections.Generic.List<string>());
 
                 var id = await _service.CreateAsync(GetUserId(), req, ct);
 
@@ -130,10 +128,8 @@ namespace Teammy.Api.Controllers
                     form.MajorId,
                     form.Title,
                     form.Description,
-                    form.Source,
                     form.Status,
-                    form.MentorEmails ?? new System.Collections.Generic.List<string>(),
-                    form.Skills);
+                    form.MentorEmails ?? new System.Collections.Generic.List<string>());
 
                 await _service.UpdateAsync(id, req, ct);
 
@@ -161,10 +157,8 @@ namespace Teammy.Api.Controllers
             public Guid? MajorId { get; init; }
             public string Title { get; init; } = string.Empty;
             public string? Description { get; init; }
-            public string? Source { get; init; }
             public string Status { get; init; } = "open";
             public System.Collections.Generic.List<string>? MentorEmails { get; init; }
-            public System.Collections.Generic.List<string>? Skills { get; init; }
             public IFormFile? RegistrationFile { get; init; }
         }
 
@@ -173,10 +167,8 @@ namespace Teammy.Api.Controllers
             public Guid? MajorId { get; init; }
             public string Title { get; init; } = string.Empty;
             public string? Description { get; init; }
-            public string? Source { get; init; }
             public string Status { get; init; } = "open";
             public System.Collections.Generic.List<string>? MentorEmails { get; init; }
-            public System.Collections.Generic.List<string>? Skills { get; init; }
             public IFormFile? RegistrationFile { get; init; }
         }
 
