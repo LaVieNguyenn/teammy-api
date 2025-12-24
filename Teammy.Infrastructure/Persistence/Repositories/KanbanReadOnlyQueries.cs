@@ -98,11 +98,22 @@ public async Task<BoardVm?> GetBoardAsync(Guid groupId, CancellationToken ct)
 
 public async Task<IReadOnlyList<CommentVm>> GetCommentsAsync(Guid taskId, CancellationToken ct)
 {
-    var list = await db.comments.AsNoTracking()
-        .Where(c => c.task_id == taskId)
-        .OrderBy(c => c.created_at)
-        .Select(c => new CommentVm(c.comment_id, c.task_id, c.user_id, c.content, c.created_at))
-        .ToListAsync(ct);
+    var list = await (
+        from c in db.comments.AsNoTracking()
+        join u in db.users.AsNoTracking() on c.user_id equals u.user_id
+        where c.task_id == taskId
+        orderby c.created_at
+        select new CommentVm(
+            c.comment_id,
+            c.task_id,
+            c.user_id,
+            c.content,
+            c.created_at,
+            u.display_name,
+            u.email,
+            u.avatar_url
+        )
+    ).ToListAsync(ct);
     return list; // List<CommentVm> implements IReadOnlyList<CommentVm>
 }
 

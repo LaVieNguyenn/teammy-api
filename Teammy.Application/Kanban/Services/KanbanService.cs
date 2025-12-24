@@ -130,8 +130,8 @@ public sealed class KanbanService(
 
     public async Task<IReadOnlyList<SharedFileVm>> GetFilesByTaskAsync(Guid groupId, Guid taskId, Guid currentUserId, CancellationToken ct)
     {
-        if (!await access.IsMemberAsync(groupId, currentUserId, ct))
-            throw new UnauthorizedAccessException("Not a group member");
+        if (!await HasMemberOrMentorAccess(groupId, currentUserId, ct))
+            throw new UnauthorizedAccessException("Not a group member or mentor");
         return await read.GetFilesByTaskAsync(taskId, ct);
     }
 

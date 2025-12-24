@@ -35,8 +35,18 @@ public sealed class GroupService(
     {
         if (string.IsNullOrWhiteSpace(req.Name))
             throw new ArgumentException("Name is required");
+        var normalizedName = req.Name.Trim();
         var semesterId = await queries.GetActiveSemesterIdAsync(ct)
             ?? throw new InvalidOperationException("No active semester available");
+
+        var policy = await _semesterQueries.GetPolicyAsync(semesterId, ct);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        if (policy is null || today < policy.TeamSelfSelectStart || today > policy.TeamSelfSelectEnd)
+            throw new InvalidOperationException("Team self-select is closed");
+
+        var nameExists = await queries.GroupNameExistsAsync(semesterId, normalizedName, null, ct);
+        if (nameExists)
+            throw new InvalidOperationException("Group name already exists in this semester");
 
         var (minSize, maxSize) = await queries.GetGroupSizePolicyAsync(semesterId, ct);
         if (req.MaxMembers < minSize || req.MaxMembers > maxSize)
@@ -52,7 +62,7 @@ public sealed class GroupService(
         if (!majorId.HasValue)
             throw new InvalidOperationException("User hasn't major");
 
-        var groupId = await repo.CreateGroupAsync(semesterId, null, majorId, req.Name, req.Description, req.MaxMembers, null, ct);
+        var groupId = await repo.CreateGroupAsync(semesterId, null, majorId, normalizedName, req.Description, req.MaxMembers, null, ct);
         await repo.AddMembershipAsync(groupId, creatorUserId, semesterId, "leader", ct);
         await _postRepo.DeleteProfilePostsForUserAsync(creatorUserId, semesterId, ct);
         await _postRepo.WithdrawPendingApplicationsForUserInSemesterAsync(creatorUserId, semesterId, ct);

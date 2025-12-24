@@ -12,6 +12,7 @@ public sealed class ReportRequest
     public bool IncludeGroupMembers { get; init; } = true;
     public bool IncludeRecruitmentPosts { get; init; } = true;
     public bool IncludeMilestones { get; init; }
+    public bool IncludeTasks { get; init; }
     public bool IncludeActivityLogs { get; init; }
     public DateTime? StartDateUtc { get; init; }
     public DateTime? EndDateUtc { get; init; }

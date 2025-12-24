@@ -30,9 +30,17 @@ public sealed class MentorFeedbackService(
     public async Task<Guid> SubmitAsync(Guid groupId, Guid mentorUserId, SubmitGroupFeedbackRequest req, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(req);
+        if (string.IsNullOrWhiteSpace(req.Category))
+            throw new ArgumentException("Category is required");
         if (string.IsNullOrWhiteSpace(req.Summary))
             throw new ArgumentException("Summary is required");
-        if (req.Rating.HasValue && (req.Rating < 1 || req.Rating > 5))
+        if (string.IsNullOrWhiteSpace(req.Details))
+            throw new ArgumentException("Details is required");
+        if (string.IsNullOrWhiteSpace(req.Blockers))
+            throw new ArgumentException("Blockers is required");
+        if (string.IsNullOrWhiteSpace(req.NextSteps))
+            throw new ArgumentException("NextSteps is required");
+        if (!req.Rating.HasValue || req.Rating < 1 || req.Rating > 5)
             throw new ArgumentException("Rating must be between 1 and 5");
 
         var group = await groupQueries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
