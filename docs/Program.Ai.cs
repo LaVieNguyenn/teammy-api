@@ -1009,7 +1009,7 @@ Schema:
     if (mode is "personal_post")
         return common + "\nFocus: Match student desired position to group role gaps; avoid overrepresented roles. GROUP_NAME is a team name, not a person.\n";
 
-    return common + "\nFocus: Topic match to query goals and skills overlap.\n";
+    return common + "\nFocus: Explain why this topic fits the team (skills/goals), not a paraphrase.\n- If SUMMARY exists, mention one concrete detail from it AND link to team fit.\n- If MATCHING_SKILLS is \"n/a\", avoid skills and focus on team goals/need.\n- Avoid restating the topic description verbatim.\n";
 }
 
 static string BuildReasonBatchSystemPrompt(string mode)
@@ -1036,7 +1036,7 @@ Return schema:
     if (mode is "personal_post")
         return common + "\nFocus: Match student desired position to group role gaps; avoid overrepresented roles. GROUP_NAME is a team name, not a person.\n";
 
-    return common + "\nFocus: Topic match to query goals and skills overlap.\n";
+    return common + "\nFocus: Explain why this topic fits the team (skills/goals), not a paraphrase.\n- If SUMMARY exists, mention one concrete detail from it AND link to team fit.\n- If MATCHING_SKILLS is \"n/a\", avoid skills and focus on team goals/need.\n- Avoid restating the topic description verbatim.\n";
 }
 
 static string NormalizeReasonFinal(string summary)
@@ -1153,7 +1153,8 @@ static string BuildReasonSnippetForLlm(string seedSnippet)
             || line.StartsWith("GPA:", StringComparison.OrdinalIgnoreCase)
             || line.StartsWith("TEAM_MIX:", StringComparison.OrdinalIgnoreCase)
             || line.StartsWith("SKILLS:", StringComparison.OrdinalIgnoreCase)
-            || line.StartsWith("MATCHING_SKILLS:", StringComparison.OrdinalIgnoreCase))
+            || line.StartsWith("MATCHING_SKILLS:", StringComparison.OrdinalIgnoreCase)
+            || line.StartsWith("SUMMARY:", StringComparison.OrdinalIgnoreCase))
         {
             kept.Add(line);
         }
