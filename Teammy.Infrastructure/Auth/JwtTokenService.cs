@@ -26,6 +26,14 @@ public sealed class JwtTokenService(IConfiguration cfg) : ITokenService
             new Claim(ClaimTypes.Name, displayName),
             new Claim(ClaimTypes.Role, role),
         };
+        if (semester is not null)
+        {
+            claims.Add(new Claim("semester_id", semester.SemesterId.ToString()));
+            claims.Add(new Claim("semester_season", semester.Season));
+            claims.Add(new Claim("semester_year", semester.Year.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            claims.Add(new Claim("semester_start", semester.StartDate.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)));
+            claims.Add(new Claim("semester_end", semester.EndDate.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)));
+        }
         var token = new JwtSecurityToken(
             issuer: issuer,
             audience: audience,
