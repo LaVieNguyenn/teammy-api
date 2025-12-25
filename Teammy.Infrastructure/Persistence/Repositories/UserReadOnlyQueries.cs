@@ -284,6 +284,18 @@ namespace Teammy.Infrastructure.Persistence.Repositories
 
             return await q.AsNoTracking().FirstOrDefaultAsync(ct);
         }
+
+        public Task<Guid?> GetUserIdByEmailAsync(string email, CancellationToken ct)
+        {
+            if (string.IsNullOrWhiteSpace(email))
+                return Task.FromResult<Guid?>(null);
+
+            var normalized = email.Trim().ToLowerInvariant();
+            return _db.users.AsNoTracking()
+                .Where(u => u.email != null && u.email.ToLower() == normalized)
+                .Select(u => (Guid?)u.user_id)
+                .FirstOrDefaultAsync(ct);
+        }
         public async Task<IReadOnlyList<AdminMajorStatsDto>> GetMajorStatsAsync(Guid semesterId, CancellationToken ct)
         {
             var activeStatuses = new[] { "member", "leader" };

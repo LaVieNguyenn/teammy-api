@@ -157,10 +157,20 @@ public sealed class AiGatewayController(AiGatewayClient gateway, AppDbContext db
 
         // Prefer mv_students_pool if available (cleaned skills/primary role)
         var pool = await (from p in db.mv_students_pools.AsNoTracking()
+                          where p.user_id.HasValue && p.semester_id.HasValue
+                          join ss in db.student_semesters.AsNoTracking()
+                              on new { user_id = p.user_id.Value, semester_id = p.semester_id.Value } equals new { ss.user_id, ss.semester_id }
+                          where ss.is_current && p.user_id == userId
+                          select new { p.skills, p.primary_role, p.desired_position_name })
+            .FirstOrDefaultAsync(ct);
+        if (pool is null)
+        {
+            pool = await (from p in db.mv_students_pools.AsNoTracking()
                           join s in db.semesters.AsNoTracking() on p.semester_id equals s.semester_id
                           where s.is_active && p.user_id == userId
                           select new { p.skills, p.primary_role, p.desired_position_name })
-            .FirstOrDefaultAsync(ct);
+                .FirstOrDefaultAsync(ct);
+        }
 
         var skills = ParseSkillsList(pool?.skills) ?? ParseSkillsList(user.skills) ?? new List<string>();
         skills = skills

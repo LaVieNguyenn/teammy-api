@@ -219,7 +219,15 @@ namespace Teammy.Api.Controllers
             CancellationToken ct)
         {
             if (request is null || request.Rows is null)
-                return BadRequest("Rows payload is required.");
+            {
+                var row = new TopicImportRowValidation(
+                    RowNumber: 0,
+                    IsValid: false,
+                    Columns: new[] { new TopicColumnValidation("Rows", false, "Rows payload is required.") },
+                    Messages: new[] { "Rows payload is required." });
+                var summary = new TopicValidationSummary(0, 0, 1);
+                return Ok(new TopicImportValidationResult(summary, new[] { row }));
+            }
 
             var result = await _service.ValidateImportAsync(request, ct);
             return Ok(result);

@@ -96,6 +96,18 @@ CREATE TABLE IF NOT EXISTS teammy.semester_policy (
   desired_group_size_max  INT  NOT NULL DEFAULT 6 CHECK (desired_group_size_max >= 2)
 );
 
+CREATE TABLE IF NOT EXISTS teammy.student_semesters (
+  user_id     UUID NOT NULL REFERENCES teammy.users(user_id) ON DELETE CASCADE,
+  semester_id UUID NOT NULL REFERENCES teammy.semesters(semester_id) ON DELETE CASCADE,
+  is_current  BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, semester_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_student_semesters_current
+  ON teammy.student_semesters (user_id)
+  WHERE is_current = TRUE;
+
 -- ========== 3) Topics & Topic-Mentor ==========
 CREATE TABLE IF NOT EXISTS teammy.topics (
   topic_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -619,7 +631,7 @@ FROM teammy.topics t
 LEFT JOIN used u ON u.topic_id = t.topic_id
 WHERE t.status='open';
 
--- Students pool (active semester, not in group)
+-- Students pool (current semester per student, not in group)
 DROP MATERIALIZED VIEW IF EXISTS teammy.mv_students_pool;
 
 CREATE MATERIALIZED VIEW teammy.mv_students_pool AS
@@ -656,7 +668,8 @@ SELECT
 FROM teammy.users u
 JOIN teammy.user_roles ur ON ur.user_id = u.user_id
 JOIN teammy.roles r ON r.role_id = ur.role_id AND r.name = 'student'
-JOIN teammy.semesters s ON s.is_active = TRUE
+JOIN teammy.student_semesters ss ON ss.user_id = u.user_id AND ss.is_current = TRUE
+JOIN teammy.semesters s ON s.semester_id = ss.semester_id
 LEFT JOIN teammy.position_list p ON p.position_id = u.desired_position_id
 LEFT JOIN teammy.group_members gm
   ON gm.user_id = u.user_id

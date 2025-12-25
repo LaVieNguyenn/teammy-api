@@ -16,7 +16,8 @@ public sealed record ImportUserRow(
     string? MajorName,  
     string? Gender,    
     string? StudentCode,
-    double? Gpa
+    double? Gpa,
+    string? SemesterCode
 );
 
 public sealed record UserImportValidationRequest(
@@ -31,7 +32,8 @@ public sealed record UserImportPayloadRow(
     string? MajorName,
     string? Gender,
     string? StudentCode,
-    double? Gpa
+    double? Gpa,
+    string? SemesterCode
 );
 
 public sealed record UserImportValidationResult(

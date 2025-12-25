@@ -15,7 +15,8 @@ public sealed class ProfilePostService(
     IUserReadOnlyQueries userQueries,
     IEmailSender emailSender,
     IAppUrlProvider urlProvider,
-    IInvitationNotifier invitationNotifier)
+    IInvitationNotifier invitationNotifier,
+    IStudentSemesterReadOnlyQueries studentSemesterQueries)
 {
     private readonly IGroupReadOnlyQueries _groupQueries = groupQueries;
     private readonly IRecruitmentPostReadOnlyQueries _queries = queries;
@@ -23,12 +24,15 @@ public sealed class ProfilePostService(
     private readonly IEmailSender _emailSender = emailSender;
     private readonly IAppUrlProvider _urlProvider = urlProvider;
     private readonly IInvitationNotifier _invitationNotifier = invitationNotifier;
+    private readonly IStudentSemesterReadOnlyQueries _studentSemesters = studentSemesterQueries;
     private const string AppName = "TEAMMY";
 
     public async Task<Guid> CreateAsync(Guid currentUserId, CreateProfilePostRequest req, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(req.Title)) throw new ArgumentException("Title is required");
-        var semesterId = await queries.GetActiveSemesterIdAsync(ct) ?? throw new InvalidOperationException("No active semester");
+        var semesterId = await _studentSemesters.GetCurrentSemesterIdAsync(currentUserId, ct)
+            ?? await queries.GetActiveSemesterIdAsync(ct)
+            ?? throw new InvalidOperationException("No current semester");
         var membership = await groupQueries.CheckUserGroupAsync(currentUserId, semesterId, includePending: false, ct);
         if (membership.HasGroup)
             throw new InvalidOperationException("Members of groups cannot create profile posts");

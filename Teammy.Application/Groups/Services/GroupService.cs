@@ -16,7 +16,8 @@ public sealed class GroupService(
     IRecruitmentPostRepository postRepo,
     ActivityLogService activityLogService,
     IEmailSender emailSender,
-    ISemesterReadOnlyQueries semesterQueries)
+    ISemesterReadOnlyQueries semesterQueries,
+    IStudentSemesterReadOnlyQueries studentSemesterQueries)
 {
     private const string AppName = "TEAMMY";
     private readonly IUserReadOnlyQueries _userQueries = userQueries;
@@ -24,6 +25,7 @@ public sealed class GroupService(
     private readonly ActivityLogService _activityLog = activityLogService;
     private readonly IEmailSender _emailSender = emailSender;
     private readonly ISemesterReadOnlyQueries _semesterQueries = semesterQueries;
+    private readonly IStudentSemesterReadOnlyQueries _studentSemesters = studentSemesterQueries;
     private readonly Dictionary<Guid, SemesterPolicyDto?> _semesterPolicyCache = new();
     private readonly Dictionary<Guid, SemesterDetailDto?> _semesterDetailCache = new();
 
@@ -31,8 +33,9 @@ public sealed class GroupService(
     {
         if (string.IsNullOrWhiteSpace(req.Name))
             throw new ArgumentException("Name is required");
-        var semesterId = await queries.GetActiveSemesterIdAsync(ct)
-            ?? throw new InvalidOperationException("No active semester available");
+        var semesterId = await _studentSemesters.GetCurrentSemesterIdAsync(creatorUserId, ct)
+            ?? await queries.GetActiveSemesterIdAsync(ct)
+            ?? throw new InvalidOperationException("No current semester available");
 
         var (minSize, maxSize) = await queries.GetGroupSizePolicyAsync(semesterId, ct);
         if (req.MaxMembers < minSize || req.MaxMembers > maxSize)

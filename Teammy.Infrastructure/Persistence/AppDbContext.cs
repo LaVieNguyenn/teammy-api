@@ -67,6 +67,8 @@ public partial class AppDbContext : DbContext
 
     public virtual DbSet<skill_dictionary> skill_dictionaries { get; set; }
 
+    public virtual DbSet<student_semester> student_semesters { get; set; }
+
     public virtual DbSet<task> tasks { get; set; }
 
     public virtual DbSet<task_assignment> task_assignments { get; set; }
@@ -629,6 +631,30 @@ public partial class AppDbContext : DbContext
             entity.HasOne(d => d.semester).WithOne(p => p.semester_policy)
                 .HasForeignKey<semester_policy>(d => d.semester_id)
                 .HasConstraintName("semester_policy_semester_id_fkey");
+        });
+
+        modelBuilder.Entity<student_semester>(entity =>
+        {
+            entity.HasKey(e => new { e.user_id, e.semester_id }).HasName("student_semesters_pkey");
+
+            entity.ToTable("student_semesters", "teammy");
+
+            entity.HasIndex(e => e.user_id, "ux_student_semesters_current")
+                .IsUnique()
+                .HasFilter("(is_current = true)");
+
+            entity.Property(e => e.is_current).HasDefaultValue(false);
+            entity.Property(e => e.created_at).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.user).WithMany()
+                .HasForeignKey(d => d.user_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("student_semesters_user_id_fkey");
+
+            entity.HasOne(d => d.semester).WithMany()
+                .HasForeignKey(d => d.semester_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("student_semesters_semester_id_fkey");
         });
 
         modelBuilder.Entity<shared_file>(entity =>

@@ -80,6 +80,7 @@ public sealed class UserWriteRepository : IUserWriteRepository
 
     public async Task UpdateUserAsync(
         Guid userId,
+        string? email,
         string displayName,
         string? studentCode,
         string? gender,
@@ -93,6 +94,8 @@ public sealed class UserWriteRepository : IUserWriteRepository
         if (entity is null)
             throw new KeyNotFoundException("User not found");
 
+        if (!string.IsNullOrWhiteSpace(email))
+            entity.email = email;
         entity.display_name = displayName;
         entity.student_code = studentCode;
         entity.gender = gender;

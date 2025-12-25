@@ -151,10 +151,17 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
         Guid? semId = semesterId;
         if (!semId.HasValue)
         {
-            semId = await db.semesters.AsNoTracking()
-                .Where(s => s.is_active)
+            semId = await db.student_semesters.AsNoTracking()
+                .Where(s => s.user_id == userId && s.is_current)
                 .Select(s => (Guid?)s.semester_id)
                 .FirstOrDefaultAsync(ct);
+            if (!semId.HasValue)
+            {
+                semId = await db.semesters.AsNoTracking()
+                    .Where(s => s.is_active)
+                    .Select(s => (Guid?)s.semester_id)
+                    .FirstOrDefaultAsync(ct);
+            }
         }
 
         if (!semId.HasValue)
@@ -249,7 +256,17 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
     {
         Guid? semId = semesterId;
         if (!semId.HasValue)
-            semId = await db.semesters.AsNoTracking().Where(s => s.is_active).Select(s => (Guid?)s.semester_id).FirstOrDefaultAsync(ct);
+        {
+            semId = await db.student_semesters.AsNoTracking()
+                .Where(s => s.user_id == userId && s.is_current)
+                .Select(s => (Guid?)s.semester_id)
+                .FirstOrDefaultAsync(ct);
+            if (!semId.HasValue)
+                semId = await db.semesters.AsNoTracking()
+                    .Where(s => s.is_active)
+                    .Select(s => (Guid?)s.semester_id)
+                    .FirstOrDefaultAsync(ct);
+        }
 
         if (!semId.HasValue)
             return new Teammy.Application.Groups.Dtos.UserGroupCheckDto(false, Guid.Empty, null, null);
