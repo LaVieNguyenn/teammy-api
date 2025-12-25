@@ -149,6 +149,7 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
         Guid? semesterId,
         CancellationToken ct)
     {
+        var hasExplicitSemesterId = semesterId.HasValue;
         Guid? semId = semesterId;
         if (!semId.HasValue)
         {
@@ -156,50 +157,81 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
                 .Where(s => s.user_id == userId && s.is_current)
                 .Select(s => (Guid?)s.semester_id)
                 .FirstOrDefaultAsync(ct);
-            if (!semId.HasValue)
-            {
-                semId = await db.semesters.AsNoTracking()
-                    .Where(s => s.is_active)
-                    .Select(s => (Guid?)s.semester_id)
-                    .FirstOrDefaultAsync(ct);
-            }
+        if (!semId.HasValue)
+        {
+            semId = await db.student_semesters.AsNoTracking()
+                .Where(s => s.user_id == userId && s.is_current)
+                .Select(s => (Guid?)s.semester_id)
+                .FirstOrDefaultAsync(ct);
         }
 
         if (!semId.HasValue)
-            return Array.Empty<MyGroupDto>();
+        {
+            semId = await db.semesters.AsNoTracking()
+                .Where(s => s.is_active)
+                .Select(s => (Guid?)s.semester_id)
+                .FirstOrDefaultAsync(ct);
+        }
+        }
 
         var activeStatuses = new[] { "member", "leader" };
 
-        var memberGroups = await (
-            from m in db.group_members.AsNoTracking()
-            join g in db.groups.AsNoTracking() on m.group_id equals g.group_id
-            where m.user_id == userId && g.semester_id == semId.Value
-            select new MyGroupDto(
-                g.group_id,
-                g.semester_id,
-                g.name,
-                g.status,
-                g.max_members,
-                db.group_members.Count(x => x.group_id == g.group_id && activeStatuses.Contains(x.status)),
-                m.status
-            )
-        ).ToListAsync(ct);
+        var memberGroups = new List<MyGroupDto>();
+        var mentorGroups = new List<MyGroupDto>();
 
-        var mentorGroups = await (
-            from g in db.groups.AsNoTracking()
-            where g.semester_id == semId.Value
-                  && (g.mentor_id == userId
-                      || (g.mentor_ids != null && g.mentor_ids.Contains(userId)))
-            select new MyGroupDto(
-                g.group_id,
-                g.semester_id,
-                g.name,
-                g.status,
-                g.max_members,
-                db.group_members.Count(x => x.group_id == g.group_id && activeStatuses.Contains(x.status)),
-                "mentor"
-            )
-        ).ToListAsync(ct);
+        if (semId.HasValue)
+        {
+            memberGroups = await (
+                from m in db.group_members.AsNoTracking()
+                join g in db.groups.AsNoTracking() on m.group_id equals g.group_id
+                where m.user_id == userId && g.semester_id == semId.Value
+                select new MyGroupDto(
+                    g.group_id,
+                    g.semester_id,
+                    g.name,
+                    g.status,
+                    g.max_members,
+                    db.group_members.Count(x => x.group_id == g.group_id && activeStatuses.Contains(x.status)),
+                    m.status
+                )
+            ).ToListAsync(ct);
+        }
+
+        if (hasExplicitSemesterId && semId.HasValue)
+        {
+            mentorGroups = await (
+                from g in db.groups.AsNoTracking()
+                where g.semester_id == semId.Value
+                      && (g.mentor_id == userId
+                          || (g.mentor_ids != null && g.mentor_ids.Contains(userId)))
+                select new MyGroupDto(
+                    g.group_id,
+                    g.semester_id,
+                    g.name,
+                    g.status,
+                    g.max_members,
+                    db.group_members.Count(x => x.group_id == g.group_id && activeStatuses.Contains(x.status)),
+                    "mentor"
+                )
+            ).ToListAsync(ct);
+        }
+        else
+        {
+            mentorGroups = await (
+                from g in db.groups.AsNoTracking()
+                where g.mentor_id == userId
+                      || (g.mentor_ids != null && g.mentor_ids.Contains(userId))
+                select new MyGroupDto(
+                    g.group_id,
+                    g.semester_id,
+                    g.name,
+                    g.status,
+                    g.max_members,
+                    db.group_members.Count(x => x.group_id == g.group_id && activeStatuses.Contains(x.status)),
+                    "mentor"
+                )
+            ).ToListAsync(ct);
+        }
 
         if (memberGroups.Count == 0 && mentorGroups.Count == 0)
             return Array.Empty<MyGroupDto>();

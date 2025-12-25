@@ -18,7 +18,8 @@ public sealed class ProfilePostService(
     IAppUrlProvider urlProvider,
     IInvitationRepository invitationRepo,
     IInvitationNotifier invitationNotifier,
-    IStudentSemesterReadOnlyQueries studentSemesterQueries)
+    IStudentSemesterReadOnlyQueries studentSemesterQueries,
+    ISemesterReadOnlyQueries semesterQueries)
 {
     private readonly IGroupReadOnlyQueries _groupQueries = groupQueries;
     private readonly IRecruitmentPostReadOnlyQueries _queries = queries;
@@ -28,6 +29,7 @@ public sealed class ProfilePostService(
     private readonly IInvitationRepository _invitationRepo = invitationRepo;
     private readonly IInvitationNotifier _invitationNotifier = invitationNotifier;
     private readonly IStudentSemesterReadOnlyQueries _studentSemesters = studentSemesterQueries;
+    private readonly ISemesterReadOnlyQueries _semesterQueries = semesterQueries;
     private const string AppName = "TEAMMY";
 
     public async Task<Guid> CreateAsync(Guid currentUserId, CreateProfilePostRequest req, CancellationToken ct)
@@ -36,6 +38,10 @@ public sealed class ProfilePostService(
         var semesterId = await _studentSemesters.GetCurrentSemesterIdAsync(currentUserId, ct)
             ?? await queries.GetActiveSemesterIdAsync(ct)
             ?? throw new InvalidOperationException("No current semester");
+        var policy = await _semesterQueries.GetPolicyAsync(semesterId, ct);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        if (policy is null || today < policy.TeamSelfSelectStart || today > policy.TeamSelfSelectEnd)
+            throw new InvalidOperationException("Profile-post time is closed");
         var membership = await groupQueries.CheckUserGroupAsync(currentUserId, semesterId, includePending: false, ct);
         if (membership.HasGroup)
             throw new InvalidOperationException("Members of groups cannot create profile posts");
