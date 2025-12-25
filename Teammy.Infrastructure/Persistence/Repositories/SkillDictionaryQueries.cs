@@ -57,6 +57,18 @@ public sealed class SkillDictionaryQueries : ISkillDictionaryReadOnlyQueries
         return entity is null ? null : Map(entity);
     }
 
+    public async Task<string?> GetTokenByAliasAsync(string alias, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(alias))
+            return null;
+
+        var normalized = alias.Trim();
+        return await _db.skill_aliases.AsNoTracking()
+            .Where(x => x.alias == normalized)
+            .Select(x => x.token)
+            .FirstOrDefaultAsync(ct);
+    }
+
     private static SkillDictionaryDto Map(Persistence.Models.skill_dictionary entity)
     {
         var aliases = entity.skill_aliases

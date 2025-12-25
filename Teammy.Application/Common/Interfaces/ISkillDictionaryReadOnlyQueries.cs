@@ -9,4 +9,5 @@ public interface ISkillDictionaryReadOnlyQueries
 {
     Task<IReadOnlyList<SkillDictionaryDto>> ListAsync(string? role, string? major, CancellationToken ct);
     Task<SkillDictionaryDto?> GetByTokenAsync(string token, CancellationToken ct);
+    Task<string?> GetTokenByAliasAsync(string alias, CancellationToken ct);
 }

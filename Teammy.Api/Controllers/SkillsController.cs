@@ -4,8 +4,10 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ClosedXML.Excel;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Npgsql;
 using Teammy.Application.Common.Dtos;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Skills.Dtos;
@@ -20,7 +22,9 @@ public sealed class SkillsController : ControllerBase
     private readonly SkillDictionaryService _service;
     private readonly ISkillDictionaryWriteRepository _write;
 
-    public SkillsController(SkillDictionaryService service, ISkillDictionaryWriteRepository write)
+    public SkillsController(
+        SkillDictionaryService service,
+        ISkillDictionaryWriteRepository write)
     {
         _service = service;
         _write = write;
@@ -73,8 +77,23 @@ public sealed class SkillsController : ControllerBase
         [FromBody] CreateSkillDictionaryRequest request,
         CancellationToken ct)
     {
-        var dto = await _service.CreateAsync(request, ct);
-        return CreatedAtAction(nameof(Get), new { token = dto.Token }, dto);
+        try
+        {
+            var dto = await _service.CreateAsync(request, ct);
+            return CreatedAtAction(nameof(Get), new { token = dto.Token }, dto);
+        }
+        catch (ArgumentException ex)
+        {
+            return Ok(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Ok(new { error = ex.Message });
+        }
+        catch (DbUpdateException ex)
+        {
+            return Ok(new { error = MapSkillDbError(ex) });
+        }
     }
 
     [HttpPut("{token}")]
@@ -84,16 +103,42 @@ public sealed class SkillsController : ControllerBase
         [FromBody] UpdateSkillDictionaryRequest request,
         CancellationToken ct)
     {
-        var dto = await _service.UpdateAsync(token, request, ct);
-        return Ok(dto);
+        try
+        {
+            var dto = await _service.UpdateAsync(token, request, ct);
+            return Ok(dto);
+        }
+        catch (ArgumentException ex)
+        {
+            return Ok(new { error = ex.Message });
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return Ok(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Ok(new { error = ex.Message });
+        }
+        catch (DbUpdateException ex)
+        {
+            return Ok(new { error = MapSkillDbError(ex) });
+        }
     }
 
     [HttpDelete("{token}")]
     [Authorize(Roles = "admin")]
     public async Task<IActionResult> Delete(string token, CancellationToken ct)
     {
-        await _service.DeleteAsync(token, ct);
-        return NoContent();
+        try
+        {
+            await _service.DeleteAsync(token, ct);
+            return NoContent();
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return Ok(new { error = ex.Message });
+        }
     }
 
     [HttpPost("import")]
@@ -101,19 +146,22 @@ public sealed class SkillsController : ControllerBase
     [Consumes("multipart/form-data")]
     public async Task<ActionResult<ImportResultDto>> Import(IFormFile file, CancellationToken ct)
     {
+        static ImportResultDto ErrorResult(string message)
+            => new(0, 0, 0, 0, new[] { new ImportErrorDto(0, message) }, Array.Empty<ImportErrorDto>());
+
         if (file is null || file.Length == 0)
-            return BadRequest("file is required");
+            return Ok(ErrorResult("file is required"));
 
         await using var stream = file.OpenReadStream();
         using var wb = new XLWorkbook(stream);
         var ws = wb.Worksheets.FirstOrDefault();
-        if (ws is null) return BadRequest("No worksheet found.");
+        if (ws is null) return Ok(ErrorResult("No worksheet found."));
 
         var header = ReadHeader(ws);
         if (!header.TryGetValue("token", out var tokenCol)
             || !header.TryGetValue("role", out var roleCol)
             || !header.TryGetValue("major", out var majorCol))
-            return BadRequest("Columns required: Token, Role, Major, Aliases");
+            return Ok(ErrorResult("Columns required: Token, Role, Major, Aliases"));
 
         header.TryGetValue("aliases", out var aliasCol);
 
@@ -123,6 +171,8 @@ public sealed class SkillsController : ControllerBase
         var created = 0;
         var updated = 0;
         var skipped = 0;
+        var seenTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenAliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         var lastRow = ws.LastRowUsed()?.RowNumber() ?? 1;
         for (var r = 2; r <= lastRow; r++)
@@ -143,18 +193,57 @@ public sealed class SkillsController : ControllerBase
             }
 
             var aliases = ParseAliases(rawAliases);
+            if (!seenTokens.Add(token))
+            {
+                errors.Add(new ImportErrorDto(r, $"Duplicate token in file: {token}"));
+                continue;
+            }
+
+            var aliasConflict = false;
+            foreach (var alias in aliases)
+            {
+                if (seenAliases.TryGetValue(alias, out var existingToken)
+                    && !string.Equals(existingToken, token, StringComparison.OrdinalIgnoreCase))
+                {
+                    errors.Add(new ImportErrorDto(r, $"Alias '{alias}' already used by token '{existingToken}' in file."));
+                    aliasConflict = true;
+                    break;
+                }
+
+                seenAliases[alias] = token;
+            }
+
+            if (aliasConflict)
+                continue;
+
             try
             {
                 if (await _write.TokenExistsAsync(token, ct))
                 {
-                    await _write.UpdateAsync(token, role, major, aliases, ct);
+                    await _service.UpdateAsync(token, new UpdateSkillDictionaryRequest(role, major, aliases), ct);
                     updated++;
                 }
                 else
                 {
-                    await _write.CreateAsync(token, role, major, aliases, ct);
+                    await _service.CreateAsync(new CreateSkillDictionaryRequest(token, role, major, aliases), ct);
                     created++;
                 }
+            }
+            catch (InvalidOperationException ex)
+            {
+                errors.Add(new ImportErrorDto(r, ex.Message));
+            }
+            catch (ArgumentException ex)
+            {
+                errors.Add(new ImportErrorDto(r, ex.Message));
+            }
+            catch (KeyNotFoundException ex)
+            {
+                errors.Add(new ImportErrorDto(r, ex.Message));
+            }
+            catch (DbUpdateException ex)
+            {
+                errors.Add(new ImportErrorDto(r, MapSkillDbError(ex)));
             }
             catch (Exception ex)
             {
@@ -186,5 +275,19 @@ public sealed class SkillsController : ControllerBase
             .Where(x => x.Length > 0)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private static string MapSkillDbError(DbUpdateException ex)
+    {
+        if (ex.InnerException is PostgresException pg && pg.SqlState == PostgresErrorCodes.UniqueViolation)
+        {
+            if (string.Equals(pg.ConstraintName, "skill_aliases_pkey", StringComparison.OrdinalIgnoreCase))
+                return "Alias already exists for another skill.";
+            if (string.Equals(pg.ConstraintName, "skill_dictionary_pkey", StringComparison.OrdinalIgnoreCase))
+                return "Skill token already exists.";
+            return "Duplicate value violates unique constraint.";
+        }
+
+        return "Failed to save skill changes.";
     }
 }

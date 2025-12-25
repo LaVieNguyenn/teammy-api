@@ -48,42 +48,57 @@ public sealed class PositionsController(
     [Authorize(Roles = "admin")]
     public async Task<ActionResult> Create([FromBody] CreatePositionRequest req, CancellationToken ct)
     {
-        if (req.MajorId == Guid.Empty) return BadRequest("MajorId is required.");
-        if (string.IsNullOrWhiteSpace(req.PositionName)) return BadRequest("PositionName is required.");
+        if (req.MajorId == Guid.Empty) return Ok(new { error = "MajorId is required." });
+        if (string.IsNullOrWhiteSpace(req.PositionName)) return Ok(new { error = "PositionName is required." });
+
+        var major = await majors.GetAsync(req.MajorId, ct);
+        if (major is null)
+            return Ok(new { error = "Major not found." });
 
         try
         {
             var id = await write.CreateAsync(req.MajorId, req.PositionName, ct);
             return CreatedAtAction(nameof(List), new { majorId = req.MajorId }, new { positionId = id });
         }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
-        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+        catch (ArgumentException ex) { return Ok(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return Ok(new { error = ex.Message }); }
     }
 
     [HttpPut("{id:guid}")]
     [Authorize(Roles = "admin")]
     public async Task<ActionResult> Update([FromRoute] Guid id, [FromBody] UpdatePositionRequest req, CancellationToken ct)
     {
-        if (id == Guid.Empty) return BadRequest("PositionId is required.");
-        if (req.MajorId == Guid.Empty) return BadRequest("MajorId is required.");
-        if (string.IsNullOrWhiteSpace(req.PositionName)) return BadRequest("PositionName is required.");
+        if (id == Guid.Empty) return Ok(new { error = "PositionId is required." });
+        if (req.MajorId == Guid.Empty) return Ok(new { error = "MajorId is required." });
+        if (string.IsNullOrWhiteSpace(req.PositionName)) return Ok(new { error = "PositionName is required." });
+
+        var major = await majors.GetAsync(req.MajorId, ct);
+        if (major is null)
+            return Ok(new { error = "Major not found." });
 
         try
         {
             await write.UpdateAsync(id, req.MajorId, req.PositionName, ct);
             return NoContent();
         }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
-        catch (KeyNotFoundException) { return NotFound(); }
-        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+        catch (ArgumentException ex) { return Ok(new { error = ex.Message }); }
+        catch (KeyNotFoundException ex) { return Ok(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return Ok(new { error = ex.Message }); }
     }
 
     [HttpDelete("{id:guid}")]
     [Authorize(Roles = "admin")]
     public async Task<ActionResult> Delete([FromRoute] Guid id, CancellationToken ct)
     {
-        await write.DeleteAsync(id, ct);
-        return NoContent();
+        try
+        {
+            await write.DeleteAsync(id, ct);
+            return NoContent();
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return Ok(new { error = ex.Message });
+        }
     }
 
     [HttpPost("import")]
@@ -91,17 +106,20 @@ public sealed class PositionsController(
     [Consumes("multipart/form-data")]
     public async Task<ActionResult<ImportResultDto>> Import(IFormFile file, CancellationToken ct)
     {
+        static ImportResultDto ErrorResult(string message)
+            => new(0, 0, 0, 0, new[] { new ImportErrorDto(0, message) }, Array.Empty<ImportErrorDto>());
+
         if (file is null || file.Length == 0)
-            return BadRequest("file is required");
+            return Ok(ErrorResult("file is required"));
 
         await using var stream = file.OpenReadStream();
         using var wb = new XLWorkbook(stream);
         var ws = wb.Worksheets.FirstOrDefault();
-        if (ws is null) return BadRequest("No worksheet found.");
+        if (ws is null) return Ok(ErrorResult("No worksheet found."));
 
         var header = ReadHeader(ws);
         if (!header.TryGetValue("major", out var majorCol) || !header.TryGetValue("position", out var posCol))
-            return BadRequest("Columns required: Major, Position");
+            return Ok(ErrorResult("Columns required: Major, Position"));
 
         var errors = new List<ImportErrorDto>();
         var skippedReasons = new List<ImportErrorDto>();
@@ -109,6 +127,7 @@ public sealed class PositionsController(
         var created = 0;
         var updated = 0;
         var skipped = 0;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         var lastRow = ws.LastRowUsed()?.RowNumber() ?? 1;
         for (var r = 2; r <= lastRow; r++)
@@ -128,6 +147,13 @@ public sealed class PositionsController(
             if (!majorId.HasValue)
             {
                 errors.Add(new ImportErrorDto(r, $"Major not found: {majorName}"));
+                continue;
+            }
+
+            var dedupeKey = $"{majorId.Value:N}:{positionName.Trim().ToLowerInvariant()}";
+            if (!seen.Add(dedupeKey))
+            {
+                errors.Add(new ImportErrorDto(r, $"Duplicate position in file for major: {majorName}"));
                 continue;
             }
 

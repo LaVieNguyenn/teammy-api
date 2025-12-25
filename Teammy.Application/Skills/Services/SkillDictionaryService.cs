@@ -38,6 +38,7 @@ public sealed class SkillDictionaryService(
         if (await write.TokenExistsAsync(token, ct))
             throw new InvalidOperationException("Skill token already exists.");
 
+        await EnsureAliasesAvailableAsync(token, aliases, ct);
         await write.CreateAsync(token, role, major, aliases, ct);
         return await GetByTokenAsync(token, ct);
     }
@@ -54,6 +55,7 @@ public sealed class SkillDictionaryService(
         if (!await write.TokenExistsAsync(normalizedToken, ct))
             throw new KeyNotFoundException("Skill token not found.");
 
+        await EnsureAliasesAvailableAsync(normalizedToken, aliases, ct);
         await write.UpdateAsync(normalizedToken, role, major, aliases, ct);
         return await GetByTokenAsync(normalizedToken, ct);
     }
@@ -97,5 +99,18 @@ public sealed class SkillDictionaryService(
         }
 
         return normalized;
+    }
+
+    private async Task EnsureAliasesAvailableAsync(string token, IReadOnlyList<string> aliases, CancellationToken ct)
+    {
+        foreach (var alias in aliases)
+        {
+            var existing = await read.GetTokenByAliasAsync(alias, ct);
+            if (existing is null)
+                continue;
+
+            if (!string.Equals(existing, token, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"Alias already used by token: {existing}.");
+        }
     }
 }
