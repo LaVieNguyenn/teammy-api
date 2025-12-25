@@ -34,7 +34,6 @@ public sealed class ProfilePostService(
     {
         if (string.IsNullOrWhiteSpace(req.Title)) throw new ArgumentException("Title is required");
         var semesterId = await _studentSemesters.GetCurrentSemesterIdAsync(currentUserId, ct)
-            ?? await queries.GetActiveSemesterIdAsync(ct)
             ?? throw new InvalidOperationException("No current semester");
         var membership = await groupQueries.CheckUserGroupAsync(currentUserId, semesterId, includePending: false, ct);
         if (membership.HasGroup)

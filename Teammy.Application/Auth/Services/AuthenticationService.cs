@@ -5,7 +5,9 @@ namespace Teammy.Application.Auth.Services;
 public sealed class AuthenticationService(
     IExternalTokenVerifier externalTokenVerifier,
     IUserRepository userRepository,
-    ITokenService tokenService)
+    ITokenService tokenService,
+    IStudentSemesterReadOnlyQueries studentSemesters,
+    ISemesterReadOnlyQueries semesterQueries)
 {
     public async Task<LoginResponse> LoginWithFirebaseAsync(LoginRequest request, CancellationToken ct)
     {
@@ -31,8 +33,27 @@ public sealed class AuthenticationService(
                 user.RoleName), ct);
             
         }
+        TokenSemesterInfo? semesterInfo = null;
+        if (string.Equals(user.RoleName, "student", StringComparison.OrdinalIgnoreCase))
+        {
+            var semesterId = await studentSemesters.GetCurrentSemesterIdAsync(user.Id, ct);
+            if (semesterId.HasValue)
+            {
+                var semester = await semesterQueries.GetByIdAsync(semesterId.Value, ct);
+                if (semester is not null)
+                {
+                    semesterInfo = new TokenSemesterInfo(
+                        semester.SemesterId,
+                        semester.Season,
+                        semester.Year,
+                        semester.StartDate,
+                        semester.EndDate);
+                }
+            }
+        }
+
         var jwt = tokenService.CreateAccessToken(
-            user.Id, user.Email, user.DisplayName, user.RoleName);
+            user.Id, user.Email, user.DisplayName, user.RoleName, semesterInfo);
 
         return new LoginResponse(jwt, user.Id, user.Email, user.DisplayName, user.RoleName);
     }

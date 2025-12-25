@@ -41,6 +41,7 @@ public sealed class AiMatchingService(
     private const int SemanticShortlistLimit = 50;
     // Keep aligned with gateway MAX_SUGGESTIONS (currently 8) so every returned item can carry AI reason.
     private const int LlmCandidatePoolSize = 8;
+    private static readonly JsonSerializerOptions LlmContextJsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly IAiSemanticSearch _semanticSearch = semanticSearch ?? throw new ArgumentNullException(nameof(semanticSearch));
     private readonly IAiLlmClient _llmClient = llmClient ?? throw new ArgumentNullException(nameof(llmClient));
@@ -258,7 +259,7 @@ public sealed class AiMatchingService(
     {
         request ??= new RecruitmentPostSuggestionRequest(null, null);
         await aiQueries.RefreshStudentsPoolAsync(ct);
-        var semesterCtx = await ResolveSemesterForUserAsync(studentId, null, ct);
+        var semesterCtx = await ResolveSemesterForStudentAsync(studentId, ct);
         EnsureWindow(DateOnly.FromDateTime(DateTime.UtcNow),
             semesterCtx.Policy.TeamSuggestStart,
             semesterCtx.Policy.TeamSelfSelectEnd,
@@ -301,6 +302,8 @@ public sealed class AiMatchingService(
             ("targetMajorId", targetMajorId?.ToString()),
             ("mode", "group_post"),
             ("topN", suggestions.Count.ToString(CultureInfo.InvariantCulture)),
+            ("withReasons", "true"),
+            ("policy", BuildPolicyJson(semesterCtx.Policy)),
             ("desiredPosition", profile.DesiredPositionName),
             ("mustMentionDesiredPosition", "true")
         );
@@ -399,7 +402,9 @@ public sealed class AiMatchingService(
             ("groupId", groupId.ToString()),
             ("majorId", detail.MajorId?.ToString()),
             ("mode", "topic"),
-            ("topN", items.Count.ToString(CultureInfo.InvariantCulture)));
+            ("topN", items.Count.ToString(CultureInfo.InvariantCulture)),
+            ("withReasons", "true"),
+            ("policy", BuildPolicyJson(semesterCtx.Policy)));
 
         var reranked = await ApplyLlmRerankAsync(
             "topic",
@@ -519,6 +524,8 @@ public sealed class AiMatchingService(
             ("majorId", detail.MajorId?.ToString()),
             ("mode", "personal_post"),
             ("topN", suggestions.Count.ToString(CultureInfo.InvariantCulture)),
+            ("withReasons", "true"),
+            ("policy", BuildPolicyJson(semesterCtx.Policy)),
             ("team", teamJson));
 
         var reranked = await ApplyLlmRerankAsync(
@@ -2751,6 +2758,23 @@ public sealed class AiMatchingService(
         return buffer.Count == 0 ? null : buffer;
     }
 
+    private static string BuildPolicyJson(SemesterPolicyDto policy)
+    {
+        var payload = new
+        {
+            teamSelfSelectStart = policy.TeamSelfSelectStart,
+            teamSelfSelectEnd = policy.TeamSelfSelectEnd,
+            teamSuggestStart = policy.TeamSuggestStart,
+            topicSelfSelectStart = policy.TopicSelfSelectStart,
+            topicSelfSelectEnd = policy.TopicSelfSelectEnd,
+            topicSuggestStart = policy.TopicSuggestStart,
+            desiredGroupSizeMin = policy.DesiredGroupSizeMin,
+            desiredGroupSizeMax = policy.DesiredGroupSizeMax
+        };
+
+        return JsonSerializer.Serialize(payload, LlmContextJsonOptions);
+    }
+
     private static IReadOnlyDictionary<string, string>? BuildMetadata(params (string Key, string? Value)[] entries)
     {
         var buffer = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -3048,7 +3072,15 @@ public sealed class AiMatchingService(
 
         var normalizedScore = NormalizeScoreToPercent(totalScore, TopicScoreThreshold, TopicScoreMax);
         var displayMatches = RemapMatchingSkills(matchingSkills, topic.SkillNames);
-        return new TopicSuggestionDto(topic.TopicId, topic.Title, topic.Description, normalizedScore, topic.CanTakeMore, displayMatches, topic.SkillNames);
+        var suggestion = new TopicSuggestionDto(
+            topic.TopicId,
+            topic.Title,
+            topic.Description,
+            normalizedScore,
+            topic.CanTakeMore,
+            displayMatches,
+            topic.SkillNames);
+        return suggestion with { AiReason = BuildTopicFallbackReason(suggestion, displayMatches) };
     }
 
     private static ProfilePostSuggestionDto? BuildProfilePostSuggestion(
@@ -3242,12 +3274,14 @@ public sealed class AiMatchingService(
 
         if (detail is null)
             throw new InvalidOperationException("Không tìm thấy học kỳ.");
+
+        var policy = detail.Policy ?? BuildFallbackPolicy(detail);
         if (detail.Policy is null)
-            throw new InvalidOperationException("Học kỳ chưa cấu hình policy.");
+            _logger.LogWarning("Semester {SemesterId} has no policy. Using fallback defaults for AI.", detail.SemesterId);
 
         var season = string.IsNullOrWhiteSpace(detail.Season) ? "Semester" : detail.Season;
         var label = detail.Year > 0 ? $"{season} {detail.Year}" : season;
-        return new SemesterContext(detail.SemesterId, detail.Policy, label);
+        return new SemesterContext(detail.SemesterId, policy, label);
     }
 
     private async Task<SemesterContext> ResolveSemesterForUserAsync(Guid userId, Guid? semesterId, CancellationToken ct)
@@ -3262,7 +3296,32 @@ public sealed class AiMatchingService(
         return await ResolveSemesterAsync(null, ct);
     }
 
+    private async Task<SemesterContext> ResolveSemesterForStudentAsync(Guid userId, CancellationToken ct)
+    {
+        var currentId = await _studentSemesters.GetCurrentSemesterIdAsync(userId, ct);
+        if (!currentId.HasValue)
+            throw new InvalidOperationException("Không tìm thấy học kỳ hiện tại của sinh viên.");
+
+        return await ResolveSemesterAsync(currentId.Value, ct);
+    }
+
     private sealed record SemesterContext(Guid SemesterId, SemesterPolicyDto Policy, string Name);
+
+    private static SemesterPolicyDto BuildFallbackPolicy(SemesterDetailDto detail)
+    {
+        var start = detail.StartDate == default ? DateOnly.MinValue : detail.StartDate;
+        var end = detail.EndDate == default ? DateOnly.MaxValue : detail.EndDate;
+        const int defaultMin = 4;
+        return new SemesterPolicyDto(
+            start,
+            end,
+            start,
+            start,
+            end,
+            start,
+            defaultMin,
+            0);
+    }
 
     private static void EnsureWindow(DateOnly today, DateOnly start, DateOnly end, string errorMessage)
     {

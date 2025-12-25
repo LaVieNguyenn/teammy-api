@@ -9,7 +9,7 @@ namespace Teammy.Infrastructure.Auth;
 
 public sealed class JwtTokenService(IConfiguration cfg) : ITokenService
 {
-    public string CreateAccessToken(Guid userId, string email, string displayName, string role)
+    public string CreateAccessToken(Guid userId, string email, string displayName, string role, TokenSemesterInfo? semester)
     {
         var issuer   = cfg["Auth:Jwt:Issuer"]!;
         var audience = cfg["Auth:Jwt:Audience"]!;
@@ -19,13 +19,21 @@ public sealed class JwtTokenService(IConfiguration cfg) : ITokenService
             new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key)),
             SecurityAlgorithms.HmacSha256);
 
-        var claims = new[]
+        var claims = new List<Claim>
         {
             new Claim(JwtRegisteredClaimNames.Sub, userId.ToString()),
             new Claim(JwtRegisteredClaimNames.Email, email),
             new Claim(ClaimTypes.Name, displayName),
             new Claim(ClaimTypes.Role, role),
         };
+        if (semester is not null)
+        {
+            claims.Add(new Claim("semester_id", semester.SemesterId.ToString()));
+            claims.Add(new Claim("semester_season", semester.Season));
+            claims.Add(new Claim("semester_year", semester.Year.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            claims.Add(new Claim("semester_start", semester.StartDate.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)));
+            claims.Add(new Claim("semester_end", semester.EndDate.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)));
+        }
 
         var token = new JwtSecurityToken(
             issuer: issuer,

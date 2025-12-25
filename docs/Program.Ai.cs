@@ -720,6 +720,22 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
         .Take(topN)
         .ToList();
 
+    if (seeds.Count == 0 && IsTopicMode(mode))
+    {
+        // Fallback: if all topics score below the threshold, return top-N anyway.
+        seeds = candidates
+            .Select((c, i) => new RankedSeed(
+                Key: c.Key,
+                EntityId: c.EntityId,
+                Title: c.Title,
+                Text: Clip(BuildReasonSnippet(c), REASON_SNIPPET_MAX),
+                FinalScore: Math.Round(FinalScore(i), 2)
+            ))
+            .OrderByDescending(x => x.FinalScore)
+            .Take(topN)
+            .ToList();
+    }
+
     if (enableDebug)
     {
         last.AtUtc = DateTime.UtcNow;
@@ -1011,7 +1027,7 @@ Schema:
     if (mode is "personal_post")
         return common + "\nFocus: Match student desired position to group role gaps; avoid overrepresented roles. GROUP_NAME is a team name, not a person.\n";
 
-    return common + "\nFocus: Explain why this topic fits the team (skills/goals), not a paraphrase.\n- If SUMMARY exists, mention one concrete detail from it AND link to team fit.\n- If MATCHING_SKILLS is \"n/a\", avoid skills and focus on team goals/need.\n- Avoid restating the topic description verbatim.\n";
+    return common + "\nFocus: Explain why this topic fits the team (skills/goals), not a paraphrase.\n- If MATCHING_SKILLS is \"n/a\", avoid skills and focus on team goals/need.\n- Avoid restating the topic description or SUMMARY verbatim.\n";
 }
 
 static string BuildReasonBatchSystemPrompt(string mode)
@@ -1038,7 +1054,7 @@ Return schema:
     if (mode is "personal_post")
         return common + "\nFocus: Match student desired position to group role gaps; avoid overrepresented roles. GROUP_NAME is a team name, not a person.\n";
 
-    return common + "\nFocus: Explain why this topic fits the team (skills/goals), not a paraphrase.\n- If SUMMARY exists, mention one concrete detail from it AND link to team fit.\n- If MATCHING_SKILLS is \"n/a\", avoid skills and focus on team goals/need.\n- Avoid restating the topic description verbatim.\n";
+    return common + "\nFocus: Explain why this topic fits the team (skills/goals), not a paraphrase.\n- If MATCHING_SKILLS is \"n/a\", avoid skills and focus on team goals/need.\n- Avoid restating the topic description or SUMMARY verbatim.\n";
 }
 
 static string NormalizeReasonFinal(string summary)
@@ -1156,7 +1172,7 @@ static string BuildReasonSnippetForLlm(string seedSnippet)
             || line.StartsWith("TEAM_MIX:", StringComparison.OrdinalIgnoreCase)
             || line.StartsWith("SKILLS:", StringComparison.OrdinalIgnoreCase)
             || line.StartsWith("MATCHING_SKILLS:", StringComparison.OrdinalIgnoreCase)
-            || line.StartsWith("SUMMARY:", StringComparison.OrdinalIgnoreCase))
+            )
         {
             kept.Add(line);
         }

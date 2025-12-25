@@ -138,9 +138,8 @@ public sealed class UsersController : ControllerBase
 
         if (!semId.HasValue)
         {
-            semId = await _studentSemesters.GetCurrentSemesterIdAsync(GetCurrentUserId(), ct)
-                ?? await _groups.GetActiveSemesterIdAsync(ct);
-            if (!semId.HasValue) return Conflict("No active semester");
+            semId = await _studentSemesters.GetCurrentSemesterIdAsync(GetCurrentUserId(), ct);
+            if (!semId.HasValue) return Conflict("No current semester");
         }
 
         var list = await _users.SearchInvitableAsync(
