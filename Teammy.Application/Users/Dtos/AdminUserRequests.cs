@@ -10,10 +10,12 @@ public sealed record AdminCreateUserRequest(
     string? Gender,
     Guid? MajorId,
     double? Gpa,
-    string? Position
+    string? Position,
+    Guid? SemesterId
 );
 
 public sealed record AdminUpdateUserRequest(
+    string? Email,
     string DisplayName,
     string Role,
     string? StudentCode,
@@ -21,5 +23,6 @@ public sealed record AdminUpdateUserRequest(
     Guid? MajorId,
     double? Gpa,
     bool IsActive,
-    string? PortfolioUrl
+    string? PortfolioUrl,
+    Guid? SemesterId
 );

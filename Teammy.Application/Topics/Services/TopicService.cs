@@ -57,8 +57,15 @@ namespace Teammy.Application.Topics.Services
             var mentorIds = new List<Guid>();
             foreach (var email in req.MentorEmails.Where(e => !string.IsNullOrWhiteSpace(e)))
             {
-                var mentorId = await _mentorLookup.GetMentorIdByEmailAsync(email, ct);
-                mentorIds.Add(mentorId);
+                try
+                {
+                    var mentorId = await _mentorLookup.GetMentorIdByEmailAsync(email, ct);
+                    mentorIds.Add(mentorId);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    throw new ArgumentException(ex.Message);
+                }
             }
 
             await _topicMentorService.ReplaceMentorsAsync(topicId, mentorIds, ct);
@@ -75,8 +82,15 @@ namespace Teammy.Application.Topics.Services
                 var mentorIds = new List<Guid>();
                 foreach (var email in req.MentorEmails.Where(e => !string.IsNullOrWhiteSpace(e)))
                 {
-                    var mentorId = await _mentorLookup.GetMentorIdByEmailAsync(email, ct);
-                    mentorIds.Add(mentorId);
+                    try
+                    {
+                        var mentorId = await _mentorLookup.GetMentorIdByEmailAsync(email, ct);
+                        mentorIds.Add(mentorId);
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        throw new ArgumentException(ex.Message);
+                    }
                 }
 
                 await _topicMentorService.ReplaceMentorsAsync(id, mentorIds, ct);

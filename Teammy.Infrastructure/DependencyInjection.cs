@@ -34,7 +34,9 @@ public static class DependencyInjection
         services.AddSingleton<AiIndexOutboxSaveChangesInterceptor>();
         services.AddDbContext<AppDbContext>((sp, opt) =>
         {
-            opt.UseNpgsql(configuration.GetConnectionString("Default"));
+            opt.UseNpgsql(
+                configuration.GetConnectionString("Default"),
+                b => b.MigrationsAssembly("Teammy.Infrastructure"));
             opt.AddInterceptors(sp.GetRequiredService<AiIndexOutboxSaveChangesInterceptor>());
         });
 
@@ -48,6 +50,8 @@ public static class DependencyInjection
         services.AddScoped<IUserReadOnlyQueries, UserReadOnlyQueries>();
         services.AddScoped<IUserWriteRepository, UserWriteRepository>();
         services.AddScoped<UserProfileService>();
+        services.AddScoped<IStudentSemesterReadOnlyQueries, StudentSemesterReadOnlyQueries>();
+        services.AddScoped<IStudentSemesterWriteRepository, StudentSemesterWriteRepository>();
 
         // Groups
         services.AddScoped<IGroupRepository, GroupRepository>();

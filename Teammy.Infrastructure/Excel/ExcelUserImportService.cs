@@ -3,18 +3,23 @@ using System.Globalization;
 using ClosedXML.Excel;
 using Microsoft.EntityFrameworkCore;
 using Teammy.Application.Common.Interfaces;
+using Teammy.Application.Semesters.Dtos;
 using Teammy.Application.Users.Import.Dtos;
 
 namespace Teammy.Infrastructure.Excel;
 
 public sealed class ExcelUserImportService(
+    IUserReadOnlyQueries userReadOnlyQueries,
     IUserWriteRepository userWriteRepo,
     IRoleReadOnlyQueries roleQueries,
     IMajorReadOnlyQueries majorQueries,
+    ISemesterReadOnlyQueries semesterQueries,
+    IStudentSemesterReadOnlyQueries studentSemesterReadOnly,
+    IStudentSemesterWriteRepository studentSemesterWrite,
     IEmailSender emailSender
 ) : IUserImportService
 {
-    private static readonly string[] Headers = { "Email","DisplayName","Role","MajorName","Gender","StudentCode","GPA" };
+    private static readonly string[] Headers = { "Email","DisplayName","Role","MajorName","Gender","StudentCode","GPA","SemesterCode" };
     private static readonly HashSet<string> AllowedGenders = new(StringComparer.OrdinalIgnoreCase)
     {
         "male",
@@ -36,8 +41,8 @@ public sealed class ExcelUserImportService(
         for (int i = 0; i < Headers.Length; i++)
             ws.Cell(1, i + 1).Value = Headers[i];
 
-        ws.Range("A1:G1").Style.Font.Bold = true;
-        ws.Columns(1, 7).Width = 28;
+        ws.Range("A1:H1").Style.Font.Bold = true;
+        ws.Columns(1, 8).Width = 28;
 
         // Sample rows
         ws.Cell(2, 1).Value = "alice@example.com";
@@ -47,6 +52,7 @@ public sealed class ExcelUserImportService(
         ws.Cell(2, 5).Value = "female";
         ws.Cell(2, 6).Value = "SE150001";
         ws.Cell(2, 7).Value = 3.2;
+        ws.Cell(2, 8).Value = "FALL2025";
 
         ws.Cell(3, 1).Value = "bob@example.com";
         ws.Cell(3, 2).Value = "Bob Tran";
@@ -55,6 +61,7 @@ public sealed class ExcelUserImportService(
         ws.Cell(3, 5).Value = "male";
         ws.Cell(3, 6).Value = "";
         ws.Cell(3, 7).Value = "";
+        ws.Cell(3, 8).Value = "FA2025";
 
         // Lookups
         lookup.Cell(1,1).Value = "Roles";
@@ -94,6 +101,7 @@ public sealed class ExcelUserImportService(
         int lastRow = ws.LastRowUsed()?.RowNumber() ?? 1;
         var rows = new List<ImportUserRow>();
         var errors = new List<ImportUsersError>();
+        var semesters = await semesterQueries.ListAsync(ct);
 
         // Read rows
         for (int r = 2; r <= lastRow; r++)
@@ -105,6 +113,7 @@ public sealed class ExcelUserImportService(
             string gender= ws.Cell(r,5).GetString().Trim();
             string code  = ws.Cell(r,6).GetString().Trim();
             var gpaCell = ws.Cell(r, 7);
+            string semesterCode = ws.Cell(r, 8).GetString().Trim();
 
             double? gpa = null;
 
@@ -191,7 +200,8 @@ public sealed class ExcelUserImportService(
                 string.IsNullOrWhiteSpace(major) ? null : major,
                 string.IsNullOrWhiteSpace(gender) ? null : gender.ToLowerInvariant(),
                 string.IsNullOrWhiteSpace(code) ? null : code,
-                gpa
+                gpa,
+                string.IsNullOrWhiteSpace(semesterCode) ? null : semesterCode
             ));
         }
 
@@ -208,9 +218,26 @@ public sealed class ExcelUserImportService(
             else errors.Add(new ImportUsersError(-1, $"Duplicate email in file: {row.Email} (skipped)"));
         }
 
+        // Deduplicate by student code inside file
+        var firstByStudentCode = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var filteredByCode = new List<ImportUserRow>(filtered.Count);
+        foreach (var row in filtered)
+        {
+            if (string.IsNullOrWhiteSpace(row.StudentCode))
+            {
+                filteredByCode.Add(row);
+                continue;
+            }
+
+            if (firstByStudentCode.Add(row.StudentCode!))
+                filteredByCode.Add(row);
+            else
+                errors.Add(new ImportUsersError(-1, $"Duplicate student code in file: {row.StudentCode} (email: {row.Email})"));
+        }
+
         int created = 0, skipped = 0;
 
-        foreach (var row in filtered)
+        foreach (var row in filteredByCode)
         {
             // Role map
             var roleId = await roleQueries.GetRoleIdByNameAsync(row.Role, ct);
@@ -219,6 +246,28 @@ public sealed class ExcelUserImportService(
                 errors.Add(new ImportUsersError(-1, $"Role not found: {row.Role} (email: {row.Email})"));
                 skipped++;
                 continue;
+            }
+
+            var isStudent = string.Equals(row.Role, "student", StringComparison.OrdinalIgnoreCase);
+            var existingUserId = await userReadOnlyQueries.GetUserIdByEmailAsync(row.Email, ct);
+
+            Guid? semesterId = null;
+            if (isStudent)
+            {
+                if (string.IsNullOrWhiteSpace(row.SemesterCode))
+                {
+                    errors.Add(new ImportUsersError(-1, $"SemesterCode is required for student (email: {row.Email})"));
+                    skipped++;
+                    continue;
+                }
+
+                semesterId = ResolveSemesterId(row.SemesterCode, semesters);
+                if (!semesterId.HasValue)
+                {
+                    errors.Add(new ImportUsersError(-1, $"Semester not found: {row.SemesterCode} (email: {row.Email})"));
+                    skipped++;
+                    continue;
+                }
             }
 
             // Major map (optional)
@@ -234,9 +283,26 @@ public sealed class ExcelUserImportService(
                 }
             }
 
-            // Exists?
-            if (await userWriteRepo.EmailExistsAnyAsync(row.Email, ct))
+            if (!string.IsNullOrWhiteSpace(row.StudentCode))
             {
+                var codeOwner = await userReadOnlyQueries.GetByStudentCodeAsync(row.StudentCode!, ct);
+                if (codeOwner is not null && (!existingUserId.HasValue || codeOwner.UserId != existingUserId.Value))
+                {
+                    errors.Add(new ImportUsersError(-1, $"StudentCode already exists: {row.StudentCode} (email: {row.Email})"));
+                    skipped++;
+                    continue;
+                }
+            }
+
+            // Exists?
+            if (existingUserId.HasValue)
+            {
+                if (isStudent && semesterId.HasValue)
+                {
+                    var currentSemesterId = await studentSemesterReadOnly.GetCurrentSemesterIdAsync(existingUserId.Value, ct);
+                    if (!currentSemesterId.HasValue || currentSemesterId.Value != semesterId.Value)
+                        await studentSemesterWrite.SetCurrentSemesterAsync(existingUserId.Value, semesterId.Value, ct);
+                }
                 skipped++;
                 continue;
             }
@@ -252,6 +318,8 @@ public sealed class ExcelUserImportService(
                 ct: ct);
 
             await userWriteRepo.AssignRoleAsync(userId, roleId.Value, ct);
+            if (isStudent && semesterId.HasValue)
+                await studentSemesterWrite.SetCurrentSemesterAsync(userId, semesterId.Value, ct);
 
             var subject = "TEAMMY - Your account is ready";
             var html = $"""
@@ -279,9 +347,13 @@ public sealed class ExcelUserImportService(
     {
         var safeRows = rows ?? Array.Empty<UserImportPayloadRow>();
         var results = new List<UserImportRowValidation>(safeRows.Count);
+        var semesters = await semesterQueries.ListAsync(ct);
 
         var emailFirstOccurrence = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var studentCodeFirstOccurrence = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var emailExistsCache = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        var emailUserIdCache = new Dictionary<string, Guid?>(StringComparer.OrdinalIgnoreCase);
+        var studentCodeUserIdCache = new Dictionary<string, Guid?>(StringComparer.OrdinalIgnoreCase);
         var roleCache = new Dictionary<string, Guid?>(StringComparer.OrdinalIgnoreCase);
         var majorCache = new Dictionary<string, Guid?>(StringComparer.OrdinalIgnoreCase);
 
@@ -304,6 +376,7 @@ public sealed class ExcelUserImportService(
             string major = row?.MajorName?.Trim() ?? string.Empty;
             string gender = row?.Gender?.Trim() ?? string.Empty;
             string studentCode = row?.StudentCode?.Trim() ?? string.Empty;
+            string semesterCode = row?.SemesterCode?.Trim() ?? string.Empty;
             var gpa = row?.Gpa;
 
             bool rowIsEmpty = string.IsNullOrWhiteSpace(email)
@@ -312,6 +385,7 @@ public sealed class ExcelUserImportService(
                               && string.IsNullOrWhiteSpace(major)
                               && string.IsNullOrWhiteSpace(gender)
                               && string.IsNullOrWhiteSpace(studentCode)
+                              && string.IsNullOrWhiteSpace(semesterCode)
                               && gpa is null;
 
             if (rowIsEmpty)
@@ -324,6 +398,7 @@ public sealed class ExcelUserImportService(
                 columns.Add(new UserColumnValidation("Gender", false, emptyMessage));
                 columns.Add(new UserColumnValidation("StudentCode", false, emptyMessage));
                 columns.Add(new UserColumnValidation("GPA", false, emptyMessage));
+                columns.Add(new UserColumnValidation("SemesterCode", false, emptyMessage));
                 messages.Add("Row has no data");
                 invalidCount++;
                 results.Add(new UserImportRowValidation(rowNumber, false, columns, messages));
@@ -332,6 +407,7 @@ public sealed class ExcelUserImportService(
 
             bool emailValid = true;
             var emailErrors = new List<string>();
+            var emailExists = false;
 
             if (string.IsNullOrWhiteSpace(email))
             {
@@ -350,8 +426,9 @@ public sealed class ExcelUserImportService(
             }
             else if (await EmailExistsAsync(email, emailExistsCache, ct))
             {
-                emailValid = false;
-                emailErrors.Add("Email already exists in system");
+                // Existing email is allowed; row will be treated as update/skip.
+                emailValid = true;
+                emailExists = true;
             }
 
             columns.Add(new UserColumnValidation("Email", emailValid, emailValid ? null : string.Join("; ", emailErrors)));
@@ -412,8 +489,34 @@ public sealed class ExcelUserImportService(
                 }
             }
             columns.Add(new UserColumnValidation("Gender", genderValid, genderError));
-            bool studentCodeValid = string.IsNullOrWhiteSpace(studentCode) || studentCode.Length <= 30;
-            string? studentCodeError = studentCodeValid ? null : "StudentCode must be <= 30 characters";
+            bool studentCodeValid = true;
+            string? studentCodeError = null;
+            if (!string.IsNullOrWhiteSpace(studentCode))
+            {
+                if (studentCode.Length > 30)
+                {
+                    studentCodeValid = false;
+                    studentCodeError = "StudentCode must be <= 30 characters";
+                }
+                else if (!studentCodeFirstOccurrence.TryAdd(studentCode, rowNumber))
+                {
+                    studentCodeValid = false;
+                    studentCodeError = "Duplicate StudentCode within payload";
+                }
+                else
+                {
+                    var codeOwner = await GetUserIdByStudentCodeAsync(studentCode, studentCodeUserIdCache, ct);
+                    if (codeOwner.HasValue)
+                    {
+                        var userId = await GetUserIdByEmailAsync(email, emailUserIdCache, ct);
+                        if (!userId.HasValue || userId.Value != codeOwner.Value)
+                        {
+                            studentCodeValid = false;
+                            studentCodeError = "StudentCode already exists in system";
+                        }
+                    }
+                }
+            }
             columns.Add(new UserColumnValidation("StudentCode", studentCodeValid, studentCodeError));
 
             bool gpaValid = true;
@@ -433,6 +536,43 @@ public sealed class ExcelUserImportService(
             }
             columns.Add(new UserColumnValidation("GPA", gpaValid, gpaError));
 
+            bool semesterValid = true;
+            string? semesterError = null;
+            if (string.Equals(role, "student", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.IsNullOrWhiteSpace(semesterCode))
+                {
+                    semesterValid = false;
+                    semesterError = "SemesterCode is required for student";
+                }
+                else
+                {
+                    var semId = ResolveSemesterId(semesterCode, semesters);
+                    if (!semId.HasValue)
+                    {
+                        semesterValid = false;
+                        semesterError = $"Semester '{semesterCode}' not found";
+                    }
+                    else if (emailExists)
+                    {
+                        var userId = await GetUserIdByEmailAsync(email, emailUserIdCache, ct);
+                        if (userId.HasValue)
+                        {
+                            var current = await studentSemesterReadOnly.GetCurrentSemesterIdAsync(userId.Value, ct);
+                            if (current.HasValue && current.Value == semId.Value)
+                                messages.Add("Existing student in same semester; row will be skipped.");
+                            else
+                                messages.Add("Existing student; semester will be updated.");
+                        }
+                    }
+                }
+            }
+            else if (emailExists)
+            {
+                messages.Add("Existing user; row will be skipped.");
+            }
+            columns.Add(new UserColumnValidation("SemesterCode", semesterValid, semesterError));
+
             bool rowValid = columns.All(c => c.IsValid);
             if (rowValid) validCount++; else invalidCount++;
 
@@ -448,6 +588,23 @@ public sealed class ExcelUserImportService(
             exists = await userWriteRepo.EmailExistsAnyAsync(normalizedEmail, token);
             cache[normalizedEmail] = exists;
             return exists;
+        }
+
+        async Task<Guid?> GetUserIdByEmailAsync(string normalizedEmail, Dictionary<string, Guid?> cache, CancellationToken token)
+        {
+            if (cache.TryGetValue(normalizedEmail, out var id)) return id;
+            id = await userReadOnlyQueries.GetUserIdByEmailAsync(normalizedEmail, token);
+            cache[normalizedEmail] = id;
+            return id;
+        }
+
+        async Task<Guid?> GetUserIdByStudentCodeAsync(string studentCode, Dictionary<string, Guid?> cache, CancellationToken token)
+        {
+            if (cache.TryGetValue(studentCode, out var id)) return id;
+            var detail = await userReadOnlyQueries.GetByStudentCodeAsync(studentCode, token);
+            id = detail?.UserId;
+            cache[studentCode] = id;
+            return id;
         }
     }
 
@@ -494,5 +651,78 @@ public sealed class ExcelUserImportService(
         }
 
         return double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+    }
+
+    private static string BuildSemesterCode(string? season, int year)
+    {
+        var s = (season ?? string.Empty).Trim().ToUpperInvariant();
+        return string.IsNullOrWhiteSpace(s) || year <= 0 ? string.Empty : $"{s}{year}";
+    }
+
+    private static Guid? ResolveSemesterId(string semesterCode, IReadOnlyList<SemesterSummaryDto> semesters)
+    {
+        if (string.IsNullOrWhiteSpace(semesterCode))
+            return null;
+
+        var normalized = semesterCode.Trim().Replace(" ", string.Empty);
+        var (seasonKey, year) = ParseSemesterCode(normalized);
+        if (string.IsNullOrWhiteSpace(seasonKey))
+            return null;
+
+        var matches = semesters
+            .Where(s => !string.IsNullOrWhiteSpace(s.Season) && s.Year > 0)
+            .Select(s => new
+            {
+                s.SemesterId,
+                Season = NormalizeSeasonToken(s.Season!),
+                s.Year
+            })
+            .Where(s => s.Season == seasonKey)
+            .ToList();
+
+        if (matches.Count == 0)
+            return null;
+
+        if (year.HasValue)
+            return matches.FirstOrDefault(x => x.Year == year.Value)?.SemesterId;
+
+        return matches.OrderByDescending(x => x.Year).FirstOrDefault()?.SemesterId;
+    }
+
+    private static (string? SeasonKey, int? Year) ParseSemesterCode(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return (null, null);
+
+        var letters = new string(raw.Where(char.IsLetter).ToArray());
+        var digits = new string(raw.Where(char.IsDigit).ToArray());
+
+        var season = NormalizeSeasonToken(letters);
+        if (string.IsNullOrWhiteSpace(season))
+            return (null, null);
+
+        if (string.IsNullOrWhiteSpace(digits))
+            return (season, null);
+
+        if (!int.TryParse(digits, out var yearRaw))
+            return (season, null);
+
+        var year = yearRaw < 100 ? 2000 + yearRaw : yearRaw;
+        return (season, year);
+    }
+
+    private static string? NormalizeSeasonToken(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        var s = raw.Trim().ToUpperInvariant();
+        return s switch
+        {
+            "FALL" or "FA" or "F" => "FALL",
+            "SUMMER" or "SU" or "S" => "SUMMER",
+            "SPRING" or "SP" => "SPRING",
+            _ => s
+        };
     }
 }

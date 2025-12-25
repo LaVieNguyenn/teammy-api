@@ -18,6 +18,7 @@ public sealed class AiMatchingService(
     IGroupReadOnlyQueries groupQueries,
     IGroupRepository groupRepository,
     ISemesterReadOnlyQueries semesterQueries,
+    IStudentSemesterReadOnlyQueries studentSemesterQueries,
     IRecruitmentPostRepository postRepository,
     IRecruitmentPostReadOnlyQueries recruitmentPostQueries,
     ITopicWriteRepository topicWriteRepository,
@@ -44,6 +45,7 @@ public sealed class AiMatchingService(
     private readonly IAiSemanticSearch _semanticSearch = semanticSearch ?? throw new ArgumentNullException(nameof(semanticSearch));
     private readonly IAiLlmClient _llmClient = llmClient ?? throw new ArgumentNullException(nameof(llmClient));
     private readonly ILogger<AiMatchingService> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    private readonly IStudentSemesterReadOnlyQueries _studentSemesters = studentSemesterQueries ?? throw new ArgumentNullException(nameof(studentSemesterQueries));
 
     public async Task<AiSummaryDto> GetSummaryAsync(Guid? semesterId, CancellationToken ct)
     {
@@ -256,7 +258,7 @@ public sealed class AiMatchingService(
     {
         request ??= new RecruitmentPostSuggestionRequest(null, null);
         await aiQueries.RefreshStudentsPoolAsync(ct);
-        var semesterCtx = await ResolveSemesterAsync(null, ct);
+        var semesterCtx = await ResolveSemesterForUserAsync(studentId, null, ct);
         EnsureWindow(DateOnly.FromDateTime(DateTime.UtcNow),
             semesterCtx.Policy.TeamSuggestStart,
             semesterCtx.Policy.TeamSelfSelectEnd,
@@ -613,7 +615,7 @@ public sealed class AiMatchingService(
     {
         request ??= new AutoAssignTeamsRequest(null, null, null);
         await aiQueries.RefreshStudentsPoolAsync(ct);
-        var semesterCtx = await ResolveSemesterAsync(request.SemesterId, ct);
+        var semesterCtx = await ResolveSemesterForUserAsync(currentUserId, request.SemesterId, ct);
         var phase = await AssignStudentsToGroupsAsync(semesterCtx, request.MajorId, request.Limit, ct);
         var majorLookup = (await majorQueries.ListAsync(ct)).ToDictionary(x => x.MajorId, x => x.MajorName);
         var newGroups = await CreateNewGroupsForStudentsAsync(phase.RemainingStudents, semesterCtx, currentUserId, request.MajorId, majorLookup, ct);
@@ -3246,6 +3248,18 @@ public sealed class AiMatchingService(
         var season = string.IsNullOrWhiteSpace(detail.Season) ? "Semester" : detail.Season;
         var label = detail.Year > 0 ? $"{season} {detail.Year}" : season;
         return new SemesterContext(detail.SemesterId, detail.Policy, label);
+    }
+
+    private async Task<SemesterContext> ResolveSemesterForUserAsync(Guid userId, Guid? semesterId, CancellationToken ct)
+    {
+        if (semesterId.HasValue)
+            return await ResolveSemesterAsync(semesterId, ct);
+
+        var currentId = await _studentSemesters.GetCurrentSemesterIdAsync(userId, ct);
+        if (currentId.HasValue)
+            return await ResolveSemesterAsync(currentId.Value, ct);
+
+        return await ResolveSemesterAsync(null, ct);
     }
 
     private sealed record SemesterContext(Guid SemesterId, SemesterPolicyDto Policy, string Name);

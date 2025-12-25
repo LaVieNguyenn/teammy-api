@@ -23,6 +23,9 @@ public sealed class UsersController : ControllerBase
     private readonly IRoleReadOnlyQueries _roles;
     private readonly IPositionReadOnlyQueries _positions;
     private readonly UserProfileService _profileService;
+    private readonly IStudentSemesterReadOnlyQueries _studentSemesters;
+    private readonly IStudentSemesterWriteRepository _studentSemesterWrite;
+    private readonly ISemesterReadOnlyQueries _semesterQueries;
 
     public UsersController(
         IUserReadOnlyQueries users,
@@ -30,7 +33,10 @@ public sealed class UsersController : ControllerBase
         IUserWriteRepository userWrite,
         IRoleReadOnlyQueries roles,
         IPositionReadOnlyQueries positions,
-        UserProfileService profileService)
+        UserProfileService profileService,
+        IStudentSemesterReadOnlyQueries studentSemesters,
+        IStudentSemesterWriteRepository studentSemesterWrite,
+        ISemesterReadOnlyQueries semesterQueries)
     {
         _users = users;
         _groups = groups;
@@ -38,6 +44,9 @@ public sealed class UsersController : ControllerBase
         _roles = roles;
         _positions = positions;
         _profileService = profileService;
+        _studentSemesters = studentSemesters;
+        _studentSemesterWrite = studentSemesterWrite;
+        _semesterQueries = semesterQueries;
     }
 
     private Guid GetCurrentUserId()
@@ -129,7 +138,8 @@ public sealed class UsersController : ControllerBase
 
         if (!semId.HasValue)
         {
-            semId = await _groups.GetActiveSemesterIdAsync(ct);
+            semId = await _studentSemesters.GetCurrentSemesterIdAsync(GetCurrentUserId(), ct)
+                ?? await _groups.GetActiveSemesterIdAsync(ct);
             if (!semId.HasValue) return Conflict("No active semester");
         }
 
@@ -205,6 +215,16 @@ public sealed class UsersController : ControllerBase
                 return BadRequest("Position not found for the given MajorId.");
         }
 
+        var isStudentRole = string.Equals(request.Role, "student", StringComparison.OrdinalIgnoreCase);
+        if (isStudentRole)
+        {
+            if (!request.SemesterId.HasValue)
+                return BadRequest("SemesterId is required for student.");
+            var sem = await _semesterQueries.GetByIdAsync(request.SemesterId.Value, ct);
+            if (sem is null)
+                return BadRequest("Semester not found.");
+        }
+
         var userId = await _userWrite.CreateUserAsync(
             request.Email,
             request.DisplayName,
@@ -216,6 +236,8 @@ public sealed class UsersController : ControllerBase
             ct);
 
         await _userWrite.SetSingleRoleAsync(userId, roleId.Value, ct);
+        if (isStudentRole && request.SemesterId.HasValue)
+            await _studentSemesterWrite.SetCurrentSemesterAsync(userId, request.SemesterId.Value, ct);
 
         var dto = await _users.GetAdminDetailAsync(userId, ct);
         return CreatedAtAction(nameof(GetById), new { userId }, dto);
@@ -228,6 +250,20 @@ public sealed class UsersController : ControllerBase
         [FromBody] AdminUpdateUserRequest request,
         CancellationToken ct)
     {
+        if (!string.IsNullOrWhiteSpace(request.Email))
+        {
+            var email = request.Email.Trim();
+            try { _ = new System.Net.Mail.MailAddress(email); }
+            catch { return BadRequest("Email format is invalid."); }
+
+            var detail = await _users.GetAdminDetailAsync(userId, ct);
+            if (detail is null) return NotFound();
+
+            if (!string.Equals(detail.Email, email, StringComparison.OrdinalIgnoreCase)
+                && await _userWrite.EmailExistsAnyAsync(email, ct))
+                return Conflict("Email already exists.");
+        }
+
         if (string.IsNullOrWhiteSpace(request.DisplayName))
             return BadRequest("DisplayName is required.");
         if (string.IsNullOrWhiteSpace(request.Role))
@@ -250,8 +286,19 @@ public sealed class UsersController : ControllerBase
         if (request.Gpa.HasValue && request.Gpa.Value > 10)
             return BadRequest("GPA must be <= 10.");
 
+        var isStudentRole = string.Equals(request.Role, "student", StringComparison.OrdinalIgnoreCase);
+        if (isStudentRole)
+        {
+            if (!request.SemesterId.HasValue)
+                return BadRequest("SemesterId is required for student.");
+            var sem = await _semesterQueries.GetByIdAsync(request.SemesterId.Value, ct);
+            if (sem is null)
+                return BadRequest("Semester not found.");
+        }
+
         await _userWrite.UpdateUserAsync(
             userId,
+            request.Email,
             request.DisplayName,
             request.StudentCode,
             request.Gender,
@@ -262,6 +309,8 @@ public sealed class UsersController : ControllerBase
             ct);
 
         await _userWrite.SetSingleRoleAsync(userId, roleId.Value, ct);
+        if (isStudentRole && request.SemesterId.HasValue)
+            await _studentSemesterWrite.SetCurrentSemesterAsync(userId, request.SemesterId.Value, ct);
 
         return NoContent();
     }

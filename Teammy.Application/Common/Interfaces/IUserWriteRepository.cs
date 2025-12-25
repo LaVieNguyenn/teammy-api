@@ -14,6 +14,7 @@ public interface IUserWriteRepository
     Task AssignRoleAsync(Guid userId, Guid roleId, CancellationToken ct);
     Task UpdateUserAsync(
         Guid userId,
+        string? email,
         string displayName,
         string? studentCode,
         string? gender,

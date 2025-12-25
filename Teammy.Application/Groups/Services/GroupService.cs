@@ -18,7 +18,8 @@ public sealed class GroupService(
     ActivityLogService activityLogService,
     IEmailSender emailSender,
     ISemesterReadOnlyQueries semesterQueries,
-    IGroupStatusNotifier groupStatusNotifier)
+    IGroupStatusNotifier groupStatusNotifier,
+    IStudentSemesterReadOnlyQueries studentSemesterQueries)
 {
     private const string AppName = "TEAMMY";
     private const string DefaultAppUrl = "https://teammy.vercel.app/login";
@@ -28,6 +29,7 @@ public sealed class GroupService(
     private readonly IEmailSender _emailSender = emailSender;
     private readonly ISemesterReadOnlyQueries _semesterQueries = semesterQueries;
     private readonly IGroupStatusNotifier _groupStatusNotifier = groupStatusNotifier;
+    private readonly IStudentSemesterReadOnlyQueries _studentSemesters = studentSemesterQueries;
     private readonly Dictionary<Guid, SemesterPolicyDto?> _semesterPolicyCache = new();
     private readonly Dictionary<Guid, SemesterDetailDto?> _semesterDetailCache = new();
 
@@ -36,8 +38,9 @@ public sealed class GroupService(
         if (string.IsNullOrWhiteSpace(req.Name))
             throw new ArgumentException("Name is required");
         var normalizedName = req.Name.Trim();
-        var semesterId = await queries.GetActiveSemesterIdAsync(ct)
-            ?? throw new InvalidOperationException("No active semester available");
+        var semesterId = await _studentSemesters.GetCurrentSemesterIdAsync(creatorUserId, ct)
+            ?? await queries.GetActiveSemesterIdAsync(ct)
+            ?? throw new InvalidOperationException("No current semester available");
 
         var policy = await _semesterQueries.GetPolicyAsync(semesterId, ct);
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
