@@ -44,7 +44,7 @@ public sealed class GroupService(
         var policy = await _semesterQueries.GetPolicyAsync(semesterId, ct);
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         if (policy is null || today < policy.TeamSelfSelectStart || today > policy.TeamSelfSelectEnd)
-            throw new InvalidOperationException("Team self-select is closed");
+            throw new InvalidOperationException("Team selection time is closed");
 
         var nameExists = await queries.GroupNameExistsAsync(semesterId, normalizedName, null, ct);
         if (nameExists)

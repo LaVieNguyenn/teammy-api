@@ -5,7 +5,7 @@ namespace Teammy.Api.App;
 
 public sealed class AppUrlProvider(IConfiguration cfg) : IAppUrlProvider
 {
-    private readonly string _baseUrl = cfg["App:ClientUrl"]?.TrimEnd('/') ?? "https://teammy.vercel.app";
+    private readonly string _baseUrl = cfg["App:ClientUrl"]?.TrimEnd('/') ?? "https://teammy.io.vn";
 
     public string GetInvitationUrl(Guid invitationId, Guid groupId)
         => $"{_baseUrl}/login";

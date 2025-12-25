@@ -30,7 +30,7 @@ public static class EmailTemplateBuilder
         <table role=""presentation"" width=""640"" style=""max-width:640px;background:#ffffff;border-radius:16px;border:1px solid #e2e8f0;box-shadow:0 14px 30px rgba(15,23,42,0.08);"" cellpadding=""0"" cellspacing=""0"">
           <tr>
             <td style=""padding:24px 28px 0 28px;"">
-              <div style=""font-size:26px;font-weight:800;color:#0f172a;letter-spacing:0.3px;text-shadow:0 1px 0 #ffffff,0 2px 0 #dbeafe,0 3px 0 #bfdbfe,0 5px 10px rgba(15,23,42,0.15);"">.Teammy</div>
+              <div style=""font-size:26px;font-weight:800;color:#0f172a;letter-spacing:0.3px;text-shadow:0 1px 0 #ffffff,0 2px 0 #dbeafe,0 3px 0 #bfdbfe,0 5px 10px rgba(15,23,42,0.15);"">Teammy.</div>
             </td>
           </tr>
           <tr>

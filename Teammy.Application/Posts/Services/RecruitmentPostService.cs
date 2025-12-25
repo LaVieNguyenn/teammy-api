@@ -15,6 +15,7 @@ public sealed class RecruitmentPostService(
     IUserReadOnlyQueries userQueries,
     IAppUrlProvider urlProvider,
     IInvitationRepository invitationRepo,
+    ISemesterReadOnlyQueries semesterQueries,
     IInvitationNotifier invitationNotifier)
 {
     private const string AppName = "TEAMMY";
@@ -23,6 +24,7 @@ public sealed class RecruitmentPostService(
     private readonly IAppUrlProvider _urlProvider = urlProvider;
     private readonly IInvitationRepository _invitationRepo = invitationRepo;
     private readonly IInvitationNotifier _invitationNotifier = invitationNotifier;
+    private readonly ISemesterReadOnlyQueries _semesterQueries = semesterQueries;
 
     public async Task<Guid> CreateAsync(Guid currentUserId, CreateRecruitmentPostRequest req, CancellationToken ct)
     {
@@ -37,6 +39,10 @@ public sealed class RecruitmentPostService(
             throw new InvalidOperationException("Closed group cannot create recruitment posts");
 
         var semesterId = detail.SemesterId;
+        var policy = await _semesterQueries.GetPolicyAsync(semesterId, ct);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        if (policy is null || today < policy.TeamSelfSelectStart || today > policy.TeamSelfSelectEnd)
+            throw new InvalidOperationException("Recruitment post time is closed");
         var targetMajorId = req.MajorId ?? detail.MajorId;
         await repo.CloseAllOpenPostsForGroupAsync(req.GroupId, ct);
         DateTime expiresAt;
