@@ -39,7 +39,6 @@ public sealed class GroupService(
             throw new ArgumentException("Name is required");
         var normalizedName = req.Name.Trim();
         var semesterId = await _studentSemesters.GetCurrentSemesterIdAsync(creatorUserId, ct)
-            ?? await queries.GetActiveSemesterIdAsync(ct)
             ?? throw new InvalidOperationException("No current semester available");
 
         var policy = await _semesterQueries.GetPolicyAsync(semesterId, ct);

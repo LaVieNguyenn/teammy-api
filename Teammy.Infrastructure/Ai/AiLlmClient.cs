@@ -34,9 +34,19 @@ public sealed class AiLlmClient : IAiLlmClient
         // { queryText, policy?, topN?, candidates:[{key, entityId, title, text}] }
         // Additionally, we may provide a richer shape for AI hosts:
         // { mode, topN, queryText, team:{...}, candidates:[{key, entityId, title, text, neededRole, baselineScore}] }
-        var policy = request.Context is null
-            ? null
-            : (request.Context.TryGetValue("policy", out var p) ? p : null);
+        object? policy = null;
+        if (request.Context is not null && request.Context.TryGetValue("policy", out var policyRaw)
+            && !string.IsNullOrWhiteSpace(policyRaw))
+        {
+            try
+            {
+                policy = JsonSerializer.Deserialize<JsonElement>(policyRaw, SerializerOptions);
+            }
+            catch
+            {
+                policy = policyRaw;
+            }
+        }
 
         var mode = request.Context is null
             ? null

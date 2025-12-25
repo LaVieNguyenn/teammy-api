@@ -14,6 +14,9 @@ public sealed record AdminUserListItemDto(
     string? MajorName,
     string? StudentCode,
     string? Gender,
+    double? Gpa,
+    Guid? SemesterId,
+    AdminUserSemesterDto? Semester,
     DateTime CreatedAt,
     string? PortfolioUrl
 );
@@ -30,10 +33,21 @@ public sealed record AdminUserDetailDto(
     string? MajorName,
     string? StudentCode,
     string? Gender,
+    double? Gpa,
+    AdminUserSemesterDto? Semester,
     bool   SkillsCompleted,
     DateTime CreatedAt,
     DateTime UpdatedAt,
     string? PortfolioUrl
+);
+
+public sealed record AdminUserSemesterDto(
+    Guid SemesterId,
+    string Season,
+    int Year,
+    DateOnly StartDate,
+    DateOnly EndDate,
+    bool IsActive
 );
 
 public sealed record AdminMajorStatsDto(

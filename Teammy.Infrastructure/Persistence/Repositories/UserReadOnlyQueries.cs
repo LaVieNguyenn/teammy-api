@@ -174,6 +174,10 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 from r in rj.DefaultIfEmpty()
                 join m in _db.majors on u.major_id equals m.major_id into mj
                 from m in mj.DefaultIfEmpty()
+                join ss in _db.student_semesters on u.user_id equals ss.user_id into ssj
+                from ss in ssj.Where(x => x.is_current).DefaultIfEmpty()
+                join s in _db.semesters on ss.semester_id equals s.semester_id into sj
+                from s in sj.DefaultIfEmpty()
                 orderby u.created_at descending
                 select new AdminUserListItemDto(
                     u.user_id,
@@ -187,6 +191,17 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                     m.major_name,
                     u.student_code,
                     u.gender,
+                    u.gpa,
+                    s == null ? null : s.semester_id,
+                    s == null
+                        ? null
+                        : new AdminUserSemesterDto(
+                            s.semester_id,
+                            s.season ?? string.Empty,
+                            s.year ?? 0,
+                            s.start_date ?? default,
+                            s.end_date ?? default,
+                            s.is_active),
                     u.created_at,
                     u.portfolio_url
                 );
@@ -204,6 +219,10 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 from r in rj.DefaultIfEmpty()
                 join m in _db.majors on u.major_id equals m.major_id into mj
                 from m in mj.DefaultIfEmpty()
+                join ss in _db.student_semesters on u.user_id equals ss.user_id into ssj
+                from ss in ssj.Where(x => x.is_current).DefaultIfEmpty()
+                join s in _db.semesters on ss.semester_id equals s.semester_id into sj
+                from s in sj.DefaultIfEmpty()
                 where u.user_id == userId
                 select new AdminUserDetailDto(
                     u.user_id,
@@ -217,6 +236,16 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                     m.major_name,
                     u.student_code,
                     u.gender,
+                    u.gpa,
+                    s == null
+                        ? null
+                        : new AdminUserSemesterDto(
+                            s.semester_id,
+                            s.season ?? string.Empty,
+                            s.year ?? 0,
+                            s.start_date ?? default,
+                            s.end_date ?? default,
+                            s.is_active),
                     u.skills_completed,
                     u.created_at,
                     u.updated_at,
@@ -233,6 +262,10 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 join r in _db.roles.AsNoTracking() on ur.role_id equals r.role_id
                 join m in _db.majors on u.major_id equals m.major_id into mj
                 from m in mj.DefaultIfEmpty()
+                join ss in _db.student_semesters.AsNoTracking() on u.user_id equals ss.user_id into ssj
+                from ss in ssj.Where(x => x.is_current).DefaultIfEmpty()
+                join s in _db.semesters.AsNoTracking() on ss.semester_id equals s.semester_id into sj
+                from s in sj.DefaultIfEmpty()
                 where u.display_name.ToLower() == displayName.ToLower()
                 select new AdminUserDetailDto(
                     u.user_id,
@@ -246,6 +279,16 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                     m.major_name,
                     u.student_code,
                     u.gender,
+                    u.gpa,
+                    s == null
+                        ? null
+                        : new AdminUserSemesterDto(
+                            s.semester_id,
+                            s.season ?? string.Empty,
+                            s.year ?? 0,
+                            s.start_date ?? default,
+                            s.end_date ?? default,
+                            s.is_active),
                     u.skills_completed,
                     u.created_at,
                     u.updated_at,
@@ -263,6 +306,10 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 join r in _db.roles.AsNoTracking() on ur.role_id equals r.role_id
                 join m in _db.majors on u.major_id equals m.major_id into mj
                 from m in mj.DefaultIfEmpty()
+                join ss in _db.student_semesters.AsNoTracking() on u.user_id equals ss.user_id into ssj
+                from ss in ssj.Where(x => x.is_current).DefaultIfEmpty()
+                join s in _db.semesters.AsNoTracking() on ss.semester_id equals s.semester_id into sj
+                from s in sj.DefaultIfEmpty()
                 where u.student_code == studentCode
                 select new AdminUserDetailDto(
                     u.user_id,
@@ -276,6 +323,16 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                     m.major_name,
                     u.student_code,
                     u.gender,
+                    u.gpa,
+                    s == null
+                        ? null
+                        : new AdminUserSemesterDto(
+                            s.semester_id,
+                            s.season ?? string.Empty,
+                            s.year ?? 0,
+                            s.start_date ?? default,
+                            s.end_date ?? default,
+                            s.is_active),
                     u.skills_completed,
                     u.created_at,
                     u.updated_at,
