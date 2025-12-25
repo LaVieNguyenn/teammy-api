@@ -1,3 +1,5 @@
+using Teammy.Application.Common.Interfaces;
+
 namespace Teammy.Application.Auth.Dtos;
 
 public sealed record LoginResponse(
@@ -5,5 +7,6 @@ public sealed record LoginResponse(
     Guid   UserId,
     string Email,
     string DisplayName,
-    string Role
+    string Role,
+    TokenSemesterInfo? Semester
 );

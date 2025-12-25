@@ -55,6 +55,6 @@ public sealed class AuthenticationService(
         var jwt = tokenService.CreateAccessToken(
             user.Id, user.Email, user.DisplayName, user.RoleName, semesterInfo);
 
-        return new LoginResponse(jwt, user.Id, user.Email, user.DisplayName, user.RoleName);
+        return new LoginResponse(jwt, user.Id, user.Email, user.DisplayName, user.RoleName, semesterInfo);
     }
 }
