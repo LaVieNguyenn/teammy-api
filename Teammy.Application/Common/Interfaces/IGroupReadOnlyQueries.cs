@@ -25,8 +25,10 @@ public interface IGroupReadOnlyQueries
 
     Task<IReadOnlyList<Teammy.Application.Groups.Dtos.GroupMemberDto>> ListActiveMembersAsync(Guid groupId, CancellationToken ct);
     Task<bool> IsActiveMemberAsync(Guid groupId, Guid userId, CancellationToken ct);
+    Task<bool> IsMentorAsync(Guid groupId, Guid userId, CancellationToken ct);
 
     Task<GroupMentorDto?> GetMentorAsync(Guid groupId, CancellationToken ct);
+    Task<IReadOnlyList<GroupMentorDto>> GetMentorsAsync(Guid groupId, CancellationToken ct);
 
     Task<Teammy.Application.Groups.Dtos.UserGroupCheckDto> CheckUserGroupAsync(Guid userId, Guid? semesterId, bool includePending, CancellationToken ct);
 

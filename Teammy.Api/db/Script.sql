@@ -133,6 +133,7 @@ CREATE TABLE IF NOT EXISTS teammy.groups (
   semester_id  UUID NOT NULL REFERENCES teammy.semesters(semester_id) ON DELETE CASCADE,
   topic_id     UUID REFERENCES teammy.topics(topic_id) ON DELETE SET NULL,
   mentor_id    UUID REFERENCES teammy.users(user_id) ON DELETE SET NULL,
+  mentor_ids   UUID[],
   major_id     UUID REFERENCES teammy.majors(major_id) ON DELETE SET NULL,
   name         TEXT NOT NULL,
   description  TEXT,
@@ -145,6 +146,17 @@ CREATE TABLE IF NOT EXISTS teammy.groups (
 );
 CREATE INDEX IF NOT EXISTS ix_groups_skills_gin
   ON teammy.groups USING gin (skills jsonb_path_ops);
+
+ALTER TABLE teammy.groups
+  ADD COLUMN IF NOT EXISTS mentor_ids UUID[];
+
+CREATE INDEX IF NOT EXISTS ix_groups_mentor_ids_gin
+  ON teammy.groups USING gin (mentor_ids);
+
+UPDATE teammy.groups
+SET mentor_ids = ARRAY[mentor_id]
+WHERE mentor_id IS NOT NULL
+  AND (mentor_ids IS NULL OR array_length(mentor_ids, 1) IS NULL);
 
 CREATE TABLE IF NOT EXISTS teammy.group_members (
   group_member_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -116,10 +116,13 @@ public sealed class InvitationRepository(AppDbContext db) : IInvitationRepositor
         return items.Select(i => (i.invitation_id, i.group_id)).ToList();
     }
 
-    public async Task<IReadOnlyList<(Guid InvitationId, Guid InviteeUserId, Guid GroupId, Guid InvitedBy)>> RejectPendingMentorInvitesForTopicAsync(Guid topicId, Guid exceptInvitationId, CancellationToken ct)
+    public async Task<IReadOnlyList<(Guid InvitationId, Guid InviteeUserId, Guid GroupId, Guid InvitedBy)>> RejectPendingMentorInvitesForTopicAsync(Guid topicId, Guid exceptInvitationId, Guid groupId, CancellationToken ct)
     {
         var items = await db.invitations
-            .Where(i => i.topic_id == topicId && i.invitation_id != exceptInvitationId && i.status == "pending")
+            .Where(i => i.topic_id == topicId
+                && i.invitation_id != exceptInvitationId
+                && i.group_id != groupId
+                && i.status == "pending")
             .ToListAsync(ct);
         if (items.Count == 0) return Array.Empty<(Guid, Guid, Guid, Guid)>();
         var now = DateTime.UtcNow;

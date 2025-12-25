@@ -91,7 +91,8 @@ public sealed class GroupsController : ControllerBase
                 topicObj = new PostTopicDtoDetail(topic_id, title, description, status, created_by, created_at);
             }
         }
-        var mentor = await _groupQueries.GetMentorAsync(id, ct);
+        var mentors = await _groupQueries.GetMentorsAsync(id, ct);
+        var mentor = mentors.FirstOrDefault();
         var detail = await _service.GetGroupAsync(id, ct);
         return Ok(new
         {
@@ -106,6 +107,7 @@ public sealed class GroupsController : ControllerBase
             major = majorObj,
             topic = topicObj,
             mentor = mentor is null ? null : new { mentor.UserId, mentor.Email, mentor.DisplayName, mentor.AvatarUrl },
+            mentors = mentors.Select(m => new { m.UserId, m.Email, m.DisplayName, m.AvatarUrl }).ToList(),
             leader = leaderMember,
             members = nonLeaderMembers 
         });
@@ -159,7 +161,8 @@ public sealed class GroupsController : ControllerBase
                     topicObj = new PostTopicDto(topic.TopicId, topic.SemesterId, topic.MajorId, topic.Title, topic.Description, topic.Status, topic.CreatedById, topic.CreatedAt);
                 }
             }
-            var mentorDto = await _groupQueries.GetMentorAsync(g.GroupId, ct);
+            var mentorList = await _groupQueries.GetMentorsAsync(g.GroupId, ct);
+            var mentorDto = mentorList.FirstOrDefault();
             var members = await _service.ListActiveMembersAsync(g.GroupId, ct);
             var leaderMember = members.FirstOrDefault(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase));
             var nonLeaderMembers = members.Where(m => !string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase)).ToList();
@@ -173,10 +176,12 @@ public sealed class GroupsController : ControllerBase
                 currentMembers = g.CurrentMembers,
                 role = g.Role,
                 skills = detail?.Skills,
+                mentorIds = detail?.MentorIds,
                 semester = semesterObj,
                 major = majorObj,
                 topic = topicObj,
                 mentor = mentorDto is null ? null : new { mentorDto.UserId, mentorDto.Email, mentorDto.DisplayName, mentorDto.AvatarUrl },
+                mentors = mentorList.Select(m => new { m.UserId, m.Email, m.DisplayName, m.AvatarUrl }).ToList(),
                 leader = leaderMember,
                 members = nonLeaderMembers
             });
@@ -475,8 +480,8 @@ public sealed class GroupsController : ControllerBase
     {
         try
         {
-            var invitationId = await _invitations.InviteMentorAsync(id, req.TopicId, req.MentorUserId, GetUserId(), req.Message, ct);
-            return Accepted(new { invitationId });
+            var invitationIds = await _invitations.InviteMentorAsync(id, req.TopicId, req.MentorUserId, GetUserId(), req.Message, ct);
+            return Accepted(new { invitationIds });
         }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (KeyNotFoundException ex) { return NotFound(ex.Message); }

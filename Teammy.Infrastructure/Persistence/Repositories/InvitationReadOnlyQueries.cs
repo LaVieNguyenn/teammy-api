@@ -83,4 +83,20 @@ public sealed class InvitationReadOnlyQueries(AppDbContext db) : IInvitationRead
             .OrderByDescending(i => i.created_at)
             .Select(i => (Guid?)i.topic_id)
             .FirstOrDefaultAsync(ct);
+
+    public async Task<IReadOnlyList<(Guid InvitationId, Guid InviteeUserId, Guid InvitedBy)>> ListPendingMentorInvitesForGroupTopicAsync(
+        Guid groupId,
+        Guid topicId,
+        Guid exceptInvitationId,
+        CancellationToken ct)
+    {
+        var items = await db.invitations.AsNoTracking()
+            .Where(i => i.group_id == groupId
+                        && i.topic_id == topicId
+                        && i.invitation_id != exceptInvitationId
+                        && i.status == "pending")
+            .Select(i => new ValueTuple<Guid, Guid, Guid>(i.invitation_id, i.invitee_user_id, i.invited_by))
+            .ToListAsync(ct);
+        return items;
+    }
 }
