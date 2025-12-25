@@ -16,7 +16,9 @@ public sealed class GroupAccessQueries(AppDbContext db) : IGroupAccessQueries
 
     public Task<bool> IsMentorAsync(Guid groupId, Guid userId, CancellationToken ct)
         => db.groups.AsNoTracking()
-            .AnyAsync(g => g.group_id == groupId && g.mentor_id == userId, ct);
+            .AnyAsync(g => g.group_id == groupId
+                           && (g.mentor_id == userId
+                               || (g.mentor_ids != null && g.mentor_ids.Contains(userId))), ct);
 
     public Task<bool> IsGroupActiveAsync(Guid groupId, CancellationToken ct)
         => db.groups.AsNoTracking()

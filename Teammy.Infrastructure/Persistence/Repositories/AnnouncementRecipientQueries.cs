@@ -201,9 +201,10 @@ public sealed class AnnouncementRecipientQueries(AppDbContext db) : IAnnouncemen
 
         var mentors =
             from g in db.groups.AsNoTracking()
-            join u in db.users.AsNoTracking() on g.mentor_id equals u.user_id
+            from u in db.users.AsNoTracking()
             where g.semester_id == semesterId
-                  && g.mentor_id != null
+                  && (g.mentor_id == u.user_id
+                      || (g.mentor_ids != null && g.mentor_ids.Contains(u.user_id)))
                   && u.is_active
                   && !string.IsNullOrWhiteSpace(u.email)
             select new RecipientProjection(u.user_id, u.email!, u.display_name);
@@ -233,9 +234,10 @@ public sealed class AnnouncementRecipientQueries(AppDbContext db) : IAnnouncemen
 
         var mentors =
             from g in db.groups.AsNoTracking()
-            join u in db.users.AsNoTracking() on g.mentor_id equals u.user_id
+            from u in db.users.AsNoTracking()
             where g.group_id == groupId
-                  && g.mentor_id != null
+                  && (g.mentor_id == u.user_id
+                      || (g.mentor_ids != null && g.mentor_ids.Contains(u.user_id)))
                   && u.is_active
                   && !string.IsNullOrWhiteSpace(u.email)
             select new RecipientProjection(u.user_id, u.email!, u.display_name);
@@ -256,9 +258,10 @@ public sealed class AnnouncementRecipientQueries(AppDbContext db) : IAnnouncemen
 
         var mentors =
             from g in db.groups.AsNoTracking()
-            join u in db.users.AsNoTracking() on g.mentor_id equals u.user_id
+            from u in db.users.AsNoTracking()
             where groupIds.Contains(g.group_id)
-                  && g.mentor_id != null
+                  && (g.mentor_id == u.user_id
+                      || (g.mentor_ids != null && g.mentor_ids.Contains(u.user_id)))
                   && u.is_active
                   && !string.IsNullOrWhiteSpace(u.email)
             select new RecipientProjection(u.user_id, u.email!, u.display_name);

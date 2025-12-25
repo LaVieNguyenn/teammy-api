@@ -188,6 +188,7 @@ public sealed class ChatRepository(AppDbContext db) : IChatRepository
         var mentorGroups =
             from g in db.groups.AsNoTracking()
             where g.mentor_id == userId
+                  || (g.mentor_ids != null && g.mentor_ids.Contains(userId))
             join s in db.chat_sessions.AsNoTracking() on g.group_id equals s.group_id
             join r in db.chat_session_reads.AsNoTracking()
                 .Where(x => x.user_id == userId) on s.chat_session_id equals r.chat_session_id into rr

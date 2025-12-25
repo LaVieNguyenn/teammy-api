@@ -265,9 +265,8 @@ public sealed class GroupService(
 
     public async Task ConfirmCloseGroupAsync(Guid groupId, Guid currentUserId, CancellationToken ct)
     {
-        var mentor = await queries.GetMentorAsync(groupId, ct)
-            ?? throw new InvalidOperationException("Mentor not assigned to this group");
-        if (mentor.UserId != currentUserId)
+        var isMentor = await queries.IsMentorAsync(groupId, currentUserId, ct);
+        if (!isMentor)
             throw new UnauthorizedAccessException("Mentor only");
 
         var detail = await queries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
@@ -282,16 +281,22 @@ public sealed class GroupService(
             Message = "Mentor confirmed and closed the group"
         }, ct);
 
+        var mentorProfile = await _userQueries.GetAdminDetailAsync(currentUserId, ct);
+        var mentor = new GroupMentorDto(
+            currentUserId,
+            mentorProfile?.Email ?? string.Empty,
+            mentorProfile?.DisplayName ?? "Mentor",
+            mentorProfile?.AvatarUrl);
+
         await SendCloseConfirmedEmailToLeadersAsync(groupId, mentor, ct);
-        await NotifyCloseStatusAsync(groupId, mentor.UserId, "closed", "close_confirmed", ct);
+        await NotifyCloseStatusAsync(groupId, currentUserId, "closed", "close_confirmed", ct);
         await NotifyCloseStatusToLeadersAsync(groupId, "closed", "close_confirmed", ct);
     }
 
     public async Task RejectCloseGroupAsync(Guid groupId, Guid currentUserId, CancellationToken ct)
     {
-        var mentor = await queries.GetMentorAsync(groupId, ct)
-            ?? throw new InvalidOperationException("Mentor not assigned to this group");
-        if (mentor.UserId != currentUserId)
+        var isMentor = await queries.IsMentorAsync(groupId, currentUserId, ct);
+        if (!isMentor)
             throw new UnauthorizedAccessException("Mentor only");
 
         var detail = await queries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
@@ -306,8 +311,15 @@ public sealed class GroupService(
             Message = "Mentor rejected the close request"
         }, ct);
 
+        var mentorProfile = await _userQueries.GetAdminDetailAsync(currentUserId, ct);
+        var mentor = new GroupMentorDto(
+            currentUserId,
+            mentorProfile?.Email ?? string.Empty,
+            mentorProfile?.DisplayName ?? "Mentor",
+            mentorProfile?.AvatarUrl);
+
         await SendCloseRejectedEmailToLeadersAsync(groupId, mentor, ct);
-        await NotifyCloseStatusAsync(groupId, mentor.UserId, "active", "close_rejected", ct);
+        await NotifyCloseStatusAsync(groupId, currentUserId, "active", "close_rejected", ct);
         await NotifyCloseStatusToLeadersAsync(groupId, "active", "close_rejected", ct);
     }
 

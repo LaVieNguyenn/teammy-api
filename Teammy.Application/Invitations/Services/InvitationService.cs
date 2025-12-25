@@ -89,12 +89,37 @@ public sealed class InvitationService(
         return (invitationId, emailSent);
     }
 
-    public async Task<Guid> InviteMentorAsync(Guid groupId, Guid topicId, Guid mentorUserId, Guid invitedByUserId, string? message, CancellationToken ct)
+    public async Task<IReadOnlyList<Guid>> InviteMentorAsync(Guid groupId, Guid topicId, Guid mentorUserId, Guid invitedByUserId, string? message, CancellationToken ct)
     {
         var isLeader = await groupQueries.IsLeaderAsync(groupId, invitedByUserId, ct);
         if (!isLeader) throw new UnauthorizedAccessException("Leader only");
 
-        return await CreateMentorInviteInternalAsync(groupId, topicId, mentorUserId, invitedByUserId, message, invitedByIsMentor: false, ct);
+        var topic = await _topicQueries.GetByIdAsync(topicId, ct) ?? throw new KeyNotFoundException("Topic not found");
+        var mentorIds = topic.Mentors
+            .Select(m => m.MentorId)
+            .Distinct()
+            .ToList();
+
+        if (mentorIds.Count == 0)
+            throw new InvalidOperationException("Mentor is not assigned to this topic");
+
+        if (mentorIds.Count == 1)
+        {
+            if (mentorIds[0] != mentorUserId)
+                throw new InvalidOperationException("Mentor is not assigned to this topic");
+            var invitationId = await CreateMentorInviteInternalAsync(groupId, topicId, mentorUserId, invitedByUserId, message, invitedByIsMentor: false, ct);
+            return new[] { invitationId };
+        }
+
+        var invitationIds = new List<Guid>();
+        foreach (var mid in mentorIds)
+        {
+            var invitationId = await CreateMentorInviteInternalAsync(groupId, topicId, mid, invitedByUserId, message, invitedByIsMentor: false, ct);
+            if (!invitationIds.Contains(invitationId))
+                invitationIds.Add(invitationId);
+        }
+
+        return invitationIds;
     }
 
     public Task<Guid> RequestMentorAsync(Guid groupId, Guid topicId, Guid mentorUserId, string? message, CancellationToken ct)
@@ -118,7 +143,8 @@ public sealed class InvitationService(
             throw new InvalidOperationException("Group already has a pending mentor invitation for another topic");
         var topic = await _topicQueries.GetByIdAsync(topicId, ct) ?? throw new KeyNotFoundException("Topic not found");
         var topicStatus = topic.Status?.ToLowerInvariant();
-        if (!string.Equals(topicStatus, "open", StringComparison.OrdinalIgnoreCase))
+        var isGroupTopic = detail.TopicId.HasValue && detail.TopicId.Value == topicId;
+        if (!string.Equals(topicStatus, "open", StringComparison.OrdinalIgnoreCase) && !isGroupTopic)
             throw new InvalidOperationException("Topic is not open");
         if (topic.SemesterId != detail.SemesterId)
             throw new InvalidOperationException("Topic must belong to the same semester");
@@ -346,7 +372,8 @@ public sealed class InvitationService(
             throw new InvalidOperationException("Group already active");
         var topic = await _topicQueries.GetByIdAsync(inv.TopicId.Value, ct) ?? throw new KeyNotFoundException("Topic not found");
         var topicStatus = topic.Status?.ToLowerInvariant();
-        if (!string.Equals(topicStatus, "open", StringComparison.OrdinalIgnoreCase))
+        var groupHasTopic = group.TopicId.HasValue && group.TopicId.Value == inv.TopicId.Value;
+        if (!string.Equals(topicStatus, "open", StringComparison.OrdinalIgnoreCase) && !groupHasTopic)
             throw new InvalidOperationException("Topic already closed");
         if (topic.SemesterId != group.SemesterId)
             throw new InvalidOperationException("Topic semester mismatch");
@@ -360,11 +387,26 @@ public sealed class InvitationService(
             await postRepo.CloseAllOpenPostsForGroupAsync(inv.GroupId, ct);
         }
         await repo.UpdateStatusAsync(inv.InvitationId, "accepted", DateTime.UtcNow, ct);
-        await repo.RevokePendingMentorInvitesAsync(inv.GroupId, inv.InvitationId, ct);
         await BroadcastStatusAsync(inv.InviteeUserId, inv.GroupId, inv.InvitationId, "accepted", ct);
         await NotifyInviterAsync(inv, "accepted", ct);
 
-        var rejectedSameTopic = await repo.RejectPendingMentorInvitesForTopicAsync(inv.TopicId.Value, inv.InvitationId, ct);
+        var autoAcceptInvites = await queries.ListPendingMentorInvitesForGroupTopicAsync(inv.GroupId, inv.TopicId.Value, inv.InvitationId, ct);
+        foreach (var (otherInvitationId, inviteeUserId, invitedByUserId) in autoAcceptInvites)
+        {
+            if (invitedByUserId == inviteeUserId)
+                continue;
+
+            await groupRepo.UpdateGroupAsync(inv.GroupId, null, null, null, null, null, inviteeUserId, null, ct);
+            await repo.UpdateStatusAsync(otherInvitationId, "accepted", DateTime.UtcNow, ct);
+            await BroadcastStatusAsync(inviteeUserId, inv.GroupId, otherInvitationId, "accepted", ct);
+            var detail = await queries.GetAsync(otherInvitationId, ct);
+            if (detail is not null)
+            {
+                await NotifyInviterAsync(detail, "accepted", ct);
+            }
+        }
+
+        var rejectedSameTopic = await repo.RejectPendingMentorInvitesForTopicAsync(inv.TopicId.Value, inv.InvitationId, inv.GroupId, ct);
         foreach (var (otherInvitationId, inviteeUserId, groupId, invitedByUserId) in rejectedSameTopic)
         {
             await BroadcastStatusAsync(inviteeUserId, groupId, otherInvitationId, "rejected", ct);

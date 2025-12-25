@@ -366,6 +366,7 @@ public partial class AppDbContext : DbContext
             entity.Property(e => e.status).HasDefaultValueSql("'recruiting'::text");
             entity.Property(e => e.updated_at).HasDefaultValueSql("now()");
             entity.Property(e => e.skills).HasColumnType("jsonb");
+            entity.Property(e => e.mentor_ids).HasColumnType("uuid[]");
 
             entity.HasOne(d => d.major).WithMany(p => p.groups)
                 .HasForeignKey(d => d.major_id)

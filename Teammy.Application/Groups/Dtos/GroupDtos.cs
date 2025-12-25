@@ -35,7 +35,8 @@ public sealed record GroupDetailDto(
     Guid?  TopicId,
     Guid?  MajorId,
     int    CurrentMembers,
-    IReadOnlyList<string>? Skills
+    IReadOnlyList<string>? Skills,
+    Guid[]? MentorIds
 );
 
 public sealed record InviteUserRequest(Guid UserId);

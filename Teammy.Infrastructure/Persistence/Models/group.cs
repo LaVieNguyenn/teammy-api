@@ -13,6 +13,8 @@ public partial class group
 
     public Guid? mentor_id { get; set; }
 
+    public Guid[]? mentor_ids { get; set; }
+
     public Guid? major_id { get; set; }
 
     public string name { get; set; } = null!;

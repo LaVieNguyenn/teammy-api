@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Teammy.Application.Common.Interfaces;
@@ -176,7 +177,18 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
         if (maxMembers.HasValue) g.max_members = maxMembers.Value;
         if (majorId.HasValue) g.major_id = majorId;
         if (topicId.HasValue) g.topic_id = topicId;
-        if (mentorId.HasValue) g.mentor_id = mentorId;
+        if (mentorId.HasValue)
+        {
+            if (!g.mentor_id.HasValue)
+                g.mentor_id = mentorId;
+
+            var existing = g.mentor_ids?.ToList() ?? new List<Guid>();
+            if (g.mentor_id.HasValue && !existing.Contains(g.mentor_id.Value))
+                existing.Add(g.mentor_id.Value);
+            if (!existing.Contains(mentorId.Value))
+                existing.Add(mentorId.Value);
+            g.mentor_ids = existing.Count == 0 ? null : existing.ToArray();
+        }
         if (skillsJson is not null) g.skills = skillsJson;
         g.updated_at = DateTime.UtcNow;
 
