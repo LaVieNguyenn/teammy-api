@@ -107,7 +107,8 @@ public sealed class AnnouncementReadOnlyQueries(AppDbContext db) : IAnnouncement
             .ToListAsync(ct);
 
         var mentorGroups = await db.groups
-            .Where(g => g.mentor_id == userId)
+            .Where(g => g.mentor_id == userId
+                        || (g.mentor_ids != null && g.mentor_ids.Contains(userId)))
             .Select(g => new { g.group_id, g.semester_id })
             .ToListAsync(ct);
 

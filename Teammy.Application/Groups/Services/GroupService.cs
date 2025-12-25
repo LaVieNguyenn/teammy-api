@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using Teammy.Application.Common.Email;
 using Teammy.Application.Activity.Dtos;
 using Teammy.Application.Activity.Services;
 using Teammy.Application.Common.Interfaces;
@@ -17,14 +18,17 @@ public sealed class GroupService(
     ActivityLogService activityLogService,
     IEmailSender emailSender,
     ISemesterReadOnlyQueries semesterQueries,
+    IGroupStatusNotifier groupStatusNotifier,
     IStudentSemesterReadOnlyQueries studentSemesterQueries)
 {
     private const string AppName = "TEAMMY";
+    private const string DefaultAppUrl = "https://teammy.vercel.app/login";
     private readonly IUserReadOnlyQueries _userQueries = userQueries;
     private readonly IRecruitmentPostRepository _postRepo = postRepo;
     private readonly ActivityLogService _activityLog = activityLogService;
     private readonly IEmailSender _emailSender = emailSender;
     private readonly ISemesterReadOnlyQueries _semesterQueries = semesterQueries;
+    private readonly IGroupStatusNotifier _groupStatusNotifier = groupStatusNotifier;
     private readonly IStudentSemesterReadOnlyQueries _studentSemesters = studentSemesterQueries;
     private readonly Dictionary<Guid, SemesterPolicyDto?> _semesterPolicyCache = new();
     private readonly Dictionary<Guid, SemesterDetailDto?> _semesterDetailCache = new();
@@ -33,9 +37,19 @@ public sealed class GroupService(
     {
         if (string.IsNullOrWhiteSpace(req.Name))
             throw new ArgumentException("Name is required");
+        var normalizedName = req.Name.Trim();
         var semesterId = await _studentSemesters.GetCurrentSemesterIdAsync(creatorUserId, ct)
             ?? await queries.GetActiveSemesterIdAsync(ct)
             ?? throw new InvalidOperationException("No current semester available");
+
+        var policy = await _semesterQueries.GetPolicyAsync(semesterId, ct);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        if (policy is null || today < policy.TeamSelfSelectStart || today > policy.TeamSelfSelectEnd)
+            throw new InvalidOperationException("Team self-select is closed");
+
+        var nameExists = await queries.GroupNameExistsAsync(semesterId, normalizedName, null, ct);
+        if (nameExists)
+            throw new InvalidOperationException("Group name already exists in this semester");
 
         var (minSize, maxSize) = await queries.GetGroupSizePolicyAsync(semesterId, ct);
         if (req.MaxMembers < minSize || req.MaxMembers > maxSize)
@@ -51,7 +65,7 @@ public sealed class GroupService(
         if (!majorId.HasValue)
             throw new InvalidOperationException("User hasn't major");
 
-        var groupId = await repo.CreateGroupAsync(semesterId, null, majorId, req.Name, req.Description, req.MaxMembers, null, ct);
+        var groupId = await repo.CreateGroupAsync(semesterId, null, majorId, normalizedName, req.Description, req.MaxMembers, null, ct);
         await repo.AddMembershipAsync(groupId, creatorUserId, semesterId, "leader", ct);
         await _postRepo.DeleteProfilePostsForUserAsync(creatorUserId, semesterId, ct);
         await _postRepo.WithdrawPendingApplicationsForUserInSemesterAsync(creatorUserId, semesterId, ct);
@@ -217,6 +231,101 @@ public sealed class GroupService(
     public Task<IReadOnlyList<GroupMemberDto>> ListActiveMembersAsync(Guid groupId, CancellationToken ct)
         => queries.ListActiveMembersAsync(groupId, ct);
 
+    public async Task RequestCloseGroupAsync(Guid groupId, Guid currentUserId, CancellationToken ct)
+    {
+        var isLeader = await queries.IsLeaderAsync(groupId, currentUserId, ct);
+        if (!isLeader) throw new UnauthorizedAccessException("Leader only");
+
+        var detail = await queries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
+        if (string.Equals(detail.Status, "closed", StringComparison.OrdinalIgnoreCase))
+            return;
+        if (string.Equals(detail.Status, "pending_close", StringComparison.OrdinalIgnoreCase))
+            return;
+        if (!string.Equals(detail.Status, "active", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Group must be active to request close");
+
+        var mentor = await queries.GetMentorAsync(groupId, ct);
+        if (mentor is null)
+            throw new InvalidOperationException("Mentor not assigned to this group");
+        if (!detail.TopicId.HasValue)
+            throw new InvalidOperationException("Topic not selected for this group");
+        var (maxMembers, activeCount) = await queries.GetGroupCapacityAsync(groupId, ct);
+        if (activeCount < maxMembers)
+            throw new InvalidOperationException($"Need {maxMembers - activeCount} more member before closing");
+
+        await repo.SetStatusAsync(groupId, "pending_close", ct);
+        await LogAsync(new ActivityLogCreateRequest(currentUserId, "group", "GROUP_CLOSE_REQUESTED")
+        {
+            GroupId = groupId,
+            EntityId = groupId,
+            Message = "Leader requested to close the group"
+        }, ct);
+
+        await SendCloseRequestEmailToMentorAsync(groupId, mentor, ct);
+        await NotifyCloseStatusAsync(groupId, mentor.UserId, "pending_close", "close_requested", ct);
+        await NotifyCloseStatusToLeadersAsync(groupId, "pending_close", "close_requested", ct);
+    }
+
+    public async Task ConfirmCloseGroupAsync(Guid groupId, Guid currentUserId, CancellationToken ct)
+    {
+        var isMentor = await queries.IsMentorAsync(groupId, currentUserId, ct);
+        if (!isMentor)
+            throw new UnauthorizedAccessException("Mentor only");
+
+        var detail = await queries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
+        if (!string.Equals(detail.Status, "pending_close", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Group is not pending close");
+
+        await repo.CloseGroupAsync(groupId, ct);
+        await LogAsync(new ActivityLogCreateRequest(currentUserId, "group", "GROUP_CLOSED_BY_MENTOR")
+        {
+            GroupId = groupId,
+            EntityId = groupId,
+            Message = "Mentor confirmed and closed the group"
+        }, ct);
+
+        var mentorProfile = await _userQueries.GetAdminDetailAsync(currentUserId, ct);
+        var mentor = new GroupMentorDto(
+            currentUserId,
+            mentorProfile?.Email ?? string.Empty,
+            mentorProfile?.DisplayName ?? "Mentor",
+            mentorProfile?.AvatarUrl);
+
+        await SendCloseConfirmedEmailToLeadersAsync(groupId, mentor, ct);
+        await NotifyCloseStatusAsync(groupId, currentUserId, "closed", "close_confirmed", ct);
+        await NotifyCloseStatusToLeadersAsync(groupId, "closed", "close_confirmed", ct);
+    }
+
+    public async Task RejectCloseGroupAsync(Guid groupId, Guid currentUserId, CancellationToken ct)
+    {
+        var isMentor = await queries.IsMentorAsync(groupId, currentUserId, ct);
+        if (!isMentor)
+            throw new UnauthorizedAccessException("Mentor only");
+
+        var detail = await queries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
+        if (!string.Equals(detail.Status, "pending_close", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Group is not pending close");
+
+        await repo.SetStatusAsync(groupId, "active", ct);
+        await LogAsync(new ActivityLogCreateRequest(currentUserId, "group", "GROUP_CLOSE_REJECTED")
+        {
+            GroupId = groupId,
+            EntityId = groupId,
+            Message = "Mentor rejected the close request"
+        }, ct);
+
+        var mentorProfile = await _userQueries.GetAdminDetailAsync(currentUserId, ct);
+        var mentor = new GroupMentorDto(
+            currentUserId,
+            mentorProfile?.Email ?? string.Empty,
+            mentorProfile?.DisplayName ?? "Mentor",
+            mentorProfile?.AvatarUrl);
+
+        await SendCloseRejectedEmailToLeadersAsync(groupId, mentor, ct);
+        await NotifyCloseStatusAsync(groupId, currentUserId, "active", "close_rejected", ct);
+        await NotifyCloseStatusToLeadersAsync(groupId, "active", "close_rejected", ct);
+    }
+
     public async Task CloseGroupAsync(Guid groupId, Guid currentUserId, CancellationToken ct)
     {
         var isLeader = await queries.IsLeaderAsync(groupId, currentUserId, ct);
@@ -343,11 +452,14 @@ public sealed class GroupService(
         var message = actedBy is null
             ? $"<p>You have been removed from the group <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong>.</p>"
             : $"<p>{System.Net.WebUtility.HtmlEncode(actedBy.DisplayName ?? actedBy.Email ?? "Group leader")} removed you from the group <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong>.</p>";
-        var html = $@"<!doctype html>
-<html><body style=""font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#0f172a"">
-{message}
-<p>If you believe this is a mistake, please contact the leader.</p>
-</body></html>";
+        var messageHtml = $@"{message}
+<p style=""margin-top:8px;color:#475569;"">If you believe this is a mistake, please contact the leader.</p>";
+        var html = EmailTemplateBuilder.Build(
+            subject,
+            "Removed from group",
+            messageHtml,
+            "Open Teammy",
+            DefaultAppUrl);
 
         await _emailSender.SendAsync(
             removedUser.Email,
@@ -371,11 +483,14 @@ public sealed class GroupService(
         var group = await queries.GetGroupAsync(groupId, ct);
         var groupName = group?.Name ?? "your group";
         var subject = $"{AppName} - {memberName} left {groupName}";
-        var html = $@"<!doctype html>
-<html><body style=""font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#0f172a"">
-<p>{System.Net.WebUtility.HtmlEncode(memberName)} has left <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong>.</p>
-<p>Please review your member list if needed.</p>
-</body></html>";
+        var messageHtml = $@"<p>{System.Net.WebUtility.HtmlEncode(memberName)} has left <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong>.</p>
+<p style=""margin-top:8px;color:#475569;"">Please review your member list if needed.</p>";
+        var html = EmailTemplateBuilder.Build(
+            subject,
+            "Member left group",
+            messageHtml,
+            "Open Teammy",
+            DefaultAppUrl);
 
         foreach (var leader in recipients)
         {
@@ -385,6 +500,112 @@ public sealed class GroupService(
                 html,
                 ct,
                 fromDisplayName: groupName);
+        }
+    }
+
+    private async Task SendCloseRequestEmailToMentorAsync(Guid groupId, GroupMentorDto mentor, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(mentor.Email))
+            return;
+
+        var group = await queries.GetGroupAsync(groupId, ct);
+        var groupName = group?.Name ?? "your group";
+        var subject = $"{AppName} - Close request for {groupName}";
+        var messageHtml = $@"<p>The leader has requested to close <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong>.</p>
+<p style=""margin-top:8px;color:#475569;"">Please review and confirm the close request.</p>";
+        var html = EmailTemplateBuilder.Build(
+            subject,
+            "Confirm group close",
+            messageHtml,
+            "Review Close Request",
+            DefaultAppUrl);
+
+        await _emailSender.SendAsync(
+            mentor.Email!,
+            subject,
+            html,
+            ct,
+            fromDisplayName: groupName);
+    }
+
+    private async Task SendCloseConfirmedEmailToLeadersAsync(Guid groupId, GroupMentorDto mentor, CancellationToken ct)
+    {
+        var leaders = await queries.ListActiveMembersAsync(groupId, ct);
+        var recipients = leaders
+            .Where(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(m.Email))
+            .ToList();
+        if (recipients.Count == 0) return;
+
+        var group = await queries.GetGroupAsync(groupId, ct);
+        var groupName = group?.Name ?? "your group";
+        var mentorName = mentor.DisplayName ?? mentor.Email ?? "Mentor";
+        var subject = $"{AppName} - {groupName} is closed";
+        var messageHtml = $@"<p>{System.Net.WebUtility.HtmlEncode(mentorName)} confirmed and closed <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong>.</p>
+<p style=""margin-top:8px;color:#475569;"">You can review the final status in Teammy.</p>";
+        var html = EmailTemplateBuilder.Build(
+            subject,
+            "Group closed",
+            messageHtml,
+            "Open Teammy",
+            DefaultAppUrl);
+
+        foreach (var leader in recipients)
+        {
+            await _emailSender.SendAsync(
+                leader.Email!,
+                subject,
+                html,
+                ct,
+                fromDisplayName: mentorName);
+        }
+    }
+
+    private async Task SendCloseRejectedEmailToLeadersAsync(Guid groupId, GroupMentorDto mentor, CancellationToken ct)
+    {
+        var leaders = await queries.ListActiveMembersAsync(groupId, ct);
+        var recipients = leaders
+            .Where(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(m.Email))
+            .ToList();
+        if (recipients.Count == 0) return;
+
+        var group = await queries.GetGroupAsync(groupId, ct);
+        var groupName = group?.Name ?? "your group";
+        var mentorName = mentor.DisplayName ?? mentor.Email ?? "Mentor";
+        var subject = $"{AppName} - Close request rejected for {groupName}";
+        var messageHtml = $@"<p>{System.Net.WebUtility.HtmlEncode(mentorName)} rejected the close request for <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong>.</p>
+<p style=""margin-top:8px;color:#475569;"">The group remains in recruiting status.</p>";
+        var html = EmailTemplateBuilder.Build(
+            subject,
+            "Close request rejected",
+            messageHtml,
+            "Open Teammy",
+            DefaultAppUrl);
+
+        foreach (var leader in recipients)
+        {
+            await _emailSender.SendAsync(
+                leader.Email!,
+                subject,
+                html,
+                ct,
+                fromDisplayName: mentorName);
+        }
+    }
+
+    private Task NotifyCloseStatusAsync(Guid groupId, Guid userId, string status, string action, CancellationToken ct)
+        => _groupStatusNotifier.NotifyGroupStatusAsync(groupId, userId, status, action, ct);
+
+    private async Task NotifyCloseStatusToLeadersAsync(Guid groupId, string status, string action, CancellationToken ct)
+    {
+        var members = await queries.ListActiveMembersAsync(groupId, ct);
+        var leaderIds = members
+            .Where(m => string.Equals(m.Role, "leader", StringComparison.OrdinalIgnoreCase))
+            .Select(m => m.UserId)
+            .Distinct()
+            .ToList();
+        foreach (var leaderId in leaderIds)
+        {
+            await _groupStatusNotifier.NotifyGroupStatusAsync(groupId, leaderId, status, action, ct);
         }
     }
 

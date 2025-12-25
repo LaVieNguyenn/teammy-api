@@ -97,7 +97,8 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
                 g.topic_id,
                 g.major_id,
                 db.group_members.Count(m => m.group_id == g.group_id && activeStatuses.Contains(m.status)),
-                ParseSkills(g.skills)
+                ParseSkills(g.skills),
+                g.mentor_ids
             ))
             .FirstOrDefaultAsync(ct);
     }
@@ -168,7 +169,8 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
             return Array.Empty<MyGroupDto>();
 
         var activeStatuses = new[] { "member", "leader" };
-        var memberGroup = await (
+
+        var memberGroups = await (
             from m in db.group_members.AsNoTracking()
             join g in db.groups.AsNoTracking() on m.group_id equals g.group_id
             where m.user_id == userId && g.semester_id == semId.Value
@@ -181,13 +183,13 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
                 db.group_members.Count(x => x.group_id == g.group_id && activeStatuses.Contains(x.status)),
                 m.status
             )
-        ).FirstOrDefaultAsync(ct);
+        ).ToListAsync(ct);
 
-        if (memberGroup is not null)
-            return new[] { memberGroup };
-        var mentorGroup = await (
+        var mentorGroups = await (
             from g in db.groups.AsNoTracking()
-            where g.mentor_id == userId && g.semester_id == semId.Value
+            where g.semester_id == semId.Value
+                  && (g.mentor_id == userId
+                      || (g.mentor_ids != null && g.mentor_ids.Contains(userId)))
             select new MyGroupDto(
                 g.group_id,
                 g.semester_id,
@@ -197,23 +199,69 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
                 db.group_members.Count(x => x.group_id == g.group_id && activeStatuses.Contains(x.status)),
                 "mentor"
             )
-        ).FirstOrDefaultAsync(ct);
+        ).ToListAsync(ct);
 
-        if (mentorGroup is not null)
-            return new[] { mentorGroup };
-        return Array.Empty<MyGroupDto>();
+        if (memberGroups.Count == 0 && mentorGroups.Count == 0)
+            return Array.Empty<MyGroupDto>();
+
+        return memberGroups
+            .Concat(mentorGroups)
+            .GroupBy(x => x.GroupId)
+            .Select(g => g.First())
+            .ToList();
     }
     public async Task<GroupMentorDto?> GetMentorAsync(Guid groupId, CancellationToken ct)
     {
-        return await (from g in db.groups.AsNoTracking()
-                      join u in db.users.AsNoTracking() on g.mentor_id equals u.user_id
-                      where g.group_id == groupId && g.mentor_id != null
-                      select new GroupMentorDto(
-                          u.user_id,
-                          u.email!,
-                          u.display_name!,
-                          u.avatar_url))
+        var info = await db.groups.AsNoTracking()
+            .Where(g => g.group_id == groupId)
+            .Select(g => new { g.mentor_id, g.mentor_ids })
             .FirstOrDefaultAsync(ct);
+        if (info is null)
+            return null;
+
+        Guid? mentorId = info.mentor_id;
+        if (!mentorId.HasValue && info.mentor_ids is { Length: > 0 })
+            mentorId = info.mentor_ids[0];
+        if (!mentorId.HasValue)
+            return null;
+
+        return await db.users.AsNoTracking()
+            .Where(u => u.user_id == mentorId.Value)
+            .Select(u => new GroupMentorDto(
+                u.user_id,
+                u.email!,
+                u.display_name!,
+                u.avatar_url))
+            .FirstOrDefaultAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<GroupMentorDto>> GetMentorsAsync(Guid groupId, CancellationToken ct)
+    {
+        var info = await db.groups.AsNoTracking()
+            .Where(g => g.group_id == groupId)
+            .Select(g => new { g.mentor_id, g.mentor_ids })
+            .FirstOrDefaultAsync(ct);
+        if (info is null)
+            return Array.Empty<GroupMentorDto>();
+
+        var ids = new List<Guid>();
+        if (info.mentor_ids is { Length: > 0 })
+            ids.AddRange(info.mentor_ids);
+        if (info.mentor_id.HasValue)
+            ids.Add(info.mentor_id.Value);
+        if (ids.Count == 0)
+            return Array.Empty<GroupMentorDto>();
+
+        var distinctIds = ids.Distinct().ToList();
+        var mentors = await db.users.AsNoTracking()
+            .Where(u => distinctIds.Contains(u.user_id))
+            .Select(u => new GroupMentorDto(
+                u.user_id,
+                u.email!,
+                u.display_name!,
+                u.avatar_url))
+            .ToListAsync(ct);
+        return mentors;
     }
     public async Task<IReadOnlyList<Teammy.Application.Groups.Dtos.GroupMemberDto>> ListActiveMembersAsync(Guid groupId, CancellationToken ct)
     {
@@ -252,6 +300,12 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
             .AnyAsync(m => m.group_id == groupId
                            && m.user_id == userId
                            && (m.status == "member" || m.status == "leader"), ct);
+
+    public Task<bool> IsMentorAsync(Guid groupId, Guid userId, CancellationToken ct)
+        => db.groups.AsNoTracking()
+            .AnyAsync(g => g.group_id == groupId
+                           && (g.mentor_id == userId
+                               || (g.mentor_ids != null && g.mentor_ids.Contains(userId))), ct);
     public async Task<Teammy.Application.Groups.Dtos.UserGroupCheckDto> CheckUserGroupAsync(Guid userId, Guid? semesterId, bool includePending, CancellationToken ct)
     {
         Guid? semId = semesterId;
@@ -349,6 +403,7 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
             join t in db.topics.AsNoTracking() on i.topic_id equals t.topic_id into tt
             from t in tt.DefaultIfEmpty()
             where i.group_id == groupId && i.status == "pending"
+                  && (i.topic_id == null || i.responded_at != null)
             orderby i.created_at descending
             select new Teammy.Application.Groups.Dtos.GroupPendingItemDto(
                 i.topic_id != null ? "mentor_invitation" : "invitation",
@@ -442,12 +497,16 @@ public sealed class GroupReadOnlyQueries(AppDbContext db) : IGroupReadOnlyQuerie
                 g.group_id,
                 g.topic_id,
                 g.mentor_id,
+                g.mentor_ids,
                 g.max_members,
                 g.updated_at
             })
             .FirstOrDefaultAsync(ct);
 
-        if (info is null || !info.topic_id.HasValue || !info.mentor_id.HasValue)
+        var hasMentor = info?.mentor_id.HasValue == true
+            || (info?.mentor_ids is { Length: > 0 });
+
+        if (info is null || !info.topic_id.HasValue || !hasMentor)
             return null;
 
         var activeStatuses = new[] { "member", "leader" };

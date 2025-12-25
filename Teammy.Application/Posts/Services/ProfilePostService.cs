@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Net;
+using Teammy.Application.Common.Email;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Invitations.Dtos;
 using Teammy.Application.Invitations.Templates;
@@ -15,6 +16,7 @@ public sealed class ProfilePostService(
     IUserReadOnlyQueries userQueries,
     IEmailSender emailSender,
     IAppUrlProvider urlProvider,
+    IInvitationRepository invitationRepo,
     IInvitationNotifier invitationNotifier,
     IStudentSemesterReadOnlyQueries studentSemesterQueries)
 {
@@ -23,6 +25,7 @@ public sealed class ProfilePostService(
     private readonly IUserReadOnlyQueries _userQueries = userQueries;
     private readonly IEmailSender _emailSender = emailSender;
     private readonly IAppUrlProvider _urlProvider = urlProvider;
+    private readonly IInvitationRepository _invitationRepo = invitationRepo;
     private readonly IInvitationNotifier _invitationNotifier = invitationNotifier;
     private readonly IStudentSemesterReadOnlyQueries _studentSemesters = studentSemesterQueries;
     private const string AppName = "TEAMMY";
@@ -194,6 +197,13 @@ public sealed class ProfilePostService(
         await repo.UpdateApplicationStatusAsync(candidateId, "accepted", ct);
         await repo.RejectPendingProfileInvitationsAsync(currentUserId, invitation.SemesterId, candidateId, ct);
         await repo.DeleteProfilePostsForUserAsync(currentUserId, invitation.SemesterId, ct);
+        await repo.WithdrawPendingApplicationsForUserInSemesterAsync(currentUserId, invitation.SemesterId, ct);
+        var revoked = await _invitationRepo.RevokePendingForUserInSemesterAsync(currentUserId, invitation.SemesterId, null, ct);
+        foreach (var (revokedId, revokedGroupId) in revoked)
+        {
+            await _invitationNotifier.NotifyInvitationStatusAsync(currentUserId, revokedId, "revoked", ct);
+            await _invitationNotifier.NotifyGroupPendingAsync(revokedGroupId, ct);
+        }
         await SendProfileInvitationStatusEmailAsync(invitation, userDetail.DisplayName ?? userDetail.Email ?? "Student", "accepted", ct);
         await _invitationNotifier.NotifyInvitationStatusAsync(currentUserId, candidateId, "accepted", ct);
         await _invitationNotifier.NotifyGroupPendingAsync(invitation.GroupId, ct);
@@ -286,10 +296,14 @@ public sealed class ProfilePostService(
         var groupName = group?.Name ?? "your group";
         var statusText = status.Equals("accepted", StringComparison.OrdinalIgnoreCase) ? "accepted" : "rejected";
         var subject = $"{AppName} - {applicantName} {statusText} your invitation";
-        var html = $@"<!doctype html>
-<html><body style=""font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#0f172a"">
-<p>{WebUtility.HtmlEncode(applicantName)} has <strong>{statusText}</strong> the invitation to join <b>{WebUtility.HtmlEncode(groupName)}</b>.</p>
-</body></html>";
+        var actionUrl = _urlProvider.GetProfilePostUrl(invitation.PostId);
+        var messageHtml = $@"<p>{WebUtility.HtmlEncode(applicantName)} has <strong>{statusText}</strong> the invitation to join <b>{WebUtility.HtmlEncode(groupName)}</b>.</p>";
+        var html = EmailTemplateBuilder.Build(
+            subject,
+            "Profile invitation update",
+            messageHtml,
+            "View details",
+            actionUrl);
 
         foreach (var leader in leaderRecipients)
         {

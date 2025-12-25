@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Teammy.Application.Common.Interfaces;
@@ -141,33 +142,13 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
     }
     public async Task CloseGroupAsync(Guid groupId, CancellationToken ct)
     {
-        // Set group status to 'closed' and mark active memberships as left; remove pendings
         var g = await db.groups.FirstOrDefaultAsync(x => x.group_id == groupId, ct)
             ?? throw new KeyNotFoundException("Group not found");
 
         g.status = "closed";
         g.updated_at = DateTime.UtcNow;
 
-        var actives = await db.group_members
-            .Where(x => x.group_id == groupId && (x.status == "member" || x.status == "leader"))
-            .ToListAsync(ct);
-        foreach (var m in actives)
-        {
-            m.status = "left";
-            m.left_at = DateTime.UtcNow;
-        }
-
-        var pendings = await db.group_members
-            .Where(x => x.group_id == groupId && x.status == "pending")
-            .ToListAsync(ct);
-        if (pendings.Count > 0)
-        {
-            db.group_members.RemoveRange(pendings);
-        }
-
         await db.SaveChangesAsync(ct);
-
-        await UpdateGroupSkillsFromActiveMembersAsync(groupId, ct);
     }
 
     public async Task TransferLeadershipAsync(Guid groupId, Guid currentLeaderUserId, Guid newLeaderUserId, CancellationToken ct)
@@ -196,7 +177,18 @@ public sealed class GroupRepository(AppDbContext db) : IGroupRepository
         if (maxMembers.HasValue) g.max_members = maxMembers.Value;
         if (majorId.HasValue) g.major_id = majorId;
         if (topicId.HasValue) g.topic_id = topicId;
-        if (mentorId.HasValue) g.mentor_id = mentorId;
+        if (mentorId.HasValue)
+        {
+            if (!g.mentor_id.HasValue)
+                g.mentor_id = mentorId;
+
+            var existing = g.mentor_ids?.ToList() ?? new List<Guid>();
+            if (g.mentor_id.HasValue && !existing.Contains(g.mentor_id.Value))
+                existing.Add(g.mentor_id.Value);
+            if (!existing.Contains(mentorId.Value))
+                existing.Add(mentorId.Value);
+            g.mentor_ids = existing.Count == 0 ? null : existing.ToArray();
+        }
         if (skillsJson is not null) g.skills = skillsJson;
         g.updated_at = DateTime.UtcNow;
 

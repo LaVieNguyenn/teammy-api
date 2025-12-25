@@ -1,5 +1,6 @@
 using Teammy.Application.Activity.Dtos;
 using Teammy.Application.Activity.Services;
+using Teammy.Application.Common.Email;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Invitations.Dtos;
 using Teammy.Application.Posts.Dtos;
@@ -18,6 +19,7 @@ public sealed class InvitationService(
     IAppUrlProvider urlProvider,
     ITopicReadOnlyQueries topicQueries,
     ITopicWriteRepository topicWrite,
+    ISemesterReadOnlyQueries semesterQueries,
     IInvitationNotifier invitationNotifier,
     ActivityLogService activityLogService
 )
@@ -25,6 +27,7 @@ public sealed class InvitationService(
     private const string AppName = "TEAMMY";
     private readonly ITopicReadOnlyQueries _topicQueries = topicQueries;
     private readonly ITopicWriteRepository _topicWrite = topicWrite;
+    private readonly ISemesterReadOnlyQueries _semesterQueries = semesterQueries;
     private readonly IInvitationNotifier _invitationNotifier = invitationNotifier;
     private readonly ActivityLogService _activityLog = activityLogService;
 
@@ -86,12 +89,37 @@ public sealed class InvitationService(
         return (invitationId, emailSent);
     }
 
-    public async Task<Guid> InviteMentorAsync(Guid groupId, Guid topicId, Guid mentorUserId, Guid invitedByUserId, string? message, CancellationToken ct)
+    public async Task<IReadOnlyList<Guid>> InviteMentorAsync(Guid groupId, Guid topicId, Guid mentorUserId, Guid invitedByUserId, string? message, CancellationToken ct)
     {
         var isLeader = await groupQueries.IsLeaderAsync(groupId, invitedByUserId, ct);
         if (!isLeader) throw new UnauthorizedAccessException("Leader only");
 
-        return await CreateMentorInviteInternalAsync(groupId, topicId, mentorUserId, invitedByUserId, message, invitedByIsMentor: false, ct);
+        var topic = await _topicQueries.GetByIdAsync(topicId, ct) ?? throw new KeyNotFoundException("Topic not found");
+        var mentorIds = topic.Mentors
+            .Select(m => m.MentorId)
+            .Distinct()
+            .ToList();
+
+        if (mentorIds.Count == 0)
+            throw new InvalidOperationException("Mentor is not assigned to this topic");
+
+        if (mentorIds.Count == 1)
+        {
+            if (mentorIds[0] != mentorUserId)
+                throw new InvalidOperationException("Mentor is not assigned to this topic");
+            var invitationId = await CreateMentorInviteInternalAsync(groupId, topicId, mentorUserId, invitedByUserId, message, invitedByIsMentor: false, ct);
+            return new[] { invitationId };
+        }
+
+        var invitationIds = new List<Guid>();
+        foreach (var mid in mentorIds)
+        {
+            var invitationId = await CreateMentorInviteInternalAsync(groupId, topicId, mid, invitedByUserId, message, invitedByIsMentor: false, ct);
+            if (!invitationIds.Contains(invitationId))
+                invitationIds.Add(invitationId);
+        }
+
+        return invitationIds;
     }
 
     public Task<Guid> RequestMentorAsync(Guid groupId, Guid topicId, Guid mentorUserId, string? message, CancellationToken ct)
@@ -102,6 +130,12 @@ public sealed class InvitationService(
         var detail = await groupQueries.GetGroupAsync(groupId, ct) ?? throw new KeyNotFoundException("Group not found");
         if (string.Equals(detail.Status, "active", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Group is already active");
+
+        var policy = await _semesterQueries.GetPolicyAsync(detail.SemesterId, ct);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        if (policy is null || today < policy.TopicSelfSelectStart || today > policy.TopicSelfSelectEnd)
+            throw new InvalidOperationException("Topic self-select is closed");
+
         if (detail.TopicId.HasValue && detail.TopicId.Value != topicId)
             throw new InvalidOperationException("Group already assigned topic");
         var pendingTopicId = await queries.GetPendingMentorTopicAsync(groupId, ct);
@@ -109,7 +143,8 @@ public sealed class InvitationService(
             throw new InvalidOperationException("Group already has a pending mentor invitation for another topic");
         var topic = await _topicQueries.GetByIdAsync(topicId, ct) ?? throw new KeyNotFoundException("Topic not found");
         var topicStatus = topic.Status?.ToLowerInvariant();
-        if (!string.Equals(topicStatus, "open", StringComparison.OrdinalIgnoreCase))
+        var isGroupTopic = detail.TopicId.HasValue && detail.TopicId.Value == topicId;
+        if (!string.Equals(topicStatus, "open", StringComparison.OrdinalIgnoreCase) && !isGroupTopic)
             throw new InvalidOperationException("Topic is not open");
         if (topic.SemesterId != detail.SemesterId)
             throw new InvalidOperationException("Topic must belong to the same semester");
@@ -132,8 +167,7 @@ public sealed class InvitationService(
                 {
                     if (invitedByIsMentor)
                     {
-                        await AcceptAsync(dupId, mentorUserId, ct);
-                        return dupId;
+                        throw new InvalidOperationException("Invite already sent by leader. Please accept the invitation.");
                     }
 
                     await repo.ResetPendingAsync(dupId, now, expiresAt, ct);
@@ -237,6 +271,12 @@ public sealed class InvitationService(
         await NotifyInviterAsync(inv, "accepted", ct);
 
         await postRepo.RejectPendingApplicationsForUserInGroupAsync(inv.GroupId, currentUserId, ct);
+        await postRepo.WithdrawPendingApplicationsForUserInSemesterAsync(currentUserId, inv.SemesterId, ct);
+        var revoked = await repo.RevokePendingForUserInSemesterAsync(currentUserId, inv.SemesterId, invitationId, ct);
+        foreach (var (revokedId, revokedGroupId) in revoked)
+        {
+            await BroadcastStatusAsync(currentUserId, revokedGroupId, revokedId, "revoked", ct);
+        }
     }
 
     public async Task DeclineAsync(Guid invitationId, Guid currentUserId, CancellationToken ct)
@@ -272,10 +312,12 @@ public sealed class InvitationService(
         if (!inv.TopicId.HasValue) throw new InvalidOperationException("Not a mentor invitation");
         var isLeader = await groupQueries.IsLeaderAsync(inv.GroupId, leaderUserId, ct);
         if (!isLeader) throw new UnauthorizedAccessException("Leader only");
+        if (inv.InvitedBy != inv.InviteeUserId)
+            throw new InvalidOperationException("Leader approval is not required for leader-sent mentor invites");
         await EnsureInvitationActiveAsync(invitationId, inv, ct);
         if (inv.Status != "pending") throw new InvalidOperationException("Invitation already handled");
         if (!inv.RespondedAt.HasValue)
-            throw new InvalidOperationException("Mentor has not accepted yet");
+            await repo.MarkMentorAwaitingLeaderAsync(invitationId, DateTime.UtcNow, ct);
 
         await CompleteMentorAssignmentAsync(inv, ct);
         await NotifyMentorDecisionAsync(inv, approved: true, ct);
@@ -306,10 +348,17 @@ public sealed class InvitationService(
         if (!inv.TopicId.HasValue)
             throw new InvalidOperationException("Invalid mentor invitation");
         if (inv.RespondedAt.HasValue)
-            throw new InvalidOperationException("Awaiting leader decision");
-        await repo.MarkMentorAwaitingLeaderAsync(inv.InvitationId, DateTime.UtcNow, ct);
-        await BroadcastStatusAsync(inv.InviteeUserId, inv.GroupId, inv.InvitationId, "pending_leader", ct);
-        await NotifyLeaderMentorPendingAsync(inv, ct);
+            throw new InvalidOperationException("Invitation already handled");
+
+        if (inv.InvitedBy == inv.InviteeUserId)
+        {
+            await repo.MarkMentorAwaitingLeaderAsync(inv.InvitationId, DateTime.UtcNow, ct);
+            await BroadcastStatusAsync(inv.InviteeUserId, inv.GroupId, inv.InvitationId, "pending_leader", ct);
+            await NotifyLeaderMentorPendingAsync(inv, ct);
+            return;
+        }
+
+        await CompleteMentorAssignmentAsync(inv, ct);
     }
 
     private async Task CompleteMentorAssignmentAsync(InvitationDetailDto inv, CancellationToken ct)
@@ -323,7 +372,8 @@ public sealed class InvitationService(
             throw new InvalidOperationException("Group already active");
         var topic = await _topicQueries.GetByIdAsync(inv.TopicId.Value, ct) ?? throw new KeyNotFoundException("Topic not found");
         var topicStatus = topic.Status?.ToLowerInvariant();
-        if (!string.Equals(topicStatus, "open", StringComparison.OrdinalIgnoreCase))
+        var groupHasTopic = group.TopicId.HasValue && group.TopicId.Value == inv.TopicId.Value;
+        if (!string.Equals(topicStatus, "open", StringComparison.OrdinalIgnoreCase) && !groupHasTopic)
             throw new InvalidOperationException("Topic already closed");
         if (topic.SemesterId != group.SemesterId)
             throw new InvalidOperationException("Topic semester mismatch");
@@ -337,11 +387,26 @@ public sealed class InvitationService(
             await postRepo.CloseAllOpenPostsForGroupAsync(inv.GroupId, ct);
         }
         await repo.UpdateStatusAsync(inv.InvitationId, "accepted", DateTime.UtcNow, ct);
-        await repo.RevokePendingMentorInvitesAsync(inv.GroupId, inv.InvitationId, ct);
         await BroadcastStatusAsync(inv.InviteeUserId, inv.GroupId, inv.InvitationId, "accepted", ct);
         await NotifyInviterAsync(inv, "accepted", ct);
 
-        var rejectedSameTopic = await repo.RejectPendingMentorInvitesForTopicAsync(inv.TopicId.Value, inv.InvitationId, ct);
+        var autoAcceptInvites = await queries.ListPendingMentorInvitesForGroupTopicAsync(inv.GroupId, inv.TopicId.Value, inv.InvitationId, ct);
+        foreach (var (otherInvitationId, inviteeUserId, invitedByUserId) in autoAcceptInvites)
+        {
+            if (invitedByUserId == inviteeUserId)
+                continue;
+
+            await groupRepo.UpdateGroupAsync(inv.GroupId, null, null, null, null, null, inviteeUserId, null, ct);
+            await repo.UpdateStatusAsync(otherInvitationId, "accepted", DateTime.UtcNow, ct);
+            await BroadcastStatusAsync(inviteeUserId, inv.GroupId, otherInvitationId, "accepted", ct);
+            var detail = await queries.GetAsync(otherInvitationId, ct);
+            if (detail is not null)
+            {
+                await NotifyInviterAsync(detail, "accepted", ct);
+            }
+        }
+
+        var rejectedSameTopic = await repo.RejectPendingMentorInvitesForTopicAsync(inv.TopicId.Value, inv.InvitationId, inv.GroupId, ct);
         foreach (var (otherInvitationId, inviteeUserId, groupId, invitedByUserId) in rejectedSameTopic)
         {
             await BroadcastStatusAsync(inviteeUserId, groupId, otherInvitationId, "rejected", ct);
@@ -368,12 +433,14 @@ public sealed class InvitationService(
         var topicTitle = inv.TopicTitle ?? "topic";
         var actionUrl = urlProvider.GetInvitationUrl(inv.InvitationId, inv.GroupId);
         var subject = $"{AppName} - {mentorName} accepted the mentor invitation";
-        var html = $@"<!doctype html>
-<html><body style=""font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#0f172a"">
-<p><strong>{System.Net.WebUtility.HtmlEncode(mentorName)}</strong> agreed to mentor <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong> for topic <strong>{System.Net.WebUtility.HtmlEncode(topicTitle)}</strong>.</p>
-<p>Please review and <b>approve or reject</b> this mentor in TEAMMY.</p>
-<p><a href=""{System.Net.WebUtility.HtmlEncode(actionUrl)}"" style=""padding:10px 16px;background:#2563eb;color:#fff;text-decoration:none;border-radius:4px;"">Open TEAMMY</a></p>
-</body></html>";
+        var messageHtml = $@"<p><strong>{System.Net.WebUtility.HtmlEncode(mentorName)}</strong> agreed to mentor <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong> for topic <strong>{System.Net.WebUtility.HtmlEncode(topicTitle)}</strong>.</p>
+<p style=""margin-top:8px;color:#475569;"">Please review and approve or reject this mentor in TEAMMY.</p>";
+        var html = EmailTemplateBuilder.Build(
+            subject,
+            "Mentor waiting for approval",
+            messageHtml,
+            "Review mentor",
+            actionUrl);
 
         await emailSender.SendAsync(
             leader.Email,
@@ -395,12 +462,16 @@ public sealed class InvitationService(
         var reason = approved
             ? $"You are now the mentor of <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong>."
             : $"The leader of <strong>{System.Net.WebUtility.HtmlEncode(groupName)}</strong> has rejected the mentor request.";
-        var html = $@"<!doctype html>
-<html><body style=""font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#0f172a"">
-<p>{reason}</p>
-<p>Topic: <strong>{System.Net.WebUtility.HtmlEncode(topicTitle)}</strong></p>
-<p>Please login to TEAMMY for details.</p>
-</body></html>";
+        var actionUrl = urlProvider.GetInvitationUrl(inv.InvitationId, inv.GroupId);
+        var messageHtml = $@"<p>{reason}</p>
+<p style=""margin-top:8px;"">Topic: <strong>{System.Net.WebUtility.HtmlEncode(topicTitle)}</strong></p>
+<p style=""margin-top:8px;color:#475569;"">Please login to TEAMMY for details.</p>";
+        var html = EmailTemplateBuilder.Build(
+            subject,
+            "Mentor decision update",
+            messageHtml,
+            "Open Teammy",
+            actionUrl);
 
         await emailSender.SendAsync(
             mentor.Email,
@@ -443,11 +514,15 @@ public sealed class InvitationService(
         var groupName = group?.Name ?? "your group";
         var topicTitle = inv.TopicTitle ?? "topic";
         var subject = $"{AppName} - Mentor invitation rejected";
-        var html = $@"<!doctype html>
-<html><body style=""font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#0f172a"">
-<p>Your mentor invitation for topic <strong>{System.Net.WebUtility.HtmlEncode(topicTitle)}</strong> was rejected because another group has already assigned this topic.</p>
-<p>You can consider choosing another topic.</p>
-</body></html>";
+        var actionUrl = urlProvider.GetInvitationUrl(inv.InvitationId, inv.GroupId);
+        var messageHtml = $@"<p>Your mentor invitation for topic <strong>{System.Net.WebUtility.HtmlEncode(topicTitle)}</strong> was rejected because another group has already assigned this topic.</p>
+<p style=""margin-top:8px;color:#475569;"">You can consider choosing another topic.</p>";
+        var html = EmailTemplateBuilder.Build(
+            subject,
+            "Mentor invitation update",
+            messageHtml,
+            "Open Teammy",
+            actionUrl);
         await emailSender.SendAsync(
             inviter.Email,
             subject,
@@ -467,11 +542,15 @@ public sealed class InvitationService(
         var groupName = group?.Name ?? "your group";
         var statusText = status.Equals("accepted", StringComparison.OrdinalIgnoreCase) ? "accepted" : "rejected";
         var subject = $"{AppName} - {inviteeName} {statusText} your invitation";
-        var html = $@"<!doctype html>
-<html><body style=""font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#0f172a"">
-<p>{System.Net.WebUtility.HtmlEncode(inviteeName)} has <strong>{statusText}</strong> the invitation for group <b>{System.Net.WebUtility.HtmlEncode(groupName)}</b>.</p>
-<p>You can review group members in TEAMMY.</p>
-</body></html>";
+        var actionUrl = urlProvider.GetInvitationUrl(inv.InvitationId, inv.GroupId);
+        var messageHtml = $@"<p>{System.Net.WebUtility.HtmlEncode(inviteeName)} has <strong>{statusText}</strong> the invitation for group <b>{System.Net.WebUtility.HtmlEncode(groupName)}</b>.</p>
+<p style=""margin-top:8px;color:#475569;"">You can review group members in TEAMMY.</p>";
+        var html = EmailTemplateBuilder.Build(
+            subject,
+            "Invitation status update",
+            messageHtml,
+            "Open Teammy",
+            actionUrl);
 
         await emailSender.SendAsync(
             inviter.Email,

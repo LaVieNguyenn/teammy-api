@@ -56,6 +56,8 @@ public static class DependencyInjection
         // Groups
         services.AddScoped<IGroupRepository, GroupRepository>();
         services.AddScoped<IGroupReadOnlyQueries, GroupReadOnlyQueries>();
+        services.AddScoped<IGroupFeedbackRepository, GroupFeedbackRepository>();
+        services.AddScoped<IGroupFeedbackReadOnlyQueries, GroupFeedbackReadOnlyQueries>();
 
         // Recruitment/Profile posts
         services.AddScoped<IRecruitmentPostRepository, RecruitmentPostRepository>();

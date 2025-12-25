@@ -25,7 +25,9 @@ public sealed class ChatRepository(AppDbContext db) : IChatRepository
             members = 0,
             created_at = DateTime.UtcNow,
             updated_at = DateTime.UtcNow,
-            last_message = null
+            last_message = null,
+            is_pinned = false,
+            pinned_at = null
         };
         db.chat_sessions.Add(session);
         try
@@ -65,7 +67,9 @@ public sealed class ChatRepository(AppDbContext db) : IChatRepository
             members = 2,
             created_at = DateTime.UtcNow,
             updated_at = DateTime.UtcNow,
-            last_message = null
+            last_message = null,
+            is_pinned = false,
+            pinned_at = null
         };
         db.chat_sessions.Add(session);
         db.chat_session_participants.Add(new chat_session_participant { chat_session_id = session.chat_session_id, user_id = smaller, joined_at = DateTime.UtcNow });
@@ -151,11 +155,16 @@ public sealed class ChatRepository(AppDbContext db) : IChatRepository
 
     public async Task<IReadOnlyList<ConversationSummaryDto>> ListConversationsAsync(Guid userId, CancellationToken ct)
     {
+        var epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
         var memberGroups =
             from gm in db.group_members.AsNoTracking()
             where gm.user_id == userId && (gm.status == "member" || gm.status == "leader")
             join g in db.groups.AsNoTracking() on gm.group_id equals g.group_id
             join s in db.chat_sessions.AsNoTracking() on g.group_id equals s.group_id
+            join r in db.chat_session_reads.AsNoTracking()
+                .Where(x => x.user_id == userId) on s.chat_session_id equals r.chat_session_id into rr
+            from r in rr.DefaultIfEmpty()
             select new
             {
                 SessionId = s.chat_session_id,
@@ -166,13 +175,24 @@ public sealed class ChatRepository(AppDbContext db) : IChatRepository
                 PartnerName = (string?)null,
                 PartnerAvatar = (string?)null,
                 s.last_message,
-                s.updated_at
+                s.updated_at,
+                s.is_pinned,
+                s.pinned_at,
+                UnreadCount = db.messages.Count(m =>
+                    m.chat_session_id == s.chat_session_id
+                    && m.sender_id != userId
+                    && !m.is_deleted
+                    && m.created_at > (r == null ? epoch : r.last_read_at))
             };
 
         var mentorGroups =
             from g in db.groups.AsNoTracking()
             where g.mentor_id == userId
+                  || (g.mentor_ids != null && g.mentor_ids.Contains(userId))
             join s in db.chat_sessions.AsNoTracking() on g.group_id equals s.group_id
+            join r in db.chat_session_reads.AsNoTracking()
+                .Where(x => x.user_id == userId) on s.chat_session_id equals r.chat_session_id into rr
+            from r in rr.DefaultIfEmpty()
             select new
             {
                 SessionId = s.chat_session_id,
@@ -183,7 +203,14 @@ public sealed class ChatRepository(AppDbContext db) : IChatRepository
                 PartnerName = (string?)null,
                 PartnerAvatar = (string?)null,
                 s.last_message,
-                s.updated_at
+                s.updated_at,
+                s.is_pinned,
+                s.pinned_at,
+                UnreadCount = db.messages.Count(m =>
+                    m.chat_session_id == s.chat_session_id
+                    && m.sender_id != userId
+                    && !m.is_deleted
+                    && m.created_at > (r == null ? epoch : r.last_read_at))
             };
 
         var groupRows = await memberGroups
@@ -203,6 +230,9 @@ public sealed class ChatRepository(AppDbContext db) : IChatRepository
             join other in db.chat_session_participants.AsNoTracking() on s.chat_session_id equals other.chat_session_id
             where other.user_id != userId
             join u in db.users.AsNoTracking() on other.user_id equals u.user_id
+            join r in db.chat_session_reads.AsNoTracking()
+                .Where(x => x.user_id == userId) on s.chat_session_id equals r.chat_session_id into rr
+            from r in rr.DefaultIfEmpty()
             select new
             {
                 SessionId = s.chat_session_id,
@@ -213,13 +243,22 @@ public sealed class ChatRepository(AppDbContext db) : IChatRepository
                 PartnerName = u.display_name,
                 PartnerAvatar = u.avatar_url,
                 s.last_message,
-                s.updated_at
+                s.updated_at,
+                s.is_pinned,
+                s.pinned_at,
+                UnreadCount = db.messages.Count(m =>
+                    m.chat_session_id == s.chat_session_id
+                    && m.sender_id != userId
+                    && !m.is_deleted
+                    && m.created_at > (r == null ? epoch : r.last_read_at))
             }
         ).ToListAsync(ct);
 
         var combined = distinctGroupRows
             .Concat(dmRows)
-            .OrderByDescending(x => x.updated_at)
+            .OrderByDescending(x => x.is_pinned)
+            .ThenByDescending(x => x.pinned_at)
+            .ThenByDescending(x => x.updated_at)
             .Select(x => new ConversationSummaryDto(
                 x.SessionId,
                 x.Type,
@@ -229,7 +268,10 @@ public sealed class ChatRepository(AppDbContext db) : IChatRepository
                 x.PartnerName,
                 x.PartnerAvatar,
                 x.last_message,
-                x.updated_at))
+                x.updated_at,
+                x.UnreadCount,
+                x.is_pinned,
+                x.pinned_at))
             .ToList();
 
         return combined;
@@ -281,6 +323,40 @@ public sealed class ChatRepository(AppDbContext db) : IChatRepository
         entity.updated_at = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
         return await ProjectMessageAsync(messageId, ct);
+    }
+
+    public async Task MarkSessionReadAsync(Guid chatSessionId, Guid userId, Guid? messageId, CancellationToken ct)
+    {
+        var read = await db.chat_session_reads
+            .FirstOrDefaultAsync(r => r.chat_session_id == chatSessionId && r.user_id == userId, ct);
+        if (read is null)
+        {
+            read = new chat_session_read
+            {
+                chat_session_id = chatSessionId,
+                user_id = userId,
+                last_read_at = DateTime.UtcNow,
+                last_read_message_id = messageId
+            };
+            db.chat_session_reads.Add(read);
+        }
+        else
+        {
+            read.last_read_at = DateTime.UtcNow;
+            if (messageId.HasValue)
+                read.last_read_message_id = messageId;
+        }
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task SetSessionPinAsync(Guid chatSessionId, bool pin, CancellationToken ct)
+    {
+        var session = await db.chat_sessions.FirstOrDefaultAsync(s => s.chat_session_id == chatSessionId, ct)
+            ?? throw new KeyNotFoundException("Session not found");
+        session.is_pinned = pin;
+        session.pinned_at = pin ? DateTime.UtcNow : null;
+        session.updated_at = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
     }
 
     private Task<ChatMessageDto> ProjectMessageAsync(Guid messageId, CancellationToken ct)

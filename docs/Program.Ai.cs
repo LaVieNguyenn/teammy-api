@@ -714,7 +714,9 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
             FinalScore: Math.Round(FinalScore(i), 2)
         ))
         .OrderByDescending(x => x.FinalScore)
-        .Where(x => x.FinalScore >= minScore)
+        // Topic suggestions should respect a minimum quality bar.
+        // Post suggestions should return multiple candidates; the UI can display lower scores.
+        .Where(x => !IsTopicMode(mode) || x.FinalScore >= minScore)
         .Take(topN)
         .ToList();
 

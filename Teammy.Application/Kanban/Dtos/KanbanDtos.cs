@@ -37,7 +37,16 @@ public sealed record UpdateTaskRequest(Guid? ColumnId, string Title, string? Des
 public sealed record ReplaceAssigneesRequest(IReadOnlyList<Guid> UserIds);
 
 public sealed record CreateCommentRequest(string Content);
-public sealed record CommentVm(Guid CommentId, Guid TaskId, Guid UserId, string Content, DateTime CreatedAt);
+public sealed record CommentVm(
+    Guid CommentId,
+    Guid TaskId,
+    Guid UserId,
+    string Content,
+    DateTime CreatedAt,
+    string? DisplayName,
+    string? Email,
+    string? AvatarUrl
+);
 
 public sealed record MoveTaskRequest(Guid ColumnId, Guid? PrevTaskId, Guid? NextTaskId);
 public sealed record MoveTaskResponse(Guid TaskId, Guid ColumnId, decimal SortOrder);

@@ -145,11 +145,12 @@ CREATE TABLE IF NOT EXISTS teammy.groups (
   semester_id  UUID NOT NULL REFERENCES teammy.semesters(semester_id) ON DELETE CASCADE,
   topic_id     UUID REFERENCES teammy.topics(topic_id) ON DELETE SET NULL,
   mentor_id    UUID REFERENCES teammy.users(user_id) ON DELETE SET NULL,
+  mentor_ids   UUID[],
   major_id     UUID REFERENCES teammy.majors(major_id) ON DELETE SET NULL,
   name         TEXT NOT NULL,
   description  TEXT,
   max_members  INT  NOT NULL CHECK (max_members > 0),
-  status       TEXT NOT NULL DEFAULT 'recruiting' CHECK (status IN ('recruiting','active','closed')),
+  status       TEXT NOT NULL DEFAULT 'recruiting' CHECK (status IN ('recruiting','active','pending_close','closed')),
   skills       JSONB,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -157,6 +158,17 @@ CREATE TABLE IF NOT EXISTS teammy.groups (
 );
 CREATE INDEX IF NOT EXISTS ix_groups_skills_gin
   ON teammy.groups USING gin (skills jsonb_path_ops);
+
+ALTER TABLE teammy.groups
+  ADD COLUMN IF NOT EXISTS mentor_ids UUID[];
+
+CREATE INDEX IF NOT EXISTS ix_groups_mentor_ids_gin
+  ON teammy.groups USING gin (mentor_ids);
+
+UPDATE teammy.groups
+SET mentor_ids = ARRAY[mentor_id]
+WHERE mentor_id IS NOT NULL
+  AND (mentor_ids IS NULL OR array_length(mentor_ids, 1) IS NULL);
 
 CREATE TABLE IF NOT EXISTS teammy.group_members (
   group_member_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -240,6 +252,32 @@ END$$;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_group_unique_topic
   ON teammy.groups(topic_id)
   WHERE topic_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS teammy.group_feedback (
+  feedback_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  group_id UUID NOT NULL REFERENCES teammy.groups(group_id) ON DELETE CASCADE,
+  semester_id UUID NOT NULL REFERENCES teammy.semesters(semester_id),
+  mentor_id UUID NOT NULL REFERENCES teammy.users(user_id) ON DELETE CASCADE,
+  category TEXT,
+  summary TEXT NOT NULL,
+  details TEXT,
+  rating INT,
+  blockers TEXT,
+  next_steps TEXT,
+  status TEXT NOT NULL DEFAULT 'submitted'
+    CHECK (status IN ('submitted','acknowledged','follow_up_requested','resolved')),
+  acknowledged_by UUID REFERENCES teammy.users(user_id) ON DELETE SET NULL,
+  acknowledged_note TEXT,
+  acknowledged_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ix_group_feedback_group
+  ON teammy.group_feedback(group_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS ix_group_feedback_mentor
+  ON teammy.group_feedback(mentor_id, created_at DESC);
 
 -- trigger: topic & group cùng semester + topic phải open
 CREATE OR REPLACE FUNCTION teammy.fn_enforce_group_topic_rules()
@@ -498,7 +536,9 @@ CREATE TABLE IF NOT EXISTS teammy.chat_sessions (
   members         INT NOT NULL DEFAULT 0,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-  last_message    TEXT
+  last_message    TEXT,
+  is_pinned       BOOLEAN NOT NULL DEFAULT FALSE,
+  pinned_at       TIMESTAMPTZ
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_chat_project_single
   ON teammy.chat_sessions(group_id) WHERE (type='project');
@@ -511,6 +551,16 @@ CREATE TABLE IF NOT EXISTS teammy.chat_session_participants (
 );
 CREATE INDEX IF NOT EXISTS ix_chat_session_participants_user
   ON teammy.chat_session_participants(user_id);
+
+CREATE TABLE IF NOT EXISTS teammy.chat_session_reads (
+  chat_session_id UUID NOT NULL REFERENCES teammy.chat_sessions(chat_session_id) ON DELETE CASCADE,
+  user_id         UUID NOT NULL REFERENCES teammy.users(user_id) ON DELETE CASCADE,
+  last_read_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_read_message_id UUID REFERENCES teammy.messages(message_id) ON DELETE SET NULL,
+  PRIMARY KEY(chat_session_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS ix_chat_session_reads_user
+  ON teammy.chat_session_reads(user_id);
 
 CREATE TABLE IF NOT EXISTS teammy.messages (
   message_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),

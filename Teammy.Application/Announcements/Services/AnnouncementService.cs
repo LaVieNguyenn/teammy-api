@@ -4,6 +4,7 @@ using System.Net;
 using System.Text;
 using Teammy.Application.Announcements.Dtos;
 using Teammy.Application.Common.Dtos;
+using Teammy.Application.Common.Email;
 using Teammy.Application.Common.Interfaces;
 
 namespace Teammy.Application.Announcements.Services;
@@ -233,7 +234,6 @@ public sealed class AnnouncementService(
             }
             catch
             {
-                // ignore single-recipient failure to avoid breaking the API flow
             }
         }
     }
@@ -241,21 +241,21 @@ public sealed class AnnouncementService(
     private static string BuildHtmlBody(AnnouncementDto announcement)
     {
         var builder = new StringBuilder();
-        builder.Append("<div style=\"font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#0f172a;\">");
-        builder.AppendFormat("<h2 style=\"color:#2563EB;margin-bottom:12px;\">{0}</h2>", WebUtility.HtmlEncode(announcement.Title));
-        builder.AppendFormat("<p style=\"margin-bottom:16px;color:#475569;\"><strong>Published:</strong> {0:dd MMM yyyy HH:mm} UTC</p>", announcement.PublishAt);
+        builder.AppendFormat("<p style=\"margin-bottom:8px;color:#475569;\"><strong>Published:</strong> {0:dd MMM yyyy HH:mm} UTC</p>", announcement.PublishAt);
         if (!string.IsNullOrWhiteSpace(announcement.CreatedByName))
         {
-            builder.AppendFormat("<p style=\"margin-bottom:16px;color:#475569;\"><strong>By:</strong> {0}</p>", WebUtility.HtmlEncode(announcement.CreatedByName));
+            builder.AppendFormat("<p style=\"margin-bottom:8px;color:#475569;\"><strong>By:</strong> {0}</p>", WebUtility.HtmlEncode(announcement.CreatedByName));
         }
 
         builder.Append("<div style=\"line-height:1.6;white-space:pre-line;\">");
         builder.Append(WebUtility.HtmlEncode(announcement.Content));
         builder.Append("</div>");
 
-        builder.Append("<hr style=\"margin:24px 0;border:none;border-top:1px solid #e2e8f0;\"/>");
-        builder.Append("<p style=\"color:#94a3b8;font-size:12px;\">Bạn nhận được thông báo này từ hệ thống Teammy.</p>");
-        builder.Append("</div>");
-        return builder.ToString();
+        return EmailTemplateBuilder.Build(
+            $"[Teammy] {announcement.Title}",
+            WebUtility.HtmlEncode(announcement.Title),
+            builder.ToString(),
+            "Open Teammy",
+            "https://teammy.vercel.app/login");
     }
 }

@@ -47,7 +47,6 @@ public sealed class GroupChatService(IChatRepository chatRepository, IGroupReadO
     {
         if (await _groupQueries.IsActiveMemberAsync(groupId, userId, ct))
             return true;
-        var mentor = await _groupQueries.GetMentorAsync(groupId, ct);
-        return mentor is not null && mentor.UserId == userId;
+        return await _groupQueries.IsMentorAsync(groupId, userId, ct);
     }
 }

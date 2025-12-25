@@ -26,6 +26,8 @@ public partial class AppDbContext : DbContext
 
     public virtual DbSet<chat_session_participant> chat_session_participants { get; set; }
 
+    public virtual DbSet<chat_session_read> chat_session_reads { get; set; }
+
     public virtual DbSet<column> columns { get; set; }
 
     public virtual DbSet<comment> comments { get; set; }
@@ -34,6 +36,7 @@ public partial class AppDbContext : DbContext
 
     public virtual DbSet<group_member> group_members { get; set; }
     public virtual DbSet<group_member_role> group_member_roles { get; set; }
+    public virtual DbSet<group_feedback> group_feedbacks { get; set; }
 
     public virtual DbSet<invitation> invitations { get; set; }
 
@@ -254,6 +257,7 @@ public partial class AppDbContext : DbContext
             entity.Property(e => e.members).HasDefaultValue(0);
             entity.Property(e => e.type).HasDefaultValueSql("'group'::text");
             entity.Property(e => e.updated_at).HasDefaultValueSql("now()");
+            entity.Property(e => e.is_pinned).HasDefaultValue(false);
 
             entity.HasOne(d => d.group).WithOne(p => p.chat_session)
                 .HasForeignKey<chat_session>(d => d.group_id)
@@ -280,6 +284,32 @@ public partial class AppDbContext : DbContext
                 .HasForeignKey(d => d.user_id)
                 .OnDelete(DeleteBehavior.Cascade)
                 .HasConstraintName("chat_session_participants_user_id_fkey");
+        });
+
+        modelBuilder.Entity<chat_session_read>(entity =>
+        {
+            entity.HasKey(e => new { e.chat_session_id, e.user_id }).HasName("chat_session_reads_pkey");
+
+            entity.ToTable("chat_session_reads", "teammy");
+
+            entity.HasIndex(e => e.user_id, "ix_chat_session_reads_user");
+
+            entity.Property(e => e.last_read_at).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.chat_session).WithMany()
+                .HasForeignKey(d => d.chat_session_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("chat_session_reads_session_id_fkey");
+
+            entity.HasOne(d => d.user).WithMany()
+                .HasForeignKey(d => d.user_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("chat_session_reads_user_id_fkey");
+
+            entity.HasOne<message>().WithMany()
+                .HasForeignKey(d => d.last_read_message_id)
+                .OnDelete(DeleteBehavior.SetNull)
+                .HasConstraintName("chat_session_reads_last_message_id_fkey");
         });
 
         modelBuilder.Entity<column>(entity =>
@@ -338,6 +368,7 @@ public partial class AppDbContext : DbContext
             entity.Property(e => e.status).HasDefaultValueSql("'recruiting'::text");
             entity.Property(e => e.updated_at).HasDefaultValueSql("now()");
             entity.Property(e => e.skills).HasColumnType("jsonb");
+            entity.Property(e => e.mentor_ids).HasColumnType("uuid[]");
 
             entity.HasOne(d => d.major).WithMany(p => p.groups)
                 .HasForeignKey(d => d.major_id)
@@ -410,6 +441,41 @@ public partial class AppDbContext : DbContext
                 .HasForeignKey(e => e.group_member_id)
                 .OnDelete(DeleteBehavior.Cascade)
                 .HasConstraintName("group_member_roles_group_member_id_fkey");
+        });
+
+        modelBuilder.Entity<group_feedback>(entity =>
+        {
+            entity.HasKey(e => e.feedback_id).HasName("group_feedback_pkey");
+
+            entity.ToTable("group_feedback", "teammy");
+
+            entity.HasIndex(e => new { e.group_id, e.created_at }, "ix_group_feedback_group").IsDescending(false, true);
+            entity.HasIndex(e => new { e.mentor_id, e.created_at }, "ix_group_feedback_mentor").IsDescending(false, true);
+
+            entity.Property(e => e.feedback_id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.created_at).HasDefaultValueSql("now()");
+            entity.Property(e => e.updated_at).HasDefaultValueSql("now()");
+            entity.Property(e => e.status).HasDefaultValueSql("'submitted'::text");
+
+            entity.HasOne(d => d.group).WithMany(p => p.group_feedbacks)
+                .HasForeignKey(d => d.group_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("group_feedback_group_id_fkey");
+
+            entity.HasOne(d => d.mentor).WithMany(p => p.group_feedbackmentor_users)
+                .HasForeignKey(d => d.mentor_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("group_feedback_mentor_id_fkey");
+
+            entity.HasOne(d => d.semester).WithMany(p => p.group_feedbacks)
+                .HasForeignKey(d => d.semester_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("group_feedback_semester_id_fkey");
+
+            entity.HasOne(d => d.acknowledged_byNavigation).WithMany(p => p.group_feedbackacknowledged_bies)
+                .HasForeignKey(d => d.acknowledged_by)
+                .OnDelete(DeleteBehavior.SetNull)
+                .HasConstraintName("group_feedback_acknowledged_by_fkey");
         });
 
         modelBuilder.Entity<invitation>(entity =>

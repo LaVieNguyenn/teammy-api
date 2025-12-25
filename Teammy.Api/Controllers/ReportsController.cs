@@ -100,6 +100,7 @@ public sealed class ReportsController(
             IncludeGroupMembers = true,
             IncludeRecruitmentPosts = true,
             IncludeMilestones = true,
+            IncludeTasks = true,
             IncludeActivityLogs = true,
             ActivityLogLimit = 200,
             StartDateUtc = startUtc,

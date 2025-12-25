@@ -1,0 +1,86 @@
+using System.ComponentModel.DataAnnotations;
+
+namespace Teammy.Application.Feedback.Dtos;
+
+public sealed class SubmitGroupFeedbackRequest
+{
+    [Required]
+    public string? Category { get; init; }
+
+    [Required]
+    public string Summary { get; init; } = string.Empty;
+
+    [Required]
+    public string? Details { get; init; }
+
+    [Required]
+    public int? Rating { get; init; }
+
+    [Required]
+    public string? Blockers { get; init; }
+
+    [Required]
+    public string? NextSteps { get; init; }
+}
+
+public sealed class UpdateGroupFeedbackRequest
+{
+    public string? Category { get; init; }
+    public string? Summary { get; init; }
+    public string? Details { get; init; }
+    public int? Rating { get; init; }
+    public string? Blockers { get; init; }
+    public string? NextSteps { get; init; }
+}
+
+public sealed record GroupFeedbackDto(
+    Guid FeedbackId,
+    Guid GroupId,
+    Guid MentorId,
+    string MentorName,
+    string? MentorEmail,
+    string? MentorAvatar,
+    string? Category,
+    string Summary,
+    string? Details,
+    int? Rating,
+    string? Blockers,
+    string? NextSteps,
+    string Status,
+    string? AcknowledgedNote,
+    DateTime CreatedAt,
+    DateTime UpdatedAt,
+    DateTime? AcknowledgedAt);
+
+public sealed record GroupFeedbackPageDto(
+    IReadOnlyList<GroupFeedbackDto> Items,
+    int Page,
+    int PageSize,
+    int Total);
+
+public sealed class UpdateGroupFeedbackStatusRequest
+{
+    [Required]
+    public string Status { get; init; } = string.Empty;
+
+    public string? Note { get; init; }
+}
+
+public sealed record GroupFeedbackCreateModel(
+    Guid GroupId,
+    Guid SemesterId,
+    Guid MentorId,
+    string? Category,
+    string Summary,
+    string? Details,
+    int? Rating,
+    string? Blockers,
+    string? NextSteps);
+
+public sealed record GroupFeedbackUpdateModel(
+    string? Category,
+    string? Summary,
+    string? Details,
+    int? Rating,
+    string? Blockers,
+    string? NextSteps);

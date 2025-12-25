@@ -15,4 +15,10 @@ public interface IInvitationReadOnlyQueries
 
     // Check if group already has a pending mentor invite (topic)
     Task<Guid?> GetPendingMentorTopicAsync(Guid groupId, CancellationToken ct);
+
+    Task<IReadOnlyList<(Guid InvitationId, Guid InviteeUserId, Guid InvitedBy)>> ListPendingMentorInvitesForGroupTopicAsync(
+        Guid groupId,
+        Guid topicId,
+        Guid exceptInvitationId,
+        CancellationToken ct);
 }

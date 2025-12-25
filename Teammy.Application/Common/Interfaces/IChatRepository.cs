@@ -15,4 +15,6 @@ public interface IChatRepository
     Task<(Guid ChatSessionId, Guid SenderId, bool IsDeleted)?> GetMessageMetaAsync(Guid messageId, CancellationToken ct);
     Task<ChatMessageDto> SetMessagePinAsync(Guid chatSessionId, Guid messageId, Guid userId, bool pin, CancellationToken ct);
     Task<ChatMessageDto> MarkMessageDeletedAsync(Guid chatSessionId, Guid messageId, Guid userId, CancellationToken ct);
+    Task MarkSessionReadAsync(Guid chatSessionId, Guid userId, Guid? messageId, CancellationToken ct);
+    Task SetSessionPinAsync(Guid chatSessionId, bool pin, CancellationToken ct);
 }
