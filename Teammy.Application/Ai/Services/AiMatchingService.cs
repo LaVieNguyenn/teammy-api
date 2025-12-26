@@ -1892,7 +1892,6 @@ public sealed class AiMatchingService(
     {
         var builder = new StringBuilder();
         builder.Append(student.DisplayName);
-        builder.Append(" - Major: ").Append(targetMajorId?.ToString() ?? student.MajorId.ToString());
 
         if (!string.IsNullOrWhiteSpace(student.DesiredPositionName))
             builder.Append(" - Desired position: ").Append(student.DesiredPositionName.Trim());
