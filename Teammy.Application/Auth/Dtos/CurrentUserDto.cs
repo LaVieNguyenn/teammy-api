@@ -17,6 +17,7 @@ public sealed record CurrentUserDto(
     string? Gender,
     Guid? MajorId,
     MajorSummaryDto? Major,
+    CurrentUserSemesterDto? Semester,
     JsonElement? Skills,
     DateTime CreatedAt,
     DateTime UpdatedAt,
@@ -26,3 +27,12 @@ public sealed record CurrentUserDto(
 public sealed record UserRoleDto(Guid RoleId, string Name);
 
 public sealed record MajorSummaryDto(Guid MajorId, string Name);
+
+public sealed record CurrentUserSemesterDto(
+    Guid SemesterId,
+    string Season,
+    int Year,
+    DateOnly StartDate,
+    DateOnly EndDate,
+    bool IsActive
+);

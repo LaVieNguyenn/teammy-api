@@ -105,6 +105,7 @@ namespace Teammy.Application.Topics.Dtos
 
     // Request update topic
     public sealed record UpdateTopicRequest(
+        Guid?  SemesterId,
         Guid?  MajorId,
         string Title,
         string? Description,

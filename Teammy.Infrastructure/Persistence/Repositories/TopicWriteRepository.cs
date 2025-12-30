@@ -61,12 +61,16 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 .FirstOrDefaultAsync(x => x.topic_id == topicId, ct)
                 ?? throw new KeyNotFoundException("Topic not found");
 
+            if (req.SemesterId == Guid.Empty)
+                throw new ArgumentException("SemesterId is invalid.", nameof(req.SemesterId));
+
+            var targetSemesterId = req.SemesterId ?? entity.semester_id;
             var titleTrim = req.Title.Trim();
-            if (!string.Equals(entity.title, titleTrim, StringComparison.Ordinal))
+            if (!string.Equals(entity.title, titleTrim, StringComparison.Ordinal) || entity.semester_id != targetSemesterId)
             {
                 var dup = await _db.topics.AsNoTracking()
                     .AnyAsync(t =>
-                        t.semester_id == entity.semester_id &&
+                        t.semester_id == targetSemesterId &&
                         t.topic_id != entity.topic_id &&
                         t.title.ToLower() == titleTrim.ToLower(), ct);
 
@@ -78,6 +82,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories
             entity.description = string.IsNullOrWhiteSpace(req.Description) ? null : req.Description;
             entity.status      = status;
             entity.major_id    = req.MajorId;
+            entity.semester_id = targetSemesterId;
 
             await _db.SaveChangesAsync(ct);
         }
