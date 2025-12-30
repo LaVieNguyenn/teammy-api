@@ -25,6 +25,7 @@ using Teammy.Infrastructure.Topics;
 using Teammy.Infrastructure.Reports;
 using Teammy.Infrastructure.Ai;
 using Teammy.Infrastructure.Ai.Indexing;
+using Teammy.Infrastructure.Jobs;
 namespace Teammy.Infrastructure;
 
 public static class DependencyInjection
@@ -152,6 +153,7 @@ public static class DependencyInjection
 
 
         services.AddHostedService<AiIndexOutboxWorker>();
+        services.AddHostedService<CloseTopicsOnSemesterEndJob>();
         return services;
 
         static void ConfigureAiGatewayClient(HttpClient client, IConfiguration configuration, int timeoutSeconds)

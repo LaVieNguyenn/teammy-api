@@ -123,8 +123,11 @@ namespace Teammy.Api.Controllers
             {
                 if (form is null)
                     return BadRequest("Body is required.");
+                if (form.SemesterId == Guid.Empty)
+                    return BadRequest("SemesterId is invalid.");
 
                 var req = new UpdateTopicRequest(
+                    form.SemesterId,
                     form.MajorId,
                     form.Title,
                     form.Description,
@@ -164,6 +167,7 @@ namespace Teammy.Api.Controllers
 
         public sealed class UpdateTopicFormRequest
         {
+            public Guid? SemesterId { get; init; }
             public Guid? MajorId { get; init; }
             public string Title { get; init; } = string.Empty;
             public string? Description { get; init; }
