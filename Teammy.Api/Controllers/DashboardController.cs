@@ -12,8 +12,8 @@ namespace Teammy.Api.Controllers;
 public sealed class DashboardController(IDashboardReadOnlyQueries queries) : ControllerBase
 {
     [HttpGet]
-    public Task<DashboardStatsDto> Get(CancellationToken ct)
-        => queries.GetStatsAsync(ct);
+    public Task<DashboardStatsDto> Get([FromQuery] Guid? semesterId, CancellationToken ct)
+        => queries.GetStatsAsync(semesterId, ct);
 
     [HttpGet("moderator")]
     [Authorize(Roles = "moderator")]

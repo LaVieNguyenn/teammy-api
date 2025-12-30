@@ -5,6 +5,6 @@ namespace Teammy.Application.Common.Interfaces;
 
 public interface IDashboardReadOnlyQueries
 {
-    Task<DashboardStatsDto> GetStatsAsync(CancellationToken ct);
+    Task<DashboardStatsDto> GetStatsAsync(Guid? semesterId, CancellationToken ct);
     Task<ModeratorDashboardStatsDto> GetModeratorStatsAsync(Guid? semesterId, CancellationToken ct);
 }

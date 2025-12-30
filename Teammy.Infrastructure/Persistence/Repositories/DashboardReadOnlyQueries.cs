@@ -9,19 +9,42 @@ namespace Teammy.Infrastructure.Persistence.Repositories;
 
 public sealed class DashboardReadOnlyQueries(AppDbContext db) : IDashboardReadOnlyQueries
 {
-    public async Task<DashboardStatsDto> GetStatsAsync(CancellationToken ct)
+    public async Task<DashboardStatsDto> GetStatsAsync(Guid? semesterId, CancellationToken ct)
     {
+        var usersTotal = await db.users.CountAsync(ct);
+        var usersActive = await db.users.CountAsync(u => u.is_active, ct);
+
+        var topicsQuery = db.topics.AsNoTracking();
+        var groupsQuery = db.groups.AsNoTracking();
+        var postsQuery = db.recruitment_posts.AsNoTracking();
+
+        if (semesterId.HasValue)
+        {
+            topicsQuery = topicsQuery.Where(t => t.semester_id == semesterId.Value);
+            groupsQuery = groupsQuery.Where(g => g.semester_id == semesterId.Value);
+            postsQuery = postsQuery.Where(p => p.semester_id == semesterId.Value);
+        }
+
+        var topicsTotal = await topicsQuery.CountAsync(ct);
+        var topicsOpen = await topicsQuery.CountAsync(t => t.status == "open", ct);
+        var groupsTotal = await groupsQuery.CountAsync(ct);
+        var groupsRecruiting = await groupsQuery.CountAsync(g => g.status == "recruiting", ct);
+        var groupsActive = await groupsQuery.CountAsync(g => g.status == "active", ct);
+        var postsTotal = await postsQuery.CountAsync(ct);
+        var postsGroup = await postsQuery.CountAsync(p => p.post_type == "group_hiring", ct);
+        var postsIndividual = await postsQuery.CountAsync(p => p.post_type == "individual", ct);
+
         return new DashboardStatsDto(
-            await db.users.CountAsync(ct),
-            await db.users.CountAsync(u => u.is_active, ct),
-            await db.topics.CountAsync(ct),
-            await db.topics.CountAsync(t => t.status == "open", ct),
-            await db.groups.CountAsync(ct),
-            await db.groups.CountAsync(g => g.status == "recruiting", ct),
-            await db.groups.CountAsync(g => g.status == "active", ct),
-            await db.recruitment_posts.CountAsync(ct),
-            await db.recruitment_posts.CountAsync(p => p.post_type == "group_hiring", ct),
-            await db.recruitment_posts.CountAsync(p => p.post_type == "individual", ct));
+            usersTotal,
+            usersActive,
+            topicsTotal,
+            topicsOpen,
+            groupsTotal,
+            groupsRecruiting,
+            groupsActive,
+            postsTotal,
+            postsGroup,
+            postsIndividual);
     }
 
     public async Task<ModeratorDashboardStatsDto> GetModeratorStatsAsync(Guid? semesterId, CancellationToken ct)
@@ -95,6 +118,15 @@ public sealed class DashboardReadOnlyQueries(AppDbContext db) : IDashboardReadOn
             .Where(ur => ur.role.name.ToLower() == "student")
             .Select(ur => ur.user_id)
             .Distinct();
+        if (resolvedSemesterId.HasValue)
+        {
+            var semesterStudentIds = db.student_semesters
+                .AsNoTracking()
+                .Where(ss => ss.semester_id == resolvedSemesterId.Value)
+                .Select(ss => ss.user_id)
+                .Distinct();
+            studentUserIdsQuery = studentUserIdsQuery.Where(id => semesterStudentIds.Contains(id));
+        }
 
         var studentsWithoutGroup = await studentUserIdsQuery
             .Where(studentId => !memberUserIdsQuery.Contains(studentId))
