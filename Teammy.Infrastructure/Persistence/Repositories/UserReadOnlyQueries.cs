@@ -51,6 +51,28 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 ? null
                 : new MajorSummaryDto(user.major.major_id, user.major.major_name);
 
+            CurrentUserSemesterDto? semester = null;
+            var currentSemesterId = await _db.student_semesters.AsNoTracking()
+                .Where(s => s.user_id == user.user_id && s.is_current)
+                .Select(s => (Guid?)s.semester_id)
+                .FirstOrDefaultAsync(ct);
+
+            if (currentSemesterId.HasValue)
+            {
+                var sem = await _db.semesters.AsNoTracking()
+                    .FirstOrDefaultAsync(s => s.semester_id == currentSemesterId.Value, ct);
+                if (sem is not null)
+                {
+                    semester = new CurrentUserSemesterDto(
+                        sem.semester_id,
+                        sem.season ?? string.Empty,
+                        sem.year ?? 0,
+                        sem.start_date ?? default,
+                        sem.end_date ?? default,
+                        sem.is_active);
+                }
+            }
+
             return new CurrentUserDto(
                 user.user_id,
                 user.email!,
@@ -66,6 +88,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories
                 user.gender,
                 user.major_id,
                 major,
+                semester,
                 skills,
                 user.created_at,
                 user.updated_at,
