@@ -184,6 +184,104 @@ public sealed class ProjectTrackingRepository(AppDbContext db) : IProjectTrackin
         await db.SaveChangesAsync(ct);
     }
 
+    public async Task ExtendMilestoneTargetDateAsync(Guid milestoneId, Guid groupId, DateOnly newTargetDate, CancellationToken ct)
+    {
+        var milestone = await db.milestones.FirstOrDefaultAsync(m => m.milestone_id == milestoneId, ct)
+                        ?? throw new KeyNotFoundException("Milestone not found");
+        if (milestone.group_id != groupId)
+            throw new UnauthorizedAccessException("Milestone does not belong to this group");
+
+        milestone.target_date = newTargetDate;
+        milestone.updated_at = DateTime.UtcNow;
+
+        // Nếu milestone đang ở status "slipped" và new target date trong tương lai, có thể đổi về "in_progress"
+        if (string.Equals(milestone.status, "slipped", StringComparison.OrdinalIgnoreCase)
+            && newTargetDate >= DateOnly.FromDateTime(DateTime.UtcNow))
+        {
+            milestone.status = "in_progress";
+        }
+
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task<Guid> MoveIncompleteTasksToMilestoneAsync(Guid sourceMilestoneId, Guid groupId, Guid targetMilestoneId, Guid? newMilestoneId, CancellationToken ct)
+    {
+        var sourceMilestone = await db.milestones
+            .Include(m => m.milestone_items)
+            .ThenInclude(mi => mi.backlog_item)
+            .ThenInclude(b => b.tasks)
+            .ThenInclude(t => t.column)
+            .FirstOrDefaultAsync(m => m.milestone_id == sourceMilestoneId, ct)
+            ?? throw new KeyNotFoundException("Source milestone not found");
+
+        if (sourceMilestone.group_id != groupId)
+            throw new UnauthorizedAccessException("Source milestone does not belong to this group");
+
+        Guid finalTargetMilestoneId;
+
+        // Nếu cần tạo milestone mới
+        if (newMilestoneId.HasValue)
+        {
+            finalTargetMilestoneId = newMilestoneId.Value;
+            // Milestone mới đã được tạo trước đó, chỉ cần verify
+            var newMilestone = await db.milestones.FirstOrDefaultAsync(m => m.milestone_id == finalTargetMilestoneId, ct)
+                ?? throw new KeyNotFoundException("Target milestone not found");
+            if (newMilestone.group_id != groupId)
+                throw new UnauthorizedAccessException("Target milestone does not belong to this group");
+        }
+        else
+        {
+            finalTargetMilestoneId = targetMilestoneId;
+            var targetMilestone = await db.milestones.FirstOrDefaultAsync(m => m.milestone_id == targetMilestoneId, ct)
+                ?? throw new KeyNotFoundException("Target milestone not found");
+            if (targetMilestone.group_id != groupId)
+                throw new UnauthorizedAccessException("Target milestone does not belong to this group");
+        }
+
+        // Lấy các backlog items chưa hoàn thành
+        var incompleteItems = sourceMilestone.milestone_items
+            .Where(mi =>
+            {
+                var isBacklogCompleted = string.Equals(mi.backlog_item.status, "completed", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(mi.backlog_item.status, "archived", StringComparison.OrdinalIgnoreCase);
+                var isTaskDone = mi.backlog_item.tasks.Any(t => t.column.is_done);
+                return !isBacklogCompleted && !isTaskDone;
+            })
+            .Select(mi => mi.backlog_item_id)
+            .ToList();
+
+        if (incompleteItems.Count == 0)
+            return finalTargetMilestoneId;
+
+        // Xóa links cũ
+        var oldLinks = await db.milestone_items
+            .Where(mi => mi.milestone_id == sourceMilestoneId && incompleteItems.Contains(mi.backlog_item_id))
+            .ToListAsync(ct);
+        db.milestone_items.RemoveRange(oldLinks);
+
+        // Tạo links mới
+        var now = DateTime.UtcNow;
+        foreach (var backlogItemId in incompleteItems)
+        {
+            // Kiểm tra xem đã có link với target milestone chưa
+            var existingLink = await db.milestone_items
+                .FirstOrDefaultAsync(mi => mi.milestone_id == finalTargetMilestoneId && mi.backlog_item_id == backlogItemId, ct);
+            if (existingLink is null)
+            {
+                db.milestone_items.Add(new milestone_item
+                {
+                    milestone_item_id = Guid.NewGuid(),
+                    milestone_id = finalTargetMilestoneId,
+                    backlog_item_id = backlogItemId,
+                    added_at = now
+                });
+            }
+        }
+
+        await db.SaveChangesAsync(ct);
+        return finalTargetMilestoneId;
+    }
+
     private static string NormalizeBacklogStatus(string input)
     {
         var status = input?.Trim().ToLowerInvariant();

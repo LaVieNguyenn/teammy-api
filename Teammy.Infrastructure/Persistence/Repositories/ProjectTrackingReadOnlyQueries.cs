@@ -589,6 +589,289 @@ public sealed class ProjectTrackingReadOnlyQueries(AppDbContext db) : IProjectTr
         _ => 7
     };
 
+    public async Task<MilestoneOverdueActionsVm?> GetMilestoneOverdueActionsAsync(Guid milestoneId, Guid groupId, CancellationToken ct)
+    {
+        var milestone = await db.milestones.AsNoTracking()
+            .Where(m => m.milestone_id == milestoneId && m.group_id == groupId)
+            .FirstOrDefaultAsync(ct);
+
+        if (milestone is null)
+            return null;
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var isOverdue = milestone.target_date.HasValue && milestone.target_date.Value < today;
+
+        // Lấy tất cả backlog items trong milestone
+        var milestoneItems = await db.milestone_items.AsNoTracking()
+            .Where(mi => mi.milestone_id == milestoneId)
+            .Select(mi => new
+            {
+                mi.backlog_item_id,
+                BacklogItem = mi.backlog_item,
+                Task = mi.backlog_item.tasks
+                    .OrderByDescending(t => t.updated_at)
+                    .Select(t => new { t.task_id, t.column.column_name, t.column.is_done, t.due_date })
+                    .FirstOrDefault()
+            })
+            .ToListAsync(ct);
+
+        var nowUtc = DateTime.UtcNow;
+        var milestoneTargetDateUtc = milestone.target_date.HasValue
+            ? milestone.target_date.Value.ToDateTime(TimeOnly.MinValue)
+            : (DateTime?)null;
+
+        var overdueBacklogItems = new List<OverdueBacklogItemVm>();
+        var tasksDueAfter = new List<TaskDueAfterMilestoneVm>();
+        var completedCount = 0;
+        var incompleteCount = 0;
+        var overdueCount = 0;
+
+        foreach (var item in milestoneItems)
+        {
+            var isCompleted = string.Equals(item.BacklogItem.status, "completed", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(item.BacklogItem.status, "archived", StringComparison.OrdinalIgnoreCase);
+            var isTaskDone = item.Task?.is_done ?? false;
+            var isItemDone = isCompleted || isTaskDone;
+
+            if (isItemDone)
+            {
+                completedCount++;
+            }
+            else
+            {
+                incompleteCount++;
+
+                // Kiểm tra backlog item overdue
+                if (item.BacklogItem.due_date.HasValue && item.BacklogItem.due_date.Value < nowUtc)
+                {
+                    overdueCount++;
+                    overdueBacklogItems.Add(new OverdueBacklogItemVm(
+                        item.backlog_item_id,
+                        item.BacklogItem.title,
+                        item.BacklogItem.due_date,
+                        item.BacklogItem.status,
+                        item.Task?.task_id,
+                        item.Task?.column_name,
+                        item.Task?.is_done
+                    ));
+                }
+
+                // Kiểm tra tasks có due_date sau milestone target_date
+                if (milestoneTargetDateUtc.HasValue && item.Task?.due_date.HasValue == true
+                    && item.Task.due_date.Value > milestoneTargetDateUtc.Value)
+                {
+                    tasksDueAfter.Add(new TaskDueAfterMilestoneVm(
+                        item.backlog_item_id,
+                        item.BacklogItem.title,
+                        item.Task.due_date,
+                        item.Task.task_id,
+                        item.Task.column_name
+                    ));
+                }
+            }
+        }
+
+        return new MilestoneOverdueActionsVm(
+            milestone.milestone_id,
+            milestone.name,
+            milestone.target_date,
+            isOverdue,
+            milestoneItems.Count,
+            completedCount,
+            incompleteCount,
+            overdueCount,
+            tasksDueAfter.Count,
+            overdueBacklogItems,
+            tasksDueAfter
+        );
+    }
+
+    public async Task<TimelineVm> GetTimelineAsync(Guid groupId, DateOnly? startDate, DateOnly? endDate, CancellationToken ct)
+    {
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        DateOnly actualStartDate;
+        DateOnly actualEndDate;
+        bool filterByDate = startDate.HasValue || endDate.HasValue;
+
+        if (filterByDate)
+        {
+            actualStartDate = startDate ?? DateOnly.MinValue;
+            actualEndDate = endDate ?? DateOnly.MaxValue;
+        }
+        else
+        {
+            // Nếu không có date filter, get all (không filter theo date)
+            actualStartDate = DateOnly.MinValue;
+            actualEndDate = DateOnly.MaxValue;
+        }
+
+        // Lấy milestones
+        var milestonesQuery = db.milestones.AsNoTracking()
+            .Where(m => m.group_id == groupId);
+
+        if (filterByDate)
+        {
+            milestonesQuery = milestonesQuery.Where(m => 
+                m.target_date == null || (m.target_date >= actualStartDate && m.target_date <= actualEndDate));
+        }
+
+        var milestones = await milestonesQuery
+            .Select(m => new
+            {
+                m.milestone_id,
+                m.name,
+                m.status,
+                m.target_date,
+                m.completed_at,
+                m.description,
+                Total = m.milestone_items.Count(),
+                Completed = m.milestone_items.Count(mi => mi.backlog_item.status == "completed")
+            })
+            .ToListAsync(ct);
+
+        var todayDateOnly = DateOnly.FromDateTime(DateTime.UtcNow);
+        var milestoneVms = milestones.Select(m => new TimelineMilestoneVm(
+            m.milestone_id,
+            m.name,
+            m.status,
+            m.target_date,
+            m.completed_at,
+            m.description,
+            m.Total,
+            m.Completed,
+            CalculatePercent(m.Completed, m.Total),
+            m.target_date.HasValue && m.target_date.Value < todayDateOnly && m.status != "completed" && m.status != "archived"
+        )).ToList();
+
+        // Lấy tasks với due_date trong range
+        var nowUtc = DateTime.UtcNow;
+        DateTime? startUtc = filterByDate 
+            ? DateTime.SpecifyKind(actualStartDate.ToDateTime(TimeOnly.MinValue), DateTimeKind.Utc)
+            : null;
+        DateTime? endUtc = filterByDate
+            ? DateTime.SpecifyKind(actualEndDate.ToDateTime(TimeOnly.MaxValue), DateTimeKind.Utc)
+            : null;
+
+        var tasksQuery = db.tasks.AsNoTracking()
+            .Where(t => t.group_id == groupId);
+
+        if (filterByDate && startUtc.HasValue && endUtc.HasValue)
+        {
+            tasksQuery = tasksQuery.Where(t => t.due_date == null || (t.due_date >= startUtc.Value && t.due_date <= endUtc.Value));
+        }
+
+        var tasks = await (
+            from t in tasksQuery
+            join c in db.columns.AsNoTracking() on t.column_id equals c.column_id
+            join mi in db.milestone_items.AsNoTracking() on t.backlog_item_id equals mi.backlog_item_id into milestoneJoin
+            from mi in milestoneJoin.DefaultIfEmpty()
+            join m in db.milestones.AsNoTracking() on mi.milestone_id equals m.milestone_id into milestoneDetailJoin
+            from m in milestoneDetailJoin.DefaultIfEmpty()
+            select new
+            {
+                t.task_id,
+                t.backlog_item_id,
+                t.title,
+                t.priority,
+                t.due_date,
+                t.status,
+                t.column_id,
+                ColumnName = c.column_name,
+                ColumnIsDone = c.is_done,
+                MilestoneId = m != null ? (Guid?)m.milestone_id : null,
+                MilestoneName = m != null ? m.name : null
+            }
+        ).ToListAsync(ct);
+
+        var taskIds = tasks.Select(t => t.task_id).ToList();
+        var taskAssignments = await db.task_assignments.AsNoTracking()
+            .Where(ta => taskIds.Contains(ta.task_id))
+            .GroupBy(ta => ta.task_id)
+            .Select(g => new { TaskId = g.Key, AssigneeIds = g.Select(ta => ta.user_id).ToList() })
+            .ToListAsync(ct);
+
+        var assignmentMap = taskAssignments.ToDictionary(a => a.TaskId, a => a.AssigneeIds);
+
+        var taskVms = tasks.Select(t => new TimelineTaskVm(
+            t.task_id,
+            t.backlog_item_id,
+            t.title,
+            t.priority,
+            t.due_date,
+            t.status,
+            t.column_id,
+            t.ColumnName,
+            t.ColumnIsDone,
+            t.MilestoneId,
+            t.MilestoneName,
+            assignmentMap.TryGetValue(t.task_id, out var assignees) ? assignees : Array.Empty<Guid>()
+        )).ToList();
+
+        // Lấy backlog items với due_date trong range (chưa có task hoặc task chưa done)
+        var backlogItemsQuery = db.backlog_items.AsNoTracking()
+            .Where(b => b.group_id == groupId
+                && b.status != "archived"
+                && (b.tasks.Count == 0 || b.tasks.Any(t => !t.column.is_done))); // Chỉ lấy items chưa có task hoặc task chưa done
+
+        if (filterByDate && startUtc.HasValue && endUtc.HasValue)
+        {
+            backlogItemsQuery = backlogItemsQuery.Where(b => b.due_date == null || (b.due_date >= startUtc.Value && b.due_date <= endUtc.Value));
+        }
+
+        var backlogItems = await backlogItemsQuery
+            .Select(b => new
+            {
+                b.backlog_item_id,
+                b.title,
+                b.status,
+                b.priority,
+                b.due_date,
+                OwnerUserId = b.owner_user_id,
+                OwnerName = b.owner_user != null ? b.owner_user.display_name : null,
+                MilestoneId = b.milestone_items.Select(mi => (Guid?)mi.milestone_id).FirstOrDefault(),
+                MilestoneName = b.milestone_items.Select(mi => mi.milestone.name).FirstOrDefault(),
+                LinkedTaskId = b.tasks.Select(t => (Guid?)t.task_id).FirstOrDefault()
+            })
+            .Distinct()
+            .ToListAsync(ct);
+
+        var backlogItemVms = backlogItems.Select(b => new TimelineBacklogItemVm(
+            b.backlog_item_id,
+            b.title,
+            b.status,
+            b.priority,
+            b.due_date,
+            b.OwnerUserId,
+            b.OwnerName,
+            b.MilestoneId,
+            b.MilestoneName,
+            b.LinkedTaskId,
+            b.due_date.HasValue && b.due_date.Value < nowUtc && b.status != "completed" && b.status != "archived"
+        )).ToList();
+
+        // Nếu không filter theo date, trả về range thực tế của dữ liệu
+        var allDates = milestoneVms.Where(m => m.TargetDate.HasValue).Select(m => m.TargetDate!.Value)
+            .Concat(taskVms.Where(t => t.DueDate.HasValue).Select(t => DateOnly.FromDateTime(t.DueDate!.Value)))
+            .Concat(backlogItemVms.Where(b => b.DueDate.HasValue).Select(b => DateOnly.FromDateTime(b.DueDate!.Value)))
+            .ToList();
+
+        var finalStartDate = filterByDate 
+            ? actualStartDate 
+            : (allDates.Any() ? allDates.Min() : today);
+        
+        var finalEndDate = filterByDate 
+            ? actualEndDate 
+            : (allDates.Any() ? allDates.Max() : today);
+
+        return new TimelineVm(
+            finalStartDate,
+            finalEndDate,
+            milestoneVms,
+            taskVms,
+            backlogItemVms
+        );
+    }
+
     private static decimal CalculatePercent(int completed, int total)
         => total == 0 ? 0 : Math.Round((decimal)completed / total * 100m, 2);
 
