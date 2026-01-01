@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Infrastructure.Ai;
 using Teammy.Infrastructure.Persistence;
@@ -22,12 +23,19 @@ public sealed class AiIndexOutboxWorker : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly AiGatewayClient _gateway;
     private readonly ILogger<AiIndexOutboxWorker> _logger;
+    private readonly IOptionsMonitor<AiIndexOutboxWorkerOptions> _options;
+    private bool _loggedDisabled;
 
-    public AiIndexOutboxWorker(IServiceScopeFactory scopeFactory, AiGatewayClient gateway, ILogger<AiIndexOutboxWorker> logger)
+    public AiIndexOutboxWorker(
+        IServiceScopeFactory scopeFactory,
+        AiGatewayClient gateway,
+        ILogger<AiIndexOutboxWorker> logger,
+        IOptionsMonitor<AiIndexOutboxWorkerOptions> options)
     {
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
         _gateway = gateway ?? throw new ArgumentNullException(nameof(gateway));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _options = options ?? throw new ArgumentNullException(nameof(options));
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -36,6 +44,20 @@ public sealed class AiIndexOutboxWorker : BackgroundService
         {
             try
             {
+                if (!_options.CurrentValue.Active)
+                {
+                    if (!_loggedDisabled)
+                    {
+                        _logger.LogInformation("AiIndexOutboxWorker is disabled via config ({Section}:Active=false).", AiIndexOutboxWorkerOptions.SectionName);
+                        _loggedDisabled = true;
+                    }
+
+                    await Task.Delay(IdleDelay, stoppingToken);
+                    continue;
+                }
+
+                _loggedDisabled = false;
+
                 var processed = await ProcessBatchAsync(stoppingToken);
                 if (processed == 0)
                     await Task.Delay(IdleDelay, stoppingToken);

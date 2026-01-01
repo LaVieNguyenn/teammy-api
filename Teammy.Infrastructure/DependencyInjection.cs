@@ -2,6 +2,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Teammy.Application.Announcements.Services;
 using Teammy.Application.Common.Interfaces;
 using Teammy.Application.Files;
@@ -32,6 +33,9 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
+        services.AddOptions<AiIndexOutboxWorkerOptions>()
+            .Bind(configuration.GetSection(AiIndexOutboxWorkerOptions.SectionName));
+
         services.AddSingleton<AiIndexOutboxSaveChangesInterceptor>();
         services.AddDbContext<AppDbContext>((sp, opt) =>
         {
