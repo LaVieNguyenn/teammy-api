@@ -88,4 +88,31 @@ public sealed class ProjectTrackingController(ProjectTrackingService service) : 
     [Authorize]
     public Task<MemberScoreReportVm> GetMemberScores(Guid groupId, [FromQuery] MemberScoreQuery req, CancellationToken ct)
         => service.GetMemberScoresAsync(groupId, GetUserId(), req, ct);
+
+    // Overdue Actions
+    [HttpGet("milestones/{milestoneId:guid}/overdue-actions")]
+    [Authorize]
+    public async Task<ActionResult<MilestoneOverdueActionsVm>> GetMilestoneOverdueActions(Guid groupId, Guid milestoneId, CancellationToken ct)
+    {
+        var result = await service.GetMilestoneOverdueActionsAsync(groupId, milestoneId, GetUserId(), ct);
+        if (result is null)
+            return NotFound("Milestone not found");
+        return Ok(result);
+    }
+
+    [HttpPost("milestones/{milestoneId:guid}/extend")]
+    [Authorize]
+    public async Task<ActionResult<MilestoneActionResultVm>> ExtendMilestone(Guid groupId, Guid milestoneId, [FromBody] ExtendMilestoneRequest req, CancellationToken ct)
+        => Ok(await service.ExtendMilestoneAsync(groupId, milestoneId, GetUserId(), req, ct));
+
+    [HttpPost("milestones/{milestoneId:guid}/move-tasks")]
+    [Authorize]
+    public async Task<ActionResult<MilestoneActionResultVm>> MoveMilestoneTasks(Guid groupId, Guid milestoneId, [FromBody] MoveMilestoneTasksRequest req, CancellationToken ct)
+        => Ok(await service.MoveMilestoneTasksAsync(groupId, milestoneId, GetUserId(), req, ct));
+
+    // Timeline
+    [HttpGet("timeline")]
+    [Authorize]
+    public Task<TimelineVm> GetTimeline(Guid groupId, [FromQuery] DateOnly? startDate, [FromQuery] DateOnly? endDate, CancellationToken ct)
+        => service.GetTimelineAsync(groupId, GetUserId(), startDate, endDate, ct);
 }

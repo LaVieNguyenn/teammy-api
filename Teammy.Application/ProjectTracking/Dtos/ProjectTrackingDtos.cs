@@ -192,3 +192,104 @@ public sealed record MilestoneItemStatusVm(
     string? ColumnName,
     bool? ColumnIsDone
 );
+
+// Overdue Actions Panel DTOs
+public sealed record MilestoneOverdueActionsVm(
+    Guid MilestoneId,
+    string MilestoneName,
+    DateOnly? TargetDate,
+    bool IsOverdue,
+    int TotalItems,
+    int CompletedItems,
+    int IncompleteItems,
+    int OverdueItems,
+    int TasksDueAfterMilestone,
+    IReadOnlyList<OverdueBacklogItemVm> OverdueBacklogItems,
+    IReadOnlyList<TaskDueAfterMilestoneVm> TasksDueAfter
+);
+
+public sealed record OverdueBacklogItemVm(
+    Guid BacklogItemId,
+    string Title,
+    DateTime? DueDate,
+    string Status,
+    Guid? LinkedTaskId,
+    string? ColumnName,
+    bool? ColumnIsDone
+);
+
+public sealed record TaskDueAfterMilestoneVm(
+    Guid BacklogItemId,
+    string Title,
+    DateTime? DueDate,
+    Guid? LinkedTaskId,
+    string? ColumnName
+);
+
+public sealed record ExtendMilestoneRequest(DateOnly NewTargetDate);
+
+public sealed record MoveMilestoneTasksRequest(
+    Guid? TargetMilestoneId,  // Chỉ cần khi CreateNewMilestone = false
+    bool CreateNewMilestone,
+    string? NewMilestoneName,
+    DateOnly? NewMilestoneTargetDate,
+    string? NewMilestoneDescription
+);
+
+public sealed record MilestoneActionResultVm(
+    bool Success,
+    string Action,
+    string Message,
+    Guid? NewMilestoneId
+);
+
+// Timeline DTOs
+public sealed record TimelineVm(
+    DateOnly StartDate,
+    DateOnly EndDate,
+    IReadOnlyList<TimelineMilestoneVm> Milestones,
+    IReadOnlyList<TimelineTaskVm> Tasks,
+    IReadOnlyList<TimelineBacklogItemVm> BacklogItems
+);
+
+public sealed record TimelineMilestoneVm(
+    Guid MilestoneId,
+    string Name,
+    string Status,
+    DateOnly? TargetDate,
+    DateTime? CompletedAt,
+    string? Description,
+    int TotalItems,
+    int CompletedItems,
+    decimal CompletionPercent,
+    bool IsOverdue
+);
+
+public sealed record TimelineTaskVm(
+    Guid TaskId,
+    Guid? BacklogItemId,
+    string Title,
+    string? Priority,
+    DateTime? DueDate,
+    string? Status,
+    Guid ColumnId,
+    string ColumnName,
+    bool ColumnIsDone,
+    Guid? MilestoneId,
+    string? MilestoneName,
+    IReadOnlyList<Guid> AssigneeIds
+);
+
+public sealed record TimelineBacklogItemVm(
+    Guid BacklogItemId,
+    string Title,
+    string Status,
+    string? Priority,
+    DateTime? DueDate,
+    Guid? OwnerUserId,
+    string? OwnerDisplayName,
+    Guid? MilestoneId,
+    string? MilestoneName,
+    Guid? LinkedTaskId,
+    bool IsOverdue
+);

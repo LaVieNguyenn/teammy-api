@@ -14,4 +14,7 @@ public interface IProjectTrackingRepository
 
     Task AssignMilestoneItemsAsync(Guid milestoneId, Guid groupId, IReadOnlyList<Guid> backlogItemIds, CancellationToken ct);
     Task RemoveMilestoneItemAsync(Guid milestoneId, Guid backlogItemId, Guid groupId, CancellationToken ct);
+
+    Task ExtendMilestoneTargetDateAsync(Guid milestoneId, Guid groupId, DateOnly newTargetDate, CancellationToken ct);
+    Task<Guid> MoveIncompleteTasksToMilestoneAsync(Guid sourceMilestoneId, Guid groupId, Guid targetMilestoneId, Guid? newMilestoneId, CancellationToken ct);
 }

@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
+using Teammy.Application.Activity.Dtos;
+using Teammy.Application.Activity.Services;
 using Teammy.Application.Kanban.Interfaces;
 using Teammy.Application.ProjectTracking.Dtos;
 using Teammy.Application.ProjectTracking.Interfaces;
@@ -10,7 +13,8 @@ public sealed class ProjectTrackingService(
     IProjectTrackingReadOnlyQueries read,
     IProjectTrackingRepository repo,
     IKanbanRepository kanban,
-    IGroupAccessQueries access
+    IGroupAccessQueries access,
+    ActivityLogService activityLog
 )
 {
     public async Task<IReadOnlyList<BacklogItemVm>> ListBacklogAsync(Guid groupId, Guid currentUserId, CancellationToken ct)
@@ -158,6 +162,134 @@ public sealed class ProjectTrackingService(
         var toUtc = DateTime.SpecifyKind(req.To.ToDateTime(TimeOnly.MaxValue), DateTimeKind.Utc);
 
         return await read.BuildMemberScoresReportAsync(groupId, fromUtc, toUtc, weights, ct);
+    }
+
+    public async Task<MilestoneOverdueActionsVm?> GetMilestoneOverdueActionsAsync(Guid groupId, Guid milestoneId, Guid currentUserId, CancellationToken ct)
+    {
+        await EnsureViewerAccessAsync(groupId, currentUserId, ct);
+        return await read.GetMilestoneOverdueActionsAsync(milestoneId, groupId, ct);
+    }
+
+    public async Task<MilestoneActionResultVm> ExtendMilestoneAsync(Guid groupId, Guid milestoneId, Guid currentUserId, ExtendMilestoneRequest req, CancellationToken ct)
+    {
+        await EnsureLeaderAsync(groupId, currentUserId, ct);
+
+        var milestone = await read.GetMilestoneAsync(milestoneId, ct)
+            ?? throw new KeyNotFoundException("Milestone not found");
+
+        if (milestone.GroupId != groupId)
+            throw new UnauthorizedAccessException("Milestone does not belong to this group");
+
+        var oldTargetDate = milestone.TargetDate;
+        await repo.ExtendMilestoneTargetDateAsync(milestoneId, groupId, req.NewTargetDate, ct);
+
+        // Log activity
+        await activityLog.LogAsync(new ActivityLogCreateRequest(currentUserId, "milestone", "extend_target_date")
+        {
+            GroupId = groupId,
+            EntityId = milestoneId,
+            Message = $"Extended milestone '{milestone.Name}' target date from {oldTargetDate} to {req.NewTargetDate}",
+            Metadata = new Dictionary<string, object>
+            {
+                ["old_target_date"] = oldTargetDate?.ToString() ?? "",
+                ["new_target_date"] = req.NewTargetDate.ToString(),
+                ["milestone_name"] = milestone.Name
+            }
+        }, ct);
+
+        return new MilestoneActionResultVm(
+            Success: true,
+            Action: "extend",
+            Message: $"Milestone target date extended to {req.NewTargetDate}",
+            NewMilestoneId: null
+        );
+    }
+
+    public async Task<MilestoneActionResultVm> MoveMilestoneTasksAsync(Guid groupId, Guid milestoneId, Guid currentUserId, MoveMilestoneTasksRequest req, CancellationToken ct)
+    {
+        await EnsureLeaderAsync(groupId, currentUserId, ct);
+
+        var sourceMilestone = await read.GetMilestoneAsync(milestoneId, ct)
+            ?? throw new KeyNotFoundException("Source milestone not found");
+
+        if (sourceMilestone.GroupId != groupId)
+            throw new UnauthorizedAccessException("Milestone does not belong to this group");
+
+        Guid? newMilestoneId = null;
+        Guid targetMilestoneId;
+
+        // Nếu cần tạo milestone mới
+        if (req.CreateNewMilestone)
+        {
+            if (string.IsNullOrWhiteSpace(req.NewMilestoneName))
+                throw new ArgumentException("NewMilestoneName is required when creating new milestone", nameof(req));
+
+            // ID sẽ được PostgreSQL tự động generate
+            newMilestoneId = await repo.CreateMilestoneAsync(
+                groupId,
+                currentUserId,
+                new CreateMilestoneRequest(
+                    req.NewMilestoneName.Trim(),
+                    req.NewMilestoneDescription?.Trim(),
+                    req.NewMilestoneTargetDate
+                ),
+                ct);
+
+            targetMilestoneId = newMilestoneId.Value;
+        }
+        else
+        {
+            // Khi không tạo mới, cần TargetMilestoneId
+            if (!req.TargetMilestoneId.HasValue || req.TargetMilestoneId.Value == Guid.Empty)
+                throw new ArgumentException("TargetMilestoneId is required when not creating new milestone", nameof(req));
+
+            targetMilestoneId = req.TargetMilestoneId.Value;
+            var targetMilestoneCheck = await read.GetMilestoneAsync(targetMilestoneId, ct)
+                ?? throw new KeyNotFoundException("Target milestone not found");
+            if (targetMilestoneCheck.GroupId != groupId)
+                throw new UnauthorizedAccessException("Target milestone does not belong to this group");
+        }
+
+        var movedMilestoneId = await repo.MoveIncompleteTasksToMilestoneAsync(
+            milestoneId,
+            groupId,
+            targetMilestoneId,
+            newMilestoneId,
+            ct);
+
+        var targetMilestoneInfo = await read.GetMilestoneAsync(targetMilestoneId, ct);
+        var targetMilestoneName = req.CreateNewMilestone
+            ? req.NewMilestoneName
+            : targetMilestoneInfo?.Name ?? "Unknown";
+
+        // Log activity
+        await activityLog.LogAsync(new ActivityLogCreateRequest(currentUserId, "milestone", "move_incomplete_tasks")
+        {
+            GroupId = groupId,
+            EntityId = milestoneId,
+            Message = $"Moved incomplete tasks from milestone '{sourceMilestone.Name}' to '{targetMilestoneName}'",
+            Metadata = new Dictionary<string, object>
+            {
+                ["source_milestone_id"] = milestoneId.ToString(),
+                ["source_milestone_name"] = sourceMilestone.Name,
+                ["target_milestone_id"] = movedMilestoneId.ToString(),
+                ["target_milestone_name"] = targetMilestoneName,
+                ["created_new_milestone"] = req.CreateNewMilestone
+            }
+        }, ct);
+
+        return new MilestoneActionResultVm(
+            Success: true,
+            Action: "move_tasks",
+            Message: $"Incomplete tasks moved to milestone '{targetMilestoneName}'",
+            NewMilestoneId: newMilestoneId
+        );
+    }
+
+    public async Task<TimelineVm> GetTimelineAsync(Guid groupId, Guid currentUserId, DateOnly? startDate, DateOnly? endDate, CancellationToken ct)
+    {
+        await EnsureViewerAccessAsync(groupId, currentUserId, ct);
+        return await read.GetTimelineAsync(groupId, startDate, endDate, ct);
     }
 
     private async Task EnsureViewerAccessAsync(Guid groupId, Guid userId, CancellationToken ct)
