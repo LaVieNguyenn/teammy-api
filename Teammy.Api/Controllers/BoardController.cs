@@ -23,8 +23,13 @@ public sealed class BoardController(KanbanService service) : ControllerBase
     // Board
     [HttpGet]
     [Authorize]
-    public Task<BoardVm> GetBoard(Guid groupId, CancellationToken ct)
-        => service.GetBoardAsync(groupId, GetUserId(), ct);
+    public Task<BoardVm> GetBoard(
+        Guid groupId,
+        [FromQuery] string? status,
+        [FromQuery] int? page,
+        [FromQuery] int? pageSize,
+        CancellationToken ct)
+        => service.GetBoardAsync(groupId, GetUserId(), status, page, pageSize, ct);
 
     // Columns
     [HttpPost("columns")]

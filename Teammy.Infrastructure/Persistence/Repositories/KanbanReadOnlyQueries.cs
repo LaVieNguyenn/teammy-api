@@ -1,3 +1,4 @@
+using System;
 using Microsoft.EntityFrameworkCore;
 using Teammy.Application.Kanban.Dtos;
 using Teammy.Application.Kanban.Interfaces;
@@ -8,7 +9,7 @@ namespace Teammy.Infrastructure.Persistence.Repositories;
 public sealed class KanbanReadOnlyQueries(AppDbContext db) : IKanbanReadOnlyQueries
 {
 
-public async Task<BoardVm?> GetBoardAsync(Guid groupId, CancellationToken ct)
+public async Task<BoardVm?> GetBoardAsync(Guid groupId, string? status, int? page, int? pageSize, CancellationToken ct)
 {
     var board = await db.boards.AsNoTracking()
         .FirstOrDefaultAsync(b => b.group_id == groupId, ct);
@@ -23,11 +24,29 @@ public async Task<BoardVm?> GetBoardAsync(Guid groupId, CancellationToken ct)
 
     var colIds = cols.Select(c => c.column_id).ToArray();
 
-    var tasks = await db.tasks.AsNoTracking()
-        .Where(t => t.group_id == groupId && colIds.Contains(t.column_id))
+    var taskQuery = db.tasks.AsNoTracking()
+        .Where(t => t.group_id == groupId && colIds.Contains(t.column_id));
+
+    if (!string.IsNullOrWhiteSpace(status))
+    {
+        var normalized = status.Trim().ToLowerInvariant();
+        taskQuery = taskQuery.Where(t => t.status != null && t.status.ToLower() == normalized);
+    }
+
+    taskQuery = taskQuery
         .OrderBy(t => t.column_id)
         .ThenBy(t => t.sort_order)
-        .ThenBy(t => t.created_at)
+        .ThenBy(t => t.created_at);
+
+    if (page.HasValue || pageSize.HasValue)
+    {
+        var normalizedPage = Math.Max(page ?? 1, 1);
+        var normalizedSize = Math.Clamp(pageSize ?? 50, 1, 200);
+        var offset = (normalizedPage - 1) * normalizedSize;
+        taskQuery = taskQuery.Skip(offset).Take(normalizedSize);
+    }
+
+    var tasks = await taskQuery
         .Select(t => new
         {
             t.task_id,
