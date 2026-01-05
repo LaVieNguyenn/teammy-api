@@ -31,8 +31,8 @@ public sealed record AssigneeVm(
 public sealed record CreateColumnRequest(string ColumnName, int? Position);
 public sealed record UpdateColumnRequest(string ColumnName, int Position, bool IsDone, DateTime? DueDate);
 
-public sealed record CreateTaskRequest(Guid ColumnId, string Title, string? Description, string? Priority, string? Status, DateTime? DueDate, Guid? BacklogItemId);
-public sealed record UpdateTaskRequest(Guid? ColumnId, string Title, string? Description, string? Priority, string? Status, DateTime? DueDate, Guid? BacklogItemId);
+public sealed record CreateTaskRequest(Guid ColumnId, string Title, string? Description, string? Priority, string? Status, DateTime? DueDate, Guid? BacklogItemId, IReadOnlyList<Guid>? AssigneeIds);
+public sealed record UpdateTaskRequest(Guid? ColumnId, string Title, string? Description, string? Priority, string? Status, DateTime? DueDate, Guid? BacklogItemId, IReadOnlyList<Guid>? AssigneeIds);
 
 public sealed record ReplaceAssigneesRequest(IReadOnlyList<Guid> UserIds);
 
