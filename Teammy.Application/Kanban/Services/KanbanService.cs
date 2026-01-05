@@ -13,12 +13,12 @@ public sealed class KanbanService(
 )
 {
     // Board
-    public async Task<BoardVm> GetBoardAsync(Guid groupId, Guid currentUserId, CancellationToken ct)
+    public async Task<BoardVm> GetBoardAsync(Guid groupId, Guid currentUserId, string? status, int? page, int? pageSize, CancellationToken ct)
     {
         if (!await HasMemberOrMentorAccess(groupId, currentUserId, ct))
             throw new UnauthorizedAccessException("Not a group member or mentor");
         await repo.EnsureBoardForGroupAsync(groupId, ct); 
-        var vm = await read.GetBoardAsync(groupId, ct);
+        var vm = await read.GetBoardAsync(groupId, status, page, pageSize, ct);
         return vm ?? throw new KeyNotFoundException("Board not found");
     }
 
