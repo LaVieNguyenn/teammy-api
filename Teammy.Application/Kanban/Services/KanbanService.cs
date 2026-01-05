@@ -52,7 +52,15 @@ public sealed class KanbanService(
         if (!await access.IsMemberAsync(groupId, currentUserId, ct))
             throw new UnauthorizedAccessException("Not a group member");
         await repo.EnsureBoardForGroupAsync(groupId, ct);
-        return await repo.CreateTaskAsync(groupId, req.ColumnId, req.Title.Trim(), req.Description, req.Priority, req.Status, req.DueDate, req.BacklogItemId, ct);
+        var taskId = await repo.CreateTaskAsync(groupId, req.ColumnId, req.Title.Trim(), req.Description, req.Priority, req.Status, req.DueDate, req.BacklogItemId, ct);
+        
+        // Set assignees nếu có
+        if (req.AssigneeIds is not null && req.AssigneeIds.Count > 0)
+        {
+            await repo.ReplaceAssigneesAsync(taskId, req.AssigneeIds, ct);
+        }
+        
+        return taskId;
     }
 
     public async Task UpdateTaskAsync(Guid groupId, Guid taskId, Guid currentUserId, UpdateTaskRequest req, CancellationToken ct)
@@ -60,6 +68,12 @@ public sealed class KanbanService(
         if (!await access.IsMemberAsync(groupId, currentUserId, ct))
             throw new UnauthorizedAccessException("Not a group member");
         await repo.UpdateTaskAsync(taskId, req.ColumnId, req.Title.Trim(), req.Description, req.Priority, req.Status, req.DueDate, req.BacklogItemId, ct);
+        
+        // Update assignees nếu có
+        if (req.AssigneeIds is not null)
+        {
+            await repo.ReplaceAssigneesAsync(taskId, req.AssigneeIds, ct);
+        }
     }
 
     public async Task DeleteTaskAsync(Guid groupId, Guid taskId, Guid currentUserId, CancellationToken ct)
