@@ -97,6 +97,7 @@ builder.Logging.AddFilter("Teammy.Infrastructure.Ai", Microsoft.Extensions.Loggi
 Console.WriteLine($"[Startup] ASPNETCORE_ENVIRONMENT={builder.Environment.EnvironmentName}");
 Console.WriteLine($"[Startup] AI_GATEWAY_BASE_URL={builder.Configuration["AI_GATEWAY_BASE_URL"]}");
 Console.WriteLine($"[Startup] AI_GATEWAY_API_KEY={(string.IsNullOrWhiteSpace(builder.Configuration["AI_GATEWAY_API_KEY"]) ? "<empty>" : "<set>")}");
+Console.WriteLine($"[Startup] Ai:IndexOutboxWorker:Active={builder.Configuration["Ai:IndexOutboxWorker:Active"] ?? "<null>"}");
 
 // JWT
 var key = builder.Configuration["Auth:Jwt:Key"]!;

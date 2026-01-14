@@ -14,6 +14,8 @@ public sealed class CloseTopicsOnSemesterEndJob : BackgroundService
 {
     private static readonly TimeSpan MinDelay = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan FallbackDelay = TimeSpan.FromHours(12);
+    // Task.Delay(TimeSpan) only supports up to int.MaxValue milliseconds (~24.8 days).
+    private static readonly TimeSpan MaxDelay = TimeSpan.FromMilliseconds(int.MaxValue);
     private static readonly TimeZoneInfo VietnamTimeZone = ResolveVietnamTimeZone();
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<CloseTopicsOnSemesterEndJob> _logger;
@@ -40,6 +42,8 @@ public sealed class CloseTopicsOnSemesterEndJob : BackgroundService
                 var delay = nextRunUtc - DateTime.UtcNow;
                 if (delay < MinDelay)
                     delay = MinDelay;
+                else if (delay > MaxDelay)
+                    delay = MaxDelay;
 
                 await Task.Delay(delay, stoppingToken);
             }
