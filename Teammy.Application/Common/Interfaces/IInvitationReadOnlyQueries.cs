@@ -5,7 +5,7 @@ namespace Teammy.Application.Common.Interfaces;
 public interface IInvitationReadOnlyQueries
 {
     Task<InvitationDetailDto?> GetAsync(Guid invitationId, CancellationToken ct);
-    Task<IReadOnlyList<InvitationListItemDto>> ListForUserAsync(Guid userId, string? status, CancellationToken ct);
+    Task<IReadOnlyList<InvitationListItemDto>> ListForUserAsync(Guid userId, string? status, Guid? semesterId, Guid? majorId, CancellationToken ct);
 
     // Check for duplicate pending invitation for same group + invitee
     Task<Guid?> FindPendingIdAsync(Guid groupId, Guid inviteeUserId, CancellationToken ct);

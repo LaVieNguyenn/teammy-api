@@ -10,6 +10,10 @@ public sealed record InvitationListItemDto(
     string? InvitedByName,
     Guid   GroupId,
     string? GroupName,
+    Guid   SemesterId,
+    string? SemesterLabel,
+    Guid?  MajorId,
+    string? MajorName,
     Guid?  TopicId,
     string? TopicTitle,
     string? Message

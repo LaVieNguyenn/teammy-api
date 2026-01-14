@@ -301,10 +301,10 @@ public sealed class InvitationService(
         await BroadcastStatusAsync(inv.InviteeUserId, inv.GroupId, invitationId, "revoked", ct);
     }
 
-    public async Task<IReadOnlyList<InvitationListItemDto>> ListMyInvitationsAsync(Guid currentUserId, string? status, CancellationToken ct)
+    public async Task<IReadOnlyList<InvitationListItemDto>> ListMyInvitationsAsync(Guid currentUserId, string? status, Guid? semesterId, Guid? majorId, CancellationToken ct)
     {
         _ = await repo.ExpirePendingAsync(DateTime.UtcNow, ct);
-        return await queries.ListForUserAsync(currentUserId, status, ct);
+        return await queries.ListForUserAsync(currentUserId, status, semesterId, majorId, ct);
     }
     public async Task ApproveMentorInvitationAsync(Guid invitationId, Guid leaderUserId, CancellationToken ct)
     {

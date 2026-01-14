@@ -18,8 +18,12 @@ public sealed class InvitationsController(InvitationService service) : Controlle
 
     [HttpGet]
     [Authorize]
-    public Task<IReadOnlyList<Teammy.Application.Invitations.Dtos.InvitationListItemDto>> List([FromQuery] string? status, CancellationToken ct)
-        => service.ListMyInvitationsAsync(GetUserId(), status, ct);
+    public Task<IReadOnlyList<Teammy.Application.Invitations.Dtos.InvitationListItemDto>> List(
+        [FromQuery] string? status,
+        [FromQuery] Guid? semesterId,
+        [FromQuery] Guid? majorId,
+        CancellationToken ct)
+        => service.ListMyInvitationsAsync(GetUserId(), status, semesterId, majorId, ct);
 
     [HttpPost("{id:guid}/accept")]
     [Authorize]
