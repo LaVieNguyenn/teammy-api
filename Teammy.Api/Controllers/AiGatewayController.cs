@@ -143,6 +143,7 @@ public sealed class AiGatewayController(AiGatewayClient gateway, AppDbContext db
     [HttpPost("generate-post/personal")]
     //[Authorize]
     public async Task<IActionResult> GeneratePersonalPostDraftFromDbAsync(
+        [FromQuery] Guid? semesterId,
         CancellationToken ct)
     {
         var userId = GetCurrentUserId();
@@ -155,10 +156,35 @@ public sealed class AiGatewayController(AiGatewayClient gateway, AppDbContext db
         if (user is null)
             return NotFound(new { error = "User not found" });
 
-        var pool = await (from p in db.mv_students_pools.AsNoTracking()
-                          join s in db.semesters.AsNoTracking() on p.semester_id equals s.semester_id
-                          where s.is_active && p.user_id == userId
-                          select new { p.skills, p.primary_role, p.desired_position_name })
+        var poolQuery =
+            from p in db.mv_students_pools.AsNoTracking()
+            join s in db.semesters.AsNoTracking() on p.semester_id equals s.semester_id
+            where p.user_id == userId
+            select new
+            {
+                p.skills,
+                p.primary_role,
+                p.desired_position_name,
+                s.semester_id,
+                s.is_active,
+                s.start_date,
+                s.year
+            };
+
+        if (semesterId.HasValue && semesterId.Value != Guid.Empty)
+        {
+            poolQuery = poolQuery.Where(x => x.semester_id == semesterId.Value);
+        }
+        else
+        {
+            poolQuery = poolQuery
+                .Where(x => x.is_active)
+                .OrderByDescending(x => x.start_date)
+                .ThenByDescending(x => x.year);
+        }
+
+        var pool = await poolQuery
+            .Select(x => new { x.skills, x.primary_role, x.desired_position_name })
             .FirstOrDefaultAsync(ct);
 
         var skills = ParseSkillsList(pool?.skills) ?? ParseSkillsList(user.skills) ?? new List<string>();

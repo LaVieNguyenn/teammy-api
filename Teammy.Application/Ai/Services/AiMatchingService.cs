@@ -313,7 +313,7 @@ public sealed class AiMatchingService(
             queryText,
             suggestions,
             s => s.PostId,
-            BuildRecruitmentCandidate,
+            s => BuildRecruitmentCandidate(s, profile.DesiredPositionName, studentSkills),
             ApplyRecruitmentRerank,
             s => s.Score,
             context,
@@ -396,7 +396,7 @@ public sealed class AiMatchingService(
         if (items.Count == 0)
             return items;
 
-        var queryText = BuildGroupQueryText(detail.Name, groupSkillProfile, null);
+        var queryText = BuildTopicQueryTextForGateway(detail.Name, groupSkillProfile, null);
         var context = BuildLlmContext(
             ("semesterId", detail.SemesterId.ToString()),
             ("groupId", groupId.ToString()),
@@ -1046,7 +1046,7 @@ public sealed class AiMatchingService(
         foreach (var group in pageGroups)
         {
             var groupProfile = await GetGroupSkillProfileAsync(group.GroupId, ct);
-            var groupQueryText = BuildGroupQueryText(group.Name, groupProfile, null);
+            var groupQueryText = BuildTopicQueryTextForGateway(group.Name, groupProfile, null);
             var semanticQuery = BuildSemanticQuery(groupProfile);
             var relevantTopics = group.MajorId.HasValue
                 ? topicList.Where(t => !t.MajorId.HasValue || t.MajorId.Value == group.MajorId.Value)
@@ -1924,6 +1924,28 @@ public sealed class AiMatchingService(
         return builder.ToString();
     }
 
+    private static string BuildTopicQueryTextForGateway(string groupName, AiSkillProfile profile, GroupRoleMixSnapshot? mix)
+    {
+        var compact = BuildGroupQueryText(groupName, profile, mix);
+
+        var primaryNeed = profile.PrimaryRole == AiPrimaryRole.Unknown
+            ? null
+            : AiRoleHelper.ToDisplayString(profile.PrimaryRole);
+        var skillsCsv = profile.HasTags
+            ? string.Join(", ", profile.Tags.Take(15))
+            : null;
+
+        // The AI gateway's v2 reason extraction looks for PRIMARY_NEED and TEAM_SKILLS in queryText.
+        // Keep the human-readable compact line as well for rerank quality/debug.
+        var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(primaryNeed))
+            sb.AppendLine($"PRIMARY_NEED: {primaryNeed}.");
+        if (!string.IsNullOrWhiteSpace(skillsCsv))
+            sb.AppendLine($"TEAM_SKILLS: {skillsCsv}.");
+        sb.Append("SUMMARY: ").Append(compact);
+        return sb.ToString();
+    }
+
     private static string BuildGroupQueryText(
         string groupName,
         AiSkillProfile needsProfile,
@@ -1992,6 +2014,55 @@ public sealed class AiMatchingService(
             metadata);
     }
 
+    private static AiLlmCandidate BuildRecruitmentCandidate(
+        RecruitmentPostSuggestionDto suggestion,
+        string? studentDesiredPosition,
+        AiSkillProfile studentSkills)
+    {
+        // IMPORTANT: for v2 business reasons, the AI gateway extracts student info from candidate snippet:
+        // DESIRED_POSITION + SKILLS.
+        // So for recruitment-post suggestions (student -> posts), include student signals in payload.
+
+        var desired = string.IsNullOrWhiteSpace(studentDesiredPosition)
+            ? null
+            : studentDesiredPosition.Trim();
+
+        // IMPORTANT: recruitment-post descriptions are user-generated and not controlled.
+        // For rerank/reasons, only send controlled signals.
+        var controlledSummary = string.IsNullOrWhiteSpace(suggestion.PositionNeeded)
+            ? "Recruiting."
+            : $"Recruiting for {suggestion.PositionNeeded}.";
+
+        var payload = BuildStructuredCandidateText(
+            suggestion.Title,
+            controlledSummary,
+            studentSkills.Tags,
+            suggestion.PositionNeeded,
+            null,
+            suggestion.MatchingSkills,
+            extraLines: new[]
+            {
+                string.IsNullOrWhiteSpace(desired) ? null : $"DESIRED_POSITION: {desired}.",
+                string.IsNullOrWhiteSpace(suggestion.PositionNeeded) ? null : $"ROLE: {suggestion.PositionNeeded}."
+            });
+
+        var metadata = BuildMetadata(
+            ("majorId", suggestion.MajorId?.ToString()),
+            ("groupId", suggestion.GroupId?.ToString()),
+            ("score", suggestion.Score.ToString(CultureInfo.InvariantCulture)),
+            ("position", suggestion.PositionNeeded),
+            ("neededRole", suggestion.PositionNeeded),
+            ("desiredPosition", desired));
+
+        return new AiLlmCandidate(
+            string.Empty,
+            suggestion.PostId,
+            suggestion.Title,
+            null,
+            payload,
+            metadata);
+    }
+
     private static AiLlmCandidate BuildTopicCandidate(TopicSuggestionDto suggestion)
     {
         var payload = BuildStructuredCandidateText(
@@ -2019,7 +2090,9 @@ public sealed class AiMatchingService(
         var desiredPosition = string.IsNullOrWhiteSpace(suggestion.DesiredPosition)
             ? null
             : suggestion.DesiredPosition;
-        var profileSkills = suggestion.MatchingSkills;
+
+        // For v2 reason extraction, SKILLS should represent the student's skills, not the overlap set.
+        var profileSkills = SplitSkillTokens(suggestion.SkillsText).ToList();
         var description = string.IsNullOrWhiteSpace(suggestion.Description)
             ? desiredPosition
             : suggestion.Description;
@@ -2256,7 +2329,7 @@ public sealed class AiMatchingService(
 
         // IMPORTANT: recruitment-post matching skills are deterministic overlap between
         // student skills and post requirements. Do not allow the LLM to overwrite them.
-        var matches = suggestion.MatchingSkills.Count == 0 ? reranked.MatchedSkills : suggestion.MatchingSkills;
+        var matches = ChooseMatches(suggestion.MatchingSkills, reranked.MatchedSkills);
         var chosenReason = ChooseAiReason(
             llmReason: reranked.Reason,
             existingReason: suggestion.AiReason,

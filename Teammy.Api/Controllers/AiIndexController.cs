@@ -62,61 +62,63 @@ public sealed class AiIndexController(
     //[Authorize(Roles="admin,moderator")]
     public async Task<ActionResult<object>> Rebuild([FromQuery] Guid? semesterId, [FromQuery] Guid? majorId, CancellationToken ct)
     {
-        if (!semesterId.HasValue || semesterId.Value == Guid.Empty)
+        var semesterIds = new List<Guid>();
+
+        if (semesterId.HasValue && semesterId.Value != Guid.Empty)
         {
-            // Business rule: only 1 semester is active at a time, so auto-use it.
-            var activeIds = await db.semesters
+            semesterIds.Add(semesterId.Value);
+        }
+        else
+        {
+            semesterIds = await db.semesters
                 .AsNoTracking()
                 .Where(s => s.is_active == true)
                 .Select(s => s.semester_id)
                 .ToListAsync(ct);
 
-            if (activeIds.Count == 0)
+            if (semesterIds.Count == 0)
                 return BadRequest(new { error = "No active semester found." });
-
-            if (activeIds.Count > 1)
-                return Problem($"Expected exactly 1 active semester, but found {activeIds.Count}.");
-
-            semesterId = activeIds[0];
         }
 
-        var sid = semesterId.Value;
-        var topics = await aiQueries.ListTopicAvailabilityAsync(sid, majorId, ct);
-        var rposts = await aiQueries.ListOpenRecruitmentPostsAsync(sid, majorId, ct);
-        var pposts = await aiQueries.ListOpenProfilePostsAsync(sid, majorId, ct);
-
-        var sem = new SemaphoreSlim(6);
-        var tasks = new List<Task>();
-
-        foreach (var t in topics)
+        async Task<object> RebuildOneAsync(Guid sid)
         {
-            await sem.WaitAsync(ct);
-            tasks.Add(Task.Run(async () =>
+            var topics = await aiQueries.ListTopicAvailabilityAsync(sid, majorId, ct);
+            var rposts = await aiQueries.ListOpenRecruitmentPostsAsync(sid, majorId, ct);
+            var pposts = await aiQueries.ListOpenProfilePostsAsync(sid, majorId, ct);
+
+            var sem = new SemaphoreSlim(6);
+            var tasks = new List<Task>();
+
+            foreach (var t in topics)
             {
-                try
+                await sem.WaitAsync(ct);
+                tasks.Add(Task.Run(async () =>
                 {
-                    var text = $"{t.Title}\n{t.Description}\nSkills: {string.Join(", ", t.SkillNames)}\n{t.SkillsJson}";
-                    await gateway.UpsertAsync(new AiGatewayUpsertRequest(
-                        Type: "topic",
-                        EntityId: t.TopicId.ToString(),
-                        Title: t.Title,
-                        Text: text,
-                        SemesterId: t.SemesterId.ToString(),
-                        MajorId: t.MajorId?.ToString(),
-                        PointId: AiPointId.Stable("topic", t.TopicId)
-                    ), ct);
-                }
-                finally { sem.Release(); }
-            }, ct));
-        }
-        foreach (var p in rposts)
-{
-    await sem.WaitAsync(ct);
-    tasks.Add(Task.Run(async () =>
-    {
-        try
-        {
-            var text =
+                    try
+                    {
+                        var text = $"{t.Title}\n{t.Description}\nSkills: {string.Join(", ", t.SkillNames)}\n{t.SkillsJson}";
+                        await gateway.UpsertAsync(new AiGatewayUpsertRequest(
+                            Type: "topic",
+                            EntityId: t.TopicId.ToString(),
+                            Title: t.Title,
+                            Text: text,
+                            SemesterId: t.SemesterId.ToString(),
+                            MajorId: t.MajorId?.ToString(),
+                            PointId: AiPointId.Stable("topic", t.TopicId)
+                        ), ct);
+                    }
+                    finally { sem.Release(); }
+                }, ct));
+            }
+
+            foreach (var p in rposts)
+            {
+                await sem.WaitAsync(ct);
+                tasks.Add(Task.Run(async () =>
+                {
+                    try
+                    {
+                        var text =
 $@"{p.Title}
 {p.Description}
 Major: {p.MajorName}
@@ -124,49 +126,60 @@ Group: {p.GroupName}
 PositionNeeded: {p.PositionNeeded}
 RequiredSkills: {p.RequiredSkills}";
 
-            await gateway.UpsertAsync(new AiGatewayUpsertRequest(
-                Type: "recruitment_post",
-                EntityId: p.PostId.ToString(),
-                Title: p.Title,
-                Text: text,
-                SemesterId: p.SemesterId.ToString(),
-                MajorId: p.MajorId?.ToString(),
-                PointId: AiPointId.Stable("recruitment_post", p.PostId)
-            ), ct);
-        }
-        finally { sem.Release(); }
-    }, ct));
-}
+                        await gateway.UpsertAsync(new AiGatewayUpsertRequest(
+                            Type: "recruitment_post",
+                            EntityId: p.PostId.ToString(),
+                            Title: p.Title,
+                            Text: text,
+                            SemesterId: p.SemesterId.ToString(),
+                            MajorId: p.MajorId?.ToString(),
+                            PointId: AiPointId.Stable("recruitment_post", p.PostId)
+                        ), ct);
+                    }
+                    finally { sem.Release(); }
+                }, ct));
+            }
 
-foreach (var p in pposts)
-{
-    await sem.WaitAsync(ct);
-    tasks.Add(Task.Run(async () =>
-    {
-        try
-        {
-            var text =
+            foreach (var p in pposts)
+            {
+                await sem.WaitAsync(ct);
+                tasks.Add(Task.Run(async () =>
+                {
+                    try
+                    {
+                        var text =
 $@"{p.Title}
 {p.Description}
 PrimaryRole: {p.PrimaryRole}
 SkillsText: {p.SkillsText}
 SkillsJson: {p.SkillsJson}";
 
-            await gateway.UpsertAsync(new AiGatewayUpsertRequest(
-                Type: "profile_post",
-                EntityId: p.PostId.ToString(),
-                Title: p.Title,
-                Text: text,
-                SemesterId: p.SemesterId.ToString(),
-                MajorId: p.MajorId?.ToString(),
-                PointId: AiPointId.Stable("profile_post", p.PostId)
-            ), ct);
+                        await gateway.UpsertAsync(new AiGatewayUpsertRequest(
+                            Type: "profile_post",
+                            EntityId: p.PostId.ToString(),
+                            Title: p.Title,
+                            Text: text,
+                            SemesterId: p.SemesterId.ToString(),
+                            MajorId: p.MajorId?.ToString(),
+                            PointId: AiPointId.Stable("profile_post", p.PostId)
+                        ), ct);
+                    }
+                    finally { sem.Release(); }
+                }, ct));
+            }
+
+            await Task.WhenAll(tasks);
+            return new { semesterId = sid, topics = topics.Count, recruitmentPosts = rposts.Count, profilePosts = pposts.Count };
         }
-        finally { sem.Release(); }
-    }, ct));
-}
-        await Task.WhenAll(tasks);
-        return Ok(new { semesterId = sid, topics = topics.Count, recruitmentPosts = rposts.Count, profilePosts = pposts.Count });
+
+        if (semesterIds.Count == 1)
+            return Ok(await RebuildOneAsync(semesterIds[0]));
+
+        var results = new List<object>(semesterIds.Count);
+        foreach (var sid in semesterIds)
+            results.Add(await RebuildOneAsync(sid));
+
+        return Ok(new { semesters = results });
     }
     private sealed record AiIndexOutboxSnapshot(
         long Id,
