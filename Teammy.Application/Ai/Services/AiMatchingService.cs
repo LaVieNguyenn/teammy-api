@@ -1890,19 +1890,36 @@ public sealed class AiMatchingService(
 
     private static string BuildStudentQueryText(StudentProfileSnapshot student, AiSkillProfile profile, Guid? targetMajorId)
     {
-        var builder = new StringBuilder();
-        builder.Append(student.DisplayName);
+        _ = targetMajorId;
 
-        if (!string.IsNullOrWhiteSpace(student.DesiredPositionName))
-            builder.Append(" - Desired position: ").Append(student.DesiredPositionName.Trim());
+        // IMPORTANT: the AI gateway extracts fields using line-based keys like:
+        // DESIRED_POSITION:, ROLE:, SKILLS:
+        // Keep a compact human-readable SUMMARY too.
 
-        if (profile.PrimaryRole != AiPrimaryRole.Unknown)
-            builder.Append(" - Role: ").Append(AiRoleHelper.ToDisplayString(profile.PrimaryRole));
+        var name = student.DisplayName?.Trim() ?? "";
+        var desired = student.DesiredPositionName?.Trim();
+        var role = profile.PrimaryRole == AiPrimaryRole.Unknown ? null : AiRoleHelper.ToDisplayString(profile.PrimaryRole);
+        var skillsCsv = profile.HasTags ? string.Join(", ", profile.Tags.Take(15)) : null;
 
-        if (profile.HasTags)
-            builder.Append(" - Skills: ").Append(string.Join(", ", profile.Tags.Take(15)));
+        var compact = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(name))
+            compact.Append(name);
+        if (!string.IsNullOrWhiteSpace(desired))
+            compact.Append(" - Desired position: ").Append(desired);
+        if (!string.IsNullOrWhiteSpace(role))
+            compact.Append(" - Role: ").Append(role);
+        if (!string.IsNullOrWhiteSpace(skillsCsv))
+            compact.Append(" - Skills: ").Append(skillsCsv);
 
-        return builder.ToString();
+        var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(desired))
+            sb.AppendLine($"DESIRED_POSITION: {desired}");
+        if (!string.IsNullOrWhiteSpace(role))
+            sb.AppendLine($"ROLE: {role}");
+        if (!string.IsNullOrWhiteSpace(skillsCsv))
+            sb.AppendLine($"SKILLS: {skillsCsv}");
+        sb.Append("SUMMARY: ").Append(compact);
+        return sb.ToString();
     }
 
 
@@ -2019,9 +2036,11 @@ public sealed class AiMatchingService(
         string? studentDesiredPosition,
         AiSkillProfile studentSkills)
     {
-        // IMPORTANT: for v2 business reasons, the AI gateway extracts student info from candidate snippet:
-        // DESIRED_POSITION + SKILLS.
-        // So for recruitment-post suggestions (student -> posts), include student signals in payload.
+        _ = studentSkills;
+
+        // IMPORTANT: recruitment_post suggestions are (student -> posts).
+        // The gateway now extracts student DESIRED_POSITION/SKILLS from queryText, not from candidate snippets.
+        // Candidate snippets should represent the post itself (position needed + required skills).
 
         var desired = string.IsNullOrWhiteSpace(studentDesiredPosition)
             ? null
@@ -2036,13 +2055,12 @@ public sealed class AiMatchingService(
         var payload = BuildStructuredCandidateText(
             suggestion.Title,
             controlledSummary,
-            studentSkills.Tags,
+            suggestion.RequiredSkills ?? Array.Empty<string>(),
             suggestion.PositionNeeded,
             null,
             suggestion.MatchingSkills,
             extraLines: new[]
             {
-                string.IsNullOrWhiteSpace(desired) ? null : $"DESIRED_POSITION: {desired}.",
                 string.IsNullOrWhiteSpace(suggestion.PositionNeeded) ? null : $"ROLE: {suggestion.PositionNeeded}."
             });
 
