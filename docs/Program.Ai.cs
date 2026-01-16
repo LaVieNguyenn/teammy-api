@@ -721,7 +721,7 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
     // Phase B: score mapping (separated by mode)
     double[] ceScores = IsTopicMode(mode)
         ? ScoreTopicAbsolute(logits, TOPIC_PIVOT, TOPIC_SCALE)
-        : (mode == "personal_post" ? ScorePostAbsolute(logits) : ScorePostRelative(logits));
+        : ScorePostAbsolute(logits);
 
     double FinalScore(int i)
     {
@@ -732,6 +732,10 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
             return (WEIGHT_TOPIC_CE * ce) + (WEIGHT_TOPIC_BASE * b);
 
         var score = (WEIGHT_POST_CE * ce) + (WEIGHT_POST_BASE * b);
+        if (mode == "group_post")
+        {
+            score = AdjustGroupPostScore(score, queryText, candidates[i]);
+        }
         if (mode == "personal_post")
         {
             score = (WEIGHT_PERSONAL_POST_CE * ce) + (WEIGHT_PERSONAL_POST_BASE * b);
@@ -806,7 +810,7 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
     foreach (var s in seeds)
     {
         var snippetForLlm = BuildReasonSnippetForLlm(s.Text);
-        var facts = ExtractBusinessReasonFacts(queryText, snippetForLlm, team);
+        var facts = ExtractBusinessReasonFacts(modeV2, queryText, snippetForLlm, team);
 
         var reqObj = new
         {
@@ -817,6 +821,10 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
             {
                 desiredPosition = facts.StudentDesiredPosition,
                 skills = facts.StudentSkills
+            },
+            post = new
+            {
+                positionNeed = facts.CandidateNeededRole
             },
             group = new
             {
@@ -847,7 +855,7 @@ app.MapPost("/llm/rerank", async (HttpRequest req, IHttpClientFactory hf) =>
             var j = ExtractFirstCompleteJsonValue(oneCall.content);
             if (j is not null && TryParseBusinessReason(EscapeNewlinesInsideJsonStrings(j), out var br) && string.Equals(br.Key, s.Key, StringComparison.OrdinalIgnoreCase))
             {
-                var normalized = NormalizeAiReasonV2(br.AiReason, modeV2, facts.StudentDesiredPosition, facts.GroupPrimaryNeed);
+                var normalized = NormalizeAiReasonV2(br.AiReason, modeV2, facts.StudentDesiredPosition, facts.GroupPrimaryNeed, facts.CandidateNeededRole);
                 reasonsByKey[s.Key] = new BusinessReasonInfo(normalized, ExtractMatchedSkillsForUi(facts), br.AiBalanceNote ?? "");
                 continue;
             }
@@ -1150,31 +1158,47 @@ Keys must be exactly: key, scorePercent, aiReason, aiBalanceNote. No extra keys.
 
 aiReason: exactly 1 sentence, max 25 words, neutral tone, no hype, no call-to-action, never start with 'Join'.
 Do not invent skills or team facts.
-Recruitment_post: start aiReason with the student's desiredPosition (e.g., 'Backend Developer ...').
+Recruitment_post: start aiReason with the post's positionNeed (e.g., 'Frontend Developer ...'); if it differs from student's desiredPosition, mention the mismatch briefly.
 Personal_post: start aiReason with the group's primaryNeed gap (e.g., 'Backend coverage ...').
 Topic: prioritize skills overlap; if description exists, mention domain briefly.
 aiBalanceNote must be an empty string.
 """;
 }
 
-static ExtractedReasonFacts ExtractBusinessReasonFacts(string queryText, string snippetForLlm, TeamContext? team)
+static ExtractedReasonFacts ExtractBusinessReasonFacts(string modeV2, string queryText, string snippetForLlm, TeamContext? team)
 {
-    var desiredPosition = GetLineValue(snippetForLlm, "DESIRED_POSITION")
-                          ?? GetLineValue(snippetForLlm, "ROLE")
-                          ?? "";
+    modeV2 = (modeV2 ?? "topic").Trim().ToLowerInvariant();
 
-    var studentSkills = ParseCsvSkills(GetLineValue(snippetForLlm, "SKILLS"));
+    string CleanRole(string? s)
+        => (s ?? "").Trim().TrimEnd('.').Trim();
 
-    var groupPrimaryNeed = team?.PrimaryNeed
+    // recruitment_post: queryText is the student query; snippetForLlm is the recruitment post candidate.
+    var desiredPosition = modeV2 == "recruitment_post"
+        ? (GetLineValue(queryText, "DESIRED_POSITION") ?? GetLineValue(queryText, "ROLE") ?? "")
+        : (GetLineValue(snippetForLlm, "DESIRED_POSITION") ?? GetLineValue(snippetForLlm, "ROLE") ?? "");
+    desiredPosition = CleanRole(desiredPosition);
+
+    var studentSkills = modeV2 == "recruitment_post"
+        ? ParseCsvSkills(GetLineValue(queryText, "SKILLS"))
+        : ParseCsvSkills(GetLineValue(snippetForLlm, "SKILLS"));
+
+    var postPositionNeed = CleanRole(GetLineValue(snippetForLlm, "NEEDED_ROLE")
+                          ?? GetLineValue(snippetForLlm, "TITLE")
+                          ?? "");
+
+    var groupPrimaryNeed = CleanRole(team?.PrimaryNeed
                            ?? GetLineValue(queryText, "PRIMARY_NEED")
-                           ?? "";
+                           ?? "");
 
-    var groupSkills = (team?.Skills?.ToArray() ?? Array.Empty<string>())
-        .Concat(ParseCsvSkills(GetLineValue(queryText, "TEAM_SKILLS")))
-        .Where(x => !string.IsNullOrWhiteSpace(x))
-        .Distinct(StringComparer.OrdinalIgnoreCase)
-        .Take(30)
-        .ToArray();
+    // For recruitment_post, prefer the candidate post's skills as the "group" side.
+    var groupSkills = modeV2 == "recruitment_post"
+        ? ParseCsvSkills(GetLineValue(snippetForLlm, "SKILLS"))
+        : (team?.Skills?.ToArray() ?? Array.Empty<string>())
+            .Concat(ParseCsvSkills(GetLineValue(queryText, "TEAM_SKILLS")))
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(30)
+            .ToArray();
 
     var topicSkills = ParseCsvSkills(GetLineValue(snippetForLlm, "MATCHING_SKILLS"));
     if (topicSkills.Length == 0)
@@ -1190,6 +1214,7 @@ static ExtractedReasonFacts ExtractBusinessReasonFacts(string queryText, string 
     return new ExtractedReasonFacts(
         StudentDesiredPosition: desiredPosition,
         StudentSkills: studentSkills,
+        CandidateNeededRole: postPositionNeed,
         GroupPrimaryNeed: groupPrimaryNeed,
         GroupSkills: groupSkills,
         TopicSkills: topicSkills,
@@ -1217,7 +1242,7 @@ static string[] ParseCsvSkills(string? csv)
     if (string.IsNullOrWhiteSpace(csv)) return Array.Empty<string>();
     return csv
         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-        .Select(x => x.Trim())
+    .Select(x => x.Trim().TrimEnd('.', ';', ':'))
         .Where(x => x.Length > 0)
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .Take(30)
@@ -1263,7 +1288,7 @@ static bool TryParseBusinessReason(string? json, out BusinessReasonParsed parsed
     }
 }
 
-static string NormalizeAiReasonV2(string aiReason, string modeV2, string desiredPosition, string primaryNeed)
+static string NormalizeAiReasonV2(string aiReason, string modeV2, string desiredPosition, string primaryNeed, string postRole)
 {
     var s = NormalizeWhitespace(aiReason ?? "");
     s = s.Trim().Trim('"').Trim('\'');
@@ -1272,12 +1297,42 @@ static string NormalizeAiReasonV2(string aiReason, string modeV2, string desired
         s = "Strong match based on overlapping skills.";
 
     modeV2 = (modeV2 ?? "topic").Trim().ToLowerInvariant();
-    if (modeV2 == "recruitment_post" && !string.IsNullOrWhiteSpace(desiredPosition))
+
+    if (modeV2 == "recruitment_post")
     {
-        if (!s.StartsWith(desiredPosition, StringComparison.OrdinalIgnoreCase))
-            s = desiredPosition.Trim() + " " + s;
+        var desired = (desiredPosition ?? "").Trim().TrimEnd('.');
+        var role = (postRole ?? "").Trim().TrimEnd('.');
+
+        if (!string.IsNullOrWhiteSpace(role) && !s.StartsWith(role, StringComparison.OrdinalIgnoreCase))
+        {
+            // If the model starts with a shortened role-head word (e.g. "Frontend coverage ..."),
+            // upgrade that head word to the full role to avoid awkward duplication:
+            // "Frontend Developer: Frontend coverage ..." -> "Frontend Developer coverage ..."
+            var head = role.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
+            if (!string.IsNullOrWhiteSpace(head)
+                && s.Length > head.Length
+                && s.StartsWith(head, StringComparison.OrdinalIgnoreCase)
+                && char.IsWhiteSpace(s[head.Length]))
+            {
+                s = role + s[head.Length..];
+            }
+            else
+            {
+                s = $"{role}: {s}";
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(role) && !string.IsNullOrWhiteSpace(desired))
+        {
+            var same = role.Contains(desired, StringComparison.OrdinalIgnoreCase)
+                       || desired.Contains(role, StringComparison.OrdinalIgnoreCase);
+
+            if (!same && !s.Contains(desired, StringComparison.OrdinalIgnoreCase))
+                s = s.TrimEnd('.').Trim() + $" but desired role is {desired}";
+        }
     }
-    else if (modeV2 == "personal_post" && !string.IsNullOrWhiteSpace(primaryNeed))
+
+    if (modeV2 == "personal_post" && !string.IsNullOrWhiteSpace(primaryNeed))
     {
         var prefix = primaryNeed.Trim() + " coverage";
         if (!s.StartsWith(primaryNeed, StringComparison.OrdinalIgnoreCase) && !s.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
@@ -1287,7 +1342,31 @@ static string NormalizeAiReasonV2(string aiReason, string modeV2, string desired
     // Enforce <= 25 words; if too long, fallback.
     var words = s.Split(' ', StringSplitOptions.RemoveEmptyEntries);
     if (words.Length > 25)
-        s = "Strong match based on overlapping skills.";
+    {
+        if (modeV2 == "recruitment_post")
+        {
+            var role = (postRole ?? "").Trim().TrimEnd('.');
+            var desired = (desiredPosition ?? "").Trim().TrimEnd('.');
+
+            if (!string.IsNullOrWhiteSpace(role) && !string.IsNullOrWhiteSpace(desired)
+                && !(role.Contains(desired, StringComparison.OrdinalIgnoreCase) || desired.Contains(role, StringComparison.OrdinalIgnoreCase)))
+            {
+                s = $"{role} aligns with the post needs but desired role is {desired}";
+            }
+            else if (!string.IsNullOrWhiteSpace(role))
+            {
+                s = $"{role} aligns with the post needs";
+            }
+            else
+            {
+                s = "Role alignment based on overlapping skills";
+            }
+        }
+        else
+        {
+            s = "Strong match based on overlapping skills.";
+        }
+    }
 
     if (!s.EndsWith('.')) s += ".";
     while (s.EndsWith("..", StringComparison.Ordinal)) s = s[..^1];
@@ -1312,6 +1391,7 @@ static string BuildFallbackAiReasonV2(string modeV2, ExtractedReasonFacts facts)
     modeV2 = (modeV2 ?? "topic").Trim().ToLowerInvariant();
     var desired = (facts.StudentDesiredPosition ?? "").Trim();
     var need = (facts.GroupPrimaryNeed ?? "").Trim();
+    var postRole = (facts.CandidateNeededRole ?? "").Trim();
     var skills = ExtractMatchedSkillsForUi(facts);
 
     string skillPart = skills.Length switch
@@ -1324,9 +1404,11 @@ static string BuildFallbackAiReasonV2(string modeV2, ExtractedReasonFacts facts)
     string s;
     if (modeV2 == "recruitment_post")
     {
-        s = !string.IsNullOrWhiteSpace(desired)
-            ? $"{desired} is a good fit {skillPart}."
-            : $"Good fit {skillPart}.";
+        s = !string.IsNullOrWhiteSpace(postRole)
+            ? $"{postRole} is a good fit {skillPart}."
+            : (!string.IsNullOrWhiteSpace(desired)
+                ? $"Good fit for {desired} {skillPart}."
+                : $"Good fit {skillPart}.");
     }
     else if (modeV2 == "personal_post")
     {
@@ -1338,7 +1420,7 @@ static string BuildFallbackAiReasonV2(string modeV2, ExtractedReasonFacts facts)
         s = $"Relevant topic match {skillPart}.";
     }
 
-    return NormalizeAiReasonV2(s, modeV2, desired, need);
+    return NormalizeAiReasonV2(s, modeV2, desired, need, facts.CandidateNeededRole);
 }
 
 static string NormalizeReasonFinal(string summary)
@@ -1506,6 +1588,78 @@ static double AdjustPersonalPostScore(double baseScore, TeamContext? team, Reran
     {
         var factor = 0.55 + (0.25 * gap);
         score = score * factor;
+    }
+
+    // Secondary signal: skills overlap (lower priority than team gap).
+    var candidateSkills = ParseCsvSkills(GetLineValue(candidate.Text, "SKILLS"));
+    if (candidateSkills.Length > 0 && team.Skills.Count > 0)
+    {
+        var overlap = candidateSkills.Count(s => team.Skills.Contains(s, StringComparer.OrdinalIgnoreCase));
+        if (overlap > 0)
+        {
+            var bonus = Math.Min(8.0, 2.0 * overlap);
+            score = Math.Min(100.0, score + bonus);
+        }
+    }
+
+    return Math.Clamp(score, 0, 100);
+}
+
+static double AdjustGroupPostScore(double baseScore, string queryText, RerankCandidate candidate)
+{
+    // RecruitmentPost suggestions: prioritize desiredPosition strongly; skills are secondary.
+    var desiredRaw = GetLineValue(queryText, "DESIRED_POSITION")
+                     ?? GetLineValue(queryText, "ROLE")
+                     ?? "";
+    var desired = NormalizeRole(desiredRaw);
+
+    var candidateRoleRaw = candidate.NeededRole
+                           ?? candidate.Title
+                           ?? "";
+    var candidateRole = NormalizeRole(candidateRoleRaw);
+
+    var score = Math.Clamp(baseScore, 0, 100);
+
+    if (!string.IsNullOrWhiteSpace(desired) && !string.IsNullOrWhiteSpace(candidateRole))
+    {
+        bool exact = string.Equals(desired, candidateRole, StringComparison.OrdinalIgnoreCase);
+        bool partial = false;
+
+        // Treat fullstack as partial match for FE/BE.
+        if (!exact)
+        {
+            if (desired == "fullstack" && (candidateRole == "frontend" || candidateRole == "backend")) partial = true;
+            if (candidateRole == "fullstack" && (desired == "frontend" || desired == "backend")) partial = true;
+        }
+
+        if (exact)
+        {
+            // Strong boost when role matches.
+            score = score + (100.0 - score) * 0.35;
+        }
+        else if (partial)
+        {
+            // Mild penalty for partial match.
+            score = score * 0.75;
+        }
+        else
+        {
+            // Heavy penalty when role mismatches.
+            score = score * 0.30;
+        }
+    }
+
+    // Secondary: skills overlap (small bonus, capped).
+    var studentSkills = ParseCsvSkills(GetLineValue(queryText, "SKILLS"));
+    var postSkills = ParseCsvSkills(GetLineValue(candidate.Text, "SKILLS"));
+    if (studentSkills.Length > 0 && postSkills.Length > 0)
+    {
+        var overlap = studentSkills.Count(s => postSkills.Contains(s, StringComparer.OrdinalIgnoreCase));
+        if (overlap > 0)
+        {
+            var bonus = Math.Min(10.0, 2.0 * overlap);
+            score = Math.Min(100.0, score + bonus);
+        }
     }
 
     return Math.Clamp(score, 0, 100);
@@ -2387,14 +2541,6 @@ record SummaryInfo(string Summary, string[] MatchedSkills);
 
 record BusinessReasonInfo(string AiReason, string[] MatchedSkills, string AiBalanceNote);
 
-record ExtractedReasonFacts(
-    string StudentDesiredPosition,
-    string[] StudentSkills,
-    string GroupPrimaryNeed,
-    string[] GroupSkills,
-    string[] TopicSkills,
-    string? TopicDescription);
-
 record BusinessReasonParsed(string Key, int ScorePercent, string AiReason, string AiBalanceNote);
 
 record TeamContext(
@@ -2450,6 +2596,16 @@ record PostOptions(string? Language, int? MaxWords, string? Tone);
 record GroupSkillBanks(string[] Frontend, string[] Backend, string[] AI, string[] Mobile, string[] QA, string[] PM);
 
 record GroupPostSpec(string SuggestedBucket, string[] SkillBank, GroupSkillBanks SkillBankByBucket);
+
+record ExtractedReasonFacts(
+    string StudentDesiredPosition,
+    string[] StudentSkills,
+    string CandidateNeededRole,
+    string GroupPrimaryNeed,
+    string[] GroupSkills,
+    string[] TopicSkills,
+    string? TopicDescription
+);
 
 sealed class LastDebug
 {
