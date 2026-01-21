@@ -74,7 +74,7 @@ public sealed class AiProjectAssistantController(
         // Handle them deterministically here (fast + accurate) instead of asking the LLM to guess an action.
         if (IsMilestoneSuitabilityQuestion(userMessage))
         {
-            var boardVm = await board.GetBoardAsync(groupId, userId, ct);
+            var boardVm = await board.GetBoardAsync(groupId, userId, status: null, page: null, pageSize: null, ct);
             var columns = boardVm.Columns.Select(c => new { columnId = c.ColumnId, name = c.ColumnName, isDone = c.IsDone }).ToList();
 
             var milestones = await tracking.ListMilestonesAsync(groupId, userId, ct);
@@ -221,7 +221,7 @@ Update the draft accordingly. Keep the same schema and keep the title unless the
             && draftObj["actionType"] is JsonValue
             && draftObj["actionPayload"] is JsonObject payloadObj)
         {
-            var boardVm = await board.GetBoardAsync(groupId, userId, ct);
+            var boardVm = await board.GetBoardAsync(groupId, userId, status: null, page: null, pageSize: null, ct);
             var columns = boardVm.Columns.Select(c => new { columnId = c.ColumnId, name = c.ColumnName, isDone = c.IsDone }).ToList();
 
             var milestones = await tracking.ListMilestonesAsync(groupId, userId, ct);
@@ -970,7 +970,7 @@ Update the draft accordingly. Keep the same schema and keep the title unless the
 
     private async Task<Guid> PickDefaultColumnIdAsync(Guid groupId, Guid userId, CancellationToken ct)
     {
-        var b = await board.GetBoardAsync(groupId, userId, ct);
+        var b = await board.GetBoardAsync(groupId, userId, status: null, page: null, pageSize: null, ct);
         var col = b.Columns.FirstOrDefault(c => !c.IsDone) ?? b.Columns.FirstOrDefault();
         if (col is null) throw new InvalidOperationException("Board has no columns");
         return col.ColumnId;

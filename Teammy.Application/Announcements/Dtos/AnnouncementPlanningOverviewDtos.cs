@@ -3,7 +3,8 @@ using Teammy.Application.Semesters.Dtos;
 namespace Teammy.Application.Announcements.Dtos;
 
 public sealed record AnnouncementPlanningOverviewRequest(
-    Guid MajorId
+    Guid MajorId,
+    Guid? SemesterId
 );
 
 public sealed record AnnouncementPlanningOverviewDto(

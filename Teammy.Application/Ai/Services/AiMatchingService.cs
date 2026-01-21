@@ -653,15 +653,19 @@ public sealed class AiMatchingService(
 
         if (request.GroupId.HasValue)
         {
-            var attempt = await AssignTopicToGroupAsync(request.GroupId.Value, currentUserId, enforceMembership: true, request.LimitPerGroup, throwIfUnavailable: true, ct);
+            // Admin/moderator can assign for any group; normal users must be a member.
+            var enforceMembership = !canManageAllGroups;
+            var attempt = await AssignTopicToGroupAsync(request.GroupId.Value, currentUserId, enforceMembership, request.LimitPerGroup, throwIfUnavailable: true, ct);
             return new AutoAssignTopicBatchResultDto(1, new[] { attempt.Assignment! }, Array.Empty<Guid>(), Array.Empty<TopicAssignmentIssueDto>());
         }
 
         if (!canManageAllGroups)
             throw new UnauthorizedAccessException("Chỉ admin hoặc moderator mới được phép auto assign cho toàn bộ nhóm.");
 
-        var semesterId = await groupQueries.GetActiveSemesterIdAsync(ct)
-            ?? throw new InvalidOperationException("Không tìm thấy học kỳ.");
+        if (!request.SemesterId.HasValue)
+            throw new InvalidOperationException("Vui lòng chọn học kỳ (semesterId) để auto assign topic.");
+
+        var semesterId = request.SemesterId.Value;
 
         var phase = await AssignTopicsForEligibleGroupsAsync(semesterId, request.MajorId, currentUserId, request.LimitPerGroup, ct);
         return new AutoAssignTopicBatchResultDto(phase.Assignments.Count, phase.Assignments, phase.SkippedGroupIds, phase.Issues);
@@ -756,20 +760,10 @@ public sealed class AiMatchingService(
             {
                 while (limitRemaining > 0)
                 {
+                    // Do NOT expand existing groups' maxMembers.
+                    // AutoAssignTeams must fill remaining slots first, then create new groups if needed.
                     if (groupState.RemainingSlots == 0)
-                    {
-                        var available = pools.RemainingCount;
-                        if (available == 0)
-                            break;
-
-                        var slotsNeeded = Math.Min(limitRemaining, available);
-                        if (slotsNeeded <= 0)
-                            break;
-
-                        var policyCap = Math.Max(policyMaxSize, groupState.MaxMembers);
-                        if (!groupState.TryExpand(policyCap, slotsNeeded))
-                            break;
-                    }
+                        break;
 
                     CandidateSelection? candidate;
                     if (useAi)
@@ -808,22 +802,7 @@ public sealed class AiMatchingService(
         var remainingSnapshots = students.Where(s => remainingSet.Contains(s.UserId)).ToList();
 
         var states = groupsByMajor.Values.SelectMany(g => g).ToList();
-        foreach (var state in states)
-            state.EnsurePolicyRange(policyMinSize, policyMaxSize);
-
-        foreach (var state in states)
-        {
-            if (state.RemainingSlots == 0)
-                continue;
-
-            RolePools? pools = null;
-            if (state.MajorId.HasValue)
-                studentsByMajor.TryGetValue(state.MajorId.Value, out pools);
-
-            var hasCandidates = (pools?.RemainingCount ?? 0) > 0;
-            if (!hasCandidates)
-                state.ShrinkToRange(policyMinSize, policyMaxSize);
-        }
+        // Do not mutate existing groups' maxMembers to match policy here.
 
         var openStates = states.Where(s => s.RemainingSlots > 0).ToList();
         var openGroups = openStates.Select(state => state.GroupId).Distinct().ToList();
@@ -839,14 +818,7 @@ public sealed class AiMatchingService(
             groupIssues.Add(new GroupAssignmentIssueDto(state.GroupId, reason));
         }
 
-        var capacityChanges = states
-            .Where(state => state.CapacityDirty)
-            .ToList();
-
-        foreach (var state in capacityChanges)
-        {
-            await groupRepository.UpdateGroupAsync(state.GroupId, null, null, state.MaxMembers, null, null, null, null, ct);
-        }
+        // Capacity changes are not applied for existing groups.
 
         // Auto-assign team DOES NOT pick topic/mentor. It may only activate groups
         // that are already full AND already have topic+mentor.

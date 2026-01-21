@@ -41,9 +41,9 @@ public sealed class AnnouncementsController(AnnouncementService service, Announc
 
     [HttpGet("planning-overview")]
     [Authorize(Roles = "moderator,admin")]
-    public async Task<ActionResult<AnnouncementPlanningOverviewDto>> GetPlanningOverview([FromQuery] Guid majorId, CancellationToken ct)
+    public async Task<ActionResult<AnnouncementPlanningOverviewDto>> GetPlanningOverview([FromQuery] Guid majorId, [FromQuery] Guid? semesterId, CancellationToken ct)
     {
-        var overview = await overviewService.GetOverviewAsync(new AnnouncementPlanningOverviewRequest(majorId), ct);
+        var overview = await overviewService.GetOverviewAsync(new AnnouncementPlanningOverviewRequest(majorId, semesterId), ct);
         return Ok(overview);
     }
 

@@ -18,8 +18,9 @@ public sealed class AnnouncementPlanningOverviewService(
         if (request is null)
             throw new ArgumentNullException(nameof(request));
 
-        var semesterId = await groupQueries.GetActiveSemesterIdAsync(ct)
-            ?? throw new InvalidOperationException("No active semester");
+        var semesterId = request.SemesterId
+            ?? (await groupQueries.GetActiveSemesterIdAsync(ct)
+                ?? throw new InvalidOperationException("No active semester"));
 
         var semesterInfo = await groupQueries.GetSemesterAsync(semesterId, ct)
             ?? throw new InvalidOperationException("Active semester not found");
