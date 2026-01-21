@@ -130,6 +130,18 @@ public sealed class AiGatewayClient
         return new AiGatewayProxyResult(response.IsSuccessStatusCode, (int)response.StatusCode, body);
     }
 
+    public async Task<AiGatewayProxyResult> GenerateProjectAssistantDraftAsync(AiGatewayPmAssistantDraftRequest req, CancellationToken ct)
+    {
+        if (req is null)
+            throw new ArgumentNullException(nameof(req));
+
+        using var request = CreateRequest(HttpMethod.Post, "llm/pm-assistant/draft");
+        request.Content = JsonContent.Create(req);
+        using var response = await _httpClient.SendAsync(request, ct);
+        var body = response.Content is null ? null : await response.Content.ReadAsStringAsync(ct);
+        return new AiGatewayProxyResult(response.IsSuccessStatusCode, (int)response.StatusCode, body);
+    }
+
     private HttpRequestMessage CreateRequest(HttpMethod method, string path)
     {
         var request = new HttpRequestMessage(method, path);
@@ -165,6 +177,9 @@ public sealed record AiGatewaySearchHit(double score, AiGatewaySearchPayload pay
 public sealed record AiGatewaySearchResponse(IReadOnlyList<AiGatewaySearchHit> result);
 
 public sealed record AiGatewayProxyResult(bool IsSuccess, int StatusCode, string? Body);
+
+public sealed record AiGatewayPmAssistantDraftRequest(
+    [property: JsonPropertyName("userText")] string UserText);
 
 // ============================================================================
 // DTOs for /llm/generate-post/* (passed-through to AiGateway)
