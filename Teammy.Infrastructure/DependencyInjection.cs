@@ -132,6 +132,9 @@ public static class DependencyInjection
         services.AddScoped<IAiMatchingQueries, AiMatchingQueries>();
         services.AddScoped<AiMatchingService>();
 
+        // Debug: capture last AI gateway request/response
+        services.AddSingleton<IAiGatewayTraceStore, AiGatewayTraceStore>();
+
         // Semester phase guard
         services.AddScoped<SemesterPhaseGuard>();
 

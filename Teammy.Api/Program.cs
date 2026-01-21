@@ -24,6 +24,7 @@ foreach (var jsonSource in builder.Configuration.Sources.OfType<JsonConfiguratio
     jsonSource.ReloadOnChange = false;
 
 builder.Services.AddControllers();
+builder.Services.AddMemoryCache();
 builder.Services.Configure<FormOptions>(options =>
 {
     options.MultipartBodyLengthLimit = 2L * 1024 * 1024 * 1024; // 2 GB limit for uploads

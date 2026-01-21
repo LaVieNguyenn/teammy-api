@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
@@ -17,12 +18,14 @@ public sealed class AiLlmClient : IAiLlmClient
 {
     private readonly HttpClient _httpClient;
     private readonly string _apiKey;
+    private readonly IAiGatewayTraceStore _traceStore;
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
 
-    public AiLlmClient(HttpClient httpClient, IConfiguration configuration)
+    public AiLlmClient(HttpClient httpClient, IConfiguration configuration, IAiGatewayTraceStore traceStore)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _apiKey = configuration?["AI_GATEWAY_API_KEY"] ?? string.Empty;
+        _traceStore = traceStore ?? throw new ArgumentNullException(nameof(traceStore));
     }
 
     public async Task<AiLlmRerankResponse> RerankAsync(AiLlmRerankRequest request, CancellationToken ct)
@@ -179,9 +182,37 @@ public sealed class AiLlmClient : IAiLlmClient
         }
 
         using var httpRequest = CreateRequest("llm/rerank", upstreamPayload);
+
+        var sw = Stopwatch.StartNew();
+        var requestJson = JsonSerializer.Serialize(upstreamPayload, SerializerOptions);
         using var response = await _httpClient.SendAsync(httpRequest, ct);
+        var statusCode = (int)response.StatusCode;
+        var responseJson = await response.Content.ReadAsStringAsync(ct);
         response.EnsureSuccessStatusCode();
-        var responsePayload = await response.Content.ReadFromJsonAsync<AiLlmRerankResponse>(SerializerOptions, ct);
+
+        AiLlmRerankResponse? responsePayload = null;
+        try
+        {
+            responsePayload = JsonSerializer.Deserialize<AiLlmRerankResponse>(responseJson, SerializerOptions);
+        }
+        catch
+        {
+            responsePayload = null;
+        }
+        finally
+        {
+            sw.Stop();
+            _traceStore.Add(new AiGatewayTraceEntry(
+                AtUtc: DateTime.UtcNow,
+                Operation: "llm/rerank",
+                Mode: normalizedMode,
+                QueryType: request.QueryType,
+                RequestJson: requestJson,
+                StatusCode: statusCode,
+                ResponseJson: responseJson,
+                ElapsedMs: sw.ElapsedMilliseconds));
+        }
+
         return responsePayload ?? new AiLlmRerankResponse(Array.Empty<AiLlmRerankedItem>());
     }
 
