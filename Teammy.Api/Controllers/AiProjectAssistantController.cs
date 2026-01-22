@@ -35,6 +35,15 @@ public sealed class AiProjectAssistantController(
     KanbanService board) : ControllerBase
 {
     private sealed record AssistantConversationState(string DraftJson, DateTime UpdatedAtUtc);
+    private sealed record MemberCandidate(
+        Guid UserId,
+        string DisplayName,
+        string Email,
+        string Role,
+        string? AssignedRole,
+        string? DesiredPosition,
+        string? PrimaryRole,
+        IReadOnlyList<string> SkillTags);
     private sealed record RecentTaskRow(
         Guid TaskId,
         string Title,
@@ -113,13 +122,7 @@ public sealed class AiProjectAssistantController(
                 .Select(t => new { taskId = t.TaskId, title = t.Title, status = t.Status, updatedAt = t.UpdatedAt, columnId = t.ColumnId, columnName = t.ColumnName })
                 .ToList();
 
-            var members = await (
-                from m in db.group_members.AsNoTracking()
-                join u in db.users.AsNoTracking() on m.user_id equals u.user_id
-                where m.group_id == groupId && (m.status == "member" || m.status == "leader")
-                orderby m.status descending, m.joined_at
-                select new { userId = u.user_id, displayName = u.display_name, email = u.email }
-            ).ToListAsync(ct);
+            var members = await BuildMemberCandidatesAsync(db, groupId, ct);
 
             string answerText;
             var questions = new List<string>();
@@ -161,11 +164,14 @@ public sealed class AiProjectAssistantController(
         }
 
         // If user is asking to edit/expand but doesn't mention which task, assume they refer to the last draft in this chat.
+        // Important: do NOT prepend metadata to normal messages (it leaks into title/description).
         var effectiveMessage = userMessage;
         if (IsFollowUpEditRequest(userMessage) && last is not null)
         {
             effectiveMessage = $"""
 You are continuing an existing Teammy work-item draft.
+
+    TODAY_UTC: {DateTime.UtcNow:yyyy-MM-dd}
 
 CURRENT_DRAFT_JSON:
 {last.DraftJson}
@@ -173,7 +179,11 @@ CURRENT_DRAFT_JSON:
 USER_MESSAGE:
 {userMessage}
 
-Update the draft accordingly. Keep the same schema and keep the title unless the user explicitly changes it.
+    Update the draft accordingly.
+    - Keep the title unless the user explicitly changes it.
+    - If the existing actionType cannot represent the user's clarified intent (e.g. user wants a milestone but current payload has no milestone fields), switch to the closest allowed actionType and carry over all relevant fields.
+    - If the user uses relative dates like "tomorrow", convert using TODAY_UTC.
+    - IMPORTANT: TODAY_UTC and CURRENT_DRAFT_JSON are metadata. Do NOT copy them verbatim into any draft fields.
 """;
         }
 
@@ -239,13 +249,7 @@ Update the draft accordingly. Keep the same schema and keep the title unless the
                 .Select(t => new { taskId = t.TaskId, title = t.Title, status = t.Status, updatedAt = t.UpdatedAt, columnId = t.ColumnId, columnName = t.ColumnName })
                 .ToList();
 
-            var members = await (
-                from m in db.group_members.AsNoTracking()
-                join u in db.users.AsNoTracking() on m.user_id equals u.user_id
-                where m.group_id == groupId && (m.status == "member" || m.status == "leader")
-                orderby m.status descending, m.joined_at
-                select new { userId = u.user_id, displayName = u.display_name, email = u.email }
-            ).ToListAsync(ct);
+            var members = await BuildMemberCandidatesAsync(db, groupId, ct);
 
             responseNode["candidates"] = JsonSerializer.SerializeToNode(new
             {
@@ -338,10 +342,10 @@ Update the draft accordingly. Keep the same schema and keep the title unless the
                     var name = Norm(n?.GetValue<string>());
                     if (string.IsNullOrWhiteSpace(name)) continue;
 
-                    var match = members.FirstOrDefault(m => Norm(m.displayName) == name)
-                                ?? members.FirstOrDefault(m => Norm(m.email) == name);
+                    var match = members.FirstOrDefault(m => Norm(m.DisplayName) == name)
+                                ?? members.FirstOrDefault(m => Norm(m.Email) == name);
                     if (match is not null)
-                        ids.Add(match.userId.ToString());
+                        ids.Add(match.UserId.ToString());
                 }
 
                 if (ids.Count > 0)
@@ -359,6 +363,334 @@ Update the draft accordingly. Keep the same schema and keep the title unless the
             // If user already provided an ID as a string elsewhere, normalize it into the expected field.
             if (payloadObj["targetColumnId"] is null)
                 SetPayloadGuidIfMissing("targetColumnId", TryParseGuid(GetPayloadString("columnId")));
+
+            // Deterministic Draft enrichment for common follow-up commands.
+            // Example: "assign all Front-End member into drawing class diagram tasks".
+            var actionType = draftObj["actionType"]?.GetValue<string>()?.Trim();
+            if (string.Equals(actionType, "replace_assignees", StringComparison.Ordinal))
+            {
+                var msg = (userMessage ?? "");
+                var msgNorm = Norm(msg);
+
+                static bool MentionsAll(string msgNorm)
+                    => msgNorm.Contains("assign all")
+                       || msgNorm.Contains("all member")
+                       || msgNorm.Contains("all members")
+                       || msgNorm.Contains("tất cả")
+                       || msgNorm.Contains("tat ca")
+                       || msgNorm.Contains("toàn bộ")
+                       || msgNorm.Contains("toan bo");
+
+                static IReadOnlyList<string> ExtractRequestedRoles(string msgNorm)
+                {
+                    // Roles are fuzzy in natural language; we normalize to a small set.
+                    var roles = new List<string>();
+
+                    // Frontend
+                    if (msgNorm.Contains("front-end") || msgNorm.Contains("frontend") || msgNorm.Contains("front end")
+                        || msgNorm.Contains("fe ") || msgNorm.EndsWith(" fe") || msgNorm.Contains("fe member"))
+                        roles.Add("frontend");
+
+                    // Backend
+                    if (msgNorm.Contains("back-end") || msgNorm.Contains("backend") || msgNorm.Contains("back end")
+                        || msgNorm.Contains("be ") || msgNorm.EndsWith(" be") || msgNorm.Contains("be member"))
+                        roles.Add("backend");
+
+                    // Fullstack
+                    if (msgNorm.Contains("fullstack") || msgNorm.Contains("full-stack") || msgNorm.Contains("full stack"))
+                        roles.Add("fullstack");
+
+                    // Mobile
+                    if (msgNorm.Contains("mobile") || msgNorm.Contains("android") || msgNorm.Contains("ios")
+                        || msgNorm.Contains("flutter") || msgNorm.Contains("react native") || msgNorm.Contains("react-native"))
+                        roles.Add("mobile");
+
+                    // QA / Tester
+                    if (msgNorm.Contains("qa") || msgNorm.Contains("tester") || msgNorm.Contains("test") || msgNorm.Contains("kiểm thử") || msgNorm.Contains("kiem thu"))
+                        roles.Add("qa");
+
+                    // DevOps
+                    if (msgNorm.Contains("devops") || msgNorm.Contains("dev ops") || msgNorm.Contains("infra") || msgNorm.Contains("deployment") || msgNorm.Contains("ci/cd") || msgNorm.Contains("cicd"))
+                        roles.Add("devops");
+
+                    // UI/UX / Design
+                    if (msgNorm.Contains("ui") || msgNorm.Contains("ux") || msgNorm.Contains("ui/ux") || msgNorm.Contains("designer") || msgNorm.Contains("design") || msgNorm.Contains("thiết kế") || msgNorm.Contains("thiet ke"))
+                        roles.Add("design");
+
+                    return roles.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                }
+
+                static IReadOnlyList<string> ExtractRequestedSkills(string msgNorm)
+                {
+                    // Normalize common language/tool keywords to the tags we expect in skills.
+                    var wanted = new List<string>();
+                    void AddIfContains(string keyword, string tag)
+                    {
+                        if (msgNorm.Contains(keyword)) wanted.Add(tag);
+                    }
+
+                    // Languages / runtime
+                    AddIfContains("c#", "dotnet");
+                    AddIfContains("csharp", "dotnet");
+                    AddIfContains(".net", "dotnet");
+                    AddIfContains("dotnet", "dotnet");
+                    AddIfContains("java", "java");
+                    AddIfContains("python", "python");
+                    AddIfContains("golang", "go");
+                    AddIfContains(" go ", "go");
+                    AddIfContains("node", "nodejs");
+                    AddIfContains("nodejs", "nodejs");
+                    AddIfContains("php", "php");
+                    AddIfContains("ruby", "ruby");
+
+                    // FE ecosystem
+                    AddIfContains("react", "react");
+                    AddIfContains("vue", "vue");
+                    AddIfContains("angular", "angular");
+                    AddIfContains("typescript", "typescript");
+                    AddIfContains("tailwind", "tailwind");
+                    AddIfContains("nextjs", "nextjs");
+                    AddIfContains("next.js", "nextjs");
+
+                    // Mobile
+                    AddIfContains("flutter", "flutter");
+                    AddIfContains("dart", "dart");
+                    AddIfContains("kotlin", "kotlin");
+                    AddIfContains("swift", "swift");
+
+                    // BE / data
+                    AddIfContains("postgres", "postgres");
+                    AddIfContains("postgresql", "postgres");
+                    AddIfContains("sql", "sql");
+                    AddIfContains("redis", "redis");
+                    AddIfContains("grpc", "grpc");
+
+                    // DevOps
+                    AddIfContains("docker", "docker");
+                    AddIfContains("kubernetes", "kubernetes");
+                    AddIfContains("k8s", "kubernetes");
+                    AddIfContains("azure", "azure");
+                    AddIfContains("aws", "aws");
+                    AddIfContains("github actions", "github-actions");
+                    AddIfContains("gitlab", "gitlab-ci");
+                    AddIfContains("ci/cd", "cicd");
+                    AddIfContains("cicd", "cicd");
+
+                    return wanted.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                }
+
+                static bool LooksLikeRole(MemberCandidate m, string role)
+                {
+                    bool Has(string? v, params string[] tokens)
+                        => !string.IsNullOrWhiteSpace(v) && tokens.Any(t => v.Trim().Contains(t, StringComparison.OrdinalIgnoreCase));
+
+                    if (role.Equals("frontend", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (Has(m.PrimaryRole, "frontend")) return true;
+                        if (Has(m.AssignedRole, "frontend", "front-end", "front end")) return true;
+                        if (Has(m.DesiredPosition, "Frontend")) return true;
+                        if (m.SkillTags.Any(t => t.Equals("react", StringComparison.OrdinalIgnoreCase)
+                                                 || t.Equals("vue", StringComparison.OrdinalIgnoreCase)
+                                                 || t.Equals("angular", StringComparison.OrdinalIgnoreCase)
+                                                 || t.Equals("typescript", StringComparison.OrdinalIgnoreCase)
+                                                 || t.Equals("tailwind", StringComparison.OrdinalIgnoreCase)))
+                            return true;
+                        return false;
+                    }
+
+                    if (role.Equals("backend", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (Has(m.PrimaryRole, "backend")) return true;
+                        if (Has(m.AssignedRole, "backend", "back-end", "back end")) return true;
+                        if (Has(m.DesiredPosition, "Backend")) return true;
+                        if (m.SkillTags.Any(t => t.Equals("dotnet", StringComparison.OrdinalIgnoreCase)
+                                                 || t.Equals("java", StringComparison.OrdinalIgnoreCase)
+                                                 || t.Equals("postgres", StringComparison.OrdinalIgnoreCase)
+                                                 || t.Equals("redis", StringComparison.OrdinalIgnoreCase)
+                                                 || t.Equals("grpc", StringComparison.OrdinalIgnoreCase)))
+                            return true;
+                        return false;
+                    }
+
+                    if (role.Equals("fullstack", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (Has(m.PrimaryRole, "full", "fullstack", "full-stack")) return true;
+                        if (Has(m.AssignedRole, "full", "fullstack", "full-stack")) return true;
+                        if (Has(m.DesiredPosition, "Full")) return true;
+                        // Heuristic: has at least one FE + one BE skill tag
+                        var hasFe = m.SkillTags.Any(t => t.Equals("react", StringComparison.OrdinalIgnoreCase)
+                                                        || t.Equals("vue", StringComparison.OrdinalIgnoreCase)
+                                                        || t.Equals("angular", StringComparison.OrdinalIgnoreCase)
+                                                        || t.Equals("typescript", StringComparison.OrdinalIgnoreCase));
+                        var hasBe = m.SkillTags.Any(t => t.Equals("dotnet", StringComparison.OrdinalIgnoreCase)
+                                                        || t.Equals("java", StringComparison.OrdinalIgnoreCase)
+                                                        || t.Equals("postgres", StringComparison.OrdinalIgnoreCase)
+                                                        || t.Equals("redis", StringComparison.OrdinalIgnoreCase));
+                        return hasFe && hasBe;
+                    }
+
+                    if (role.Equals("mobile", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (Has(m.PrimaryRole, "mobile")) return true;
+                        if (Has(m.AssignedRole, "mobile")) return true;
+                        if (Has(m.DesiredPosition, "Mobile")) return true;
+                        return m.SkillTags.Any(t => t.Equals("flutter", StringComparison.OrdinalIgnoreCase)
+                                                    || t.Equals("dart", StringComparison.OrdinalIgnoreCase)
+                                                    || t.Equals("kotlin", StringComparison.OrdinalIgnoreCase)
+                                                    || t.Equals("swift", StringComparison.OrdinalIgnoreCase));
+                    }
+
+                    if (role.Equals("qa", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (Has(m.PrimaryRole, "qa", "test")) return true;
+                        if (Has(m.AssignedRole, "qa", "test", "tester")) return true;
+                        if (Has(m.DesiredPosition, "QA", "Tester")) return true;
+                        return false;
+                    }
+
+                    if (role.Equals("devops", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (Has(m.PrimaryRole, "devops", "dev ops")) return true;
+                        if (Has(m.AssignedRole, "devops", "dev ops")) return true;
+                        if (Has(m.DesiredPosition, "DevOps")) return true;
+                        return m.SkillTags.Any(t => t.Equals("docker", StringComparison.OrdinalIgnoreCase)
+                                                    || t.Equals("kubernetes", StringComparison.OrdinalIgnoreCase)
+                                                    || t.Equals("azure", StringComparison.OrdinalIgnoreCase)
+                                                    || t.Equals("aws", StringComparison.OrdinalIgnoreCase));
+                    }
+
+                    if (role.Equals("design", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (Has(m.PrimaryRole, "design", "ui", "ux")) return true;
+                        if (Has(m.AssignedRole, "design", "ui", "ux")) return true;
+                        if (Has(m.DesiredPosition, "Designer", "UI/UX")) return true;
+                        return m.SkillTags.Any(t => t.Equals("figma", StringComparison.OrdinalIgnoreCase)
+                                                    || t.Equals("ux", StringComparison.OrdinalIgnoreCase));
+                    }
+
+                    return false;
+                }
+
+                static int ScoreMember(MemberCandidate m, IReadOnlyList<string> roles, IReadOnlyList<string> skills)
+                {
+                    var score = 0;
+                    foreach (var r in roles)
+                        if (LooksLikeRole(m, r)) score += 3;
+                    foreach (var s in skills)
+                        if (m.SkillTags.Any(t => t.Equals(s, StringComparison.OrdinalIgnoreCase))) score += 2;
+                    return score;
+                }
+
+                // Infer task from message by matching candidate task titles (unique match only).
+                if (payloadObj["taskId"] is null)
+                {
+                    var byContains = taskCands
+                        .Where(t => !string.IsNullOrWhiteSpace(t.title) && msgNorm.Contains(Norm(t.title)))
+                        .ToList();
+                    if (byContains.Count == 1)
+                    {
+                        payloadObj["taskId"] = byContains[0].taskId.ToString();
+                        if (payloadObj["taskTitle"] is null)
+                            payloadObj["taskTitle"] = byContains[0].title;
+                    }
+                }
+
+                // If still missing, fall back to last draft title (when this is a follow-up).
+                if (payloadObj["taskId"] is null && payloadObj["taskTitle"] is null && last is not null)
+                {
+                    try
+                    {
+                        using var lastDoc = JsonDocument.Parse(last.DraftJson);
+                        var lastRoot = lastDoc.RootElement;
+                        if (lastRoot.ValueKind == JsonValueKind.Object
+                            && lastRoot.TryGetProperty("actionPayload", out var lastPayload)
+                            && lastPayload.ValueKind == JsonValueKind.Object)
+                        {
+                            var lastTitle = GetString(lastPayload, "title") ?? GetString(lastPayload, "taskTitle");
+                            if (!string.IsNullOrWhiteSpace(lastTitle))
+                                payloadObj["taskTitle"] = lastTitle;
+                        }
+                    }
+                    catch
+                    {
+                        // ignore malformed cache
+                    }
+
+                    TryResolveTask("taskTitle", "taskId");
+                }
+
+                // Infer "assign all members" when user explicitly says all.
+                if (payloadObj["assigneeIds"] is null)
+                {
+                    var wantsAll = MentionsAll(msgNorm);
+                    var requestedRoles = ExtractRequestedRoles(msgNorm);
+                    var requestedSkills = ExtractRequestedSkills(msgNorm);
+
+                    // If user mentions a role/skills without providing names, interpret as assigning matching members.
+                    // Default behavior: assign ALL matches (Draft is editable; Commit validates).
+                    if (requestedRoles.Count > 0 || requestedSkills.Count > 0)
+                    {
+                        IEnumerable<MemberCandidate> pool = members;
+                        if (requestedRoles.Count > 0)
+                            pool = pool.Where(m => requestedRoles.Any(r => LooksLikeRole(m, r)));
+                        if (requestedSkills.Count > 0)
+                            pool = pool.Where(m => requestedSkills.All(s => m.SkillTags.Any(t => t.Equals(s, StringComparison.OrdinalIgnoreCase))));
+
+                        var selected = pool
+                            .Select(m => new { Member = m, Score = ScoreMember(m, requestedRoles, requestedSkills) })
+                            .Where(x => x.Score > 0)
+                            .OrderByDescending(x => x.Score)
+                            .Select(x => x.Member)
+                            .ToList();
+
+                        // If no one matches strict role+skills, relax to OR scoring so we still provide a helpful draft.
+                        if (selected.Count == 0)
+                        {
+                            selected = members
+                                .Select(m => new { Member = m, Score = ScoreMember(m, requestedRoles, requestedSkills) })
+                                .Where(x => x.Score > 0)
+                                .OrderByDescending(x => x.Score)
+                                .Select(x => x.Member)
+                                .ToList();
+                        }
+
+                        if (selected.Count > 0)
+                        {
+                            payloadObj["assigneeIds"] = new JsonArray(selected.Select(x => (JsonNode?)JsonValue.Create(x.UserId.ToString())).ToArray());
+                            payloadObj["assigneeNames"] = new JsonArray(selected.Select(x => (JsonNode?)JsonValue.Create(x.DisplayName)).ToArray());
+                        }
+                        else if (wantsAll)
+                        {
+                            // Explicit "all" fallback if we can't infer the filter properly.
+                            var ids = members.Select(m => m.UserId.ToString()).ToList();
+                            if (ids.Count > 0)
+                            {
+                                payloadObj["assigneeIds"] = new JsonArray(ids.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray());
+                                payloadObj["assigneeNames"] = new JsonArray(members.Select(m => (JsonNode?)JsonValue.Create(m.DisplayName)).ToArray());
+                            }
+                        }
+                    }
+                    else if (wantsAll)
+                    {
+                        var ids = members.Select(m => m.UserId.ToString()).ToList();
+                        if (ids.Count > 0)
+                        {
+                            payloadObj["assigneeIds"] = new JsonArray(ids.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray());
+                            payloadObj["assigneeNames"] = new JsonArray(members.Select(m => (JsonNode?)JsonValue.Create(m.DisplayName)).ToArray());
+                        }
+                    }
+                }
+
+                // If we now have enough for commit, don't ask redundant questions.
+                var hasTaskId = payloadObj["taskId"] is not null;
+                var hasAssignees = payloadObj["assigneeIds"] is JsonArray a && a.Count > 0;
+                if (hasTaskId && hasAssignees)
+                {
+                    responseNode["questions"] = new JsonArray();
+                    var title = payloadObj["taskTitle"]?.GetValue<string>() ?? "(selected task)";
+                    responseNode["answerText"] = $"Got it. I prepared an assignee update for task '{title}'. Review/edit the assignees and confirm to commit.";
+                }
+            }
         }
 
         // Persist the latest draft for follow-up turns in this chat.
@@ -372,6 +704,125 @@ Update the draft accordingly. Keep the same schema and keep the title unless the
         return Content(responseNode.ToJsonString(), "application/json");
     }
 
+    private static async Task<IReadOnlyList<MemberCandidate>> BuildMemberCandidatesAsync(AppDbContext db, Guid groupId, CancellationToken ct)
+    {
+        static (string? PrimaryRole, IReadOnlyList<string> SkillTags) ParseSkills(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return (null, Array.Empty<string>());
+
+            try
+            {
+                using var doc = JsonDocument.Parse(raw);
+                var root = doc.RootElement;
+
+                string? GetStringProp(JsonElement el, string name)
+                    => el.ValueKind == JsonValueKind.Object && el.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String
+                        ? p.GetString()
+                        : null;
+
+                var primary =
+                    GetStringProp(root, "primary_role")
+                    ?? GetStringProp(root, "primaryRole")
+                    ?? GetStringProp(root, "primary");
+
+                var tags = new List<string>();
+
+                void ReadStringArray(string prop)
+                {
+                    if (root.ValueKind != JsonValueKind.Object) return;
+                    if (!root.TryGetProperty(prop, out var arr)) return;
+                    if (arr.ValueKind != JsonValueKind.Array) return;
+                    foreach (var it in arr.EnumerateArray())
+                    {
+                        if (it.ValueKind == JsonValueKind.String)
+                        {
+                            var s = it.GetString();
+                            if (!string.IsNullOrWhiteSpace(s)) tags.Add(s.Trim());
+                        }
+                    }
+                }
+
+                if (root.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var it in root.EnumerateArray())
+                    {
+                        if (it.ValueKind == JsonValueKind.String)
+                        {
+                            var s = it.GetString();
+                            if (!string.IsNullOrWhiteSpace(s)) tags.Add(s.Trim());
+                        }
+                    }
+                }
+                else if (root.ValueKind == JsonValueKind.String)
+                {
+                    var s = root.GetString();
+                    if (!string.IsNullOrWhiteSpace(s)) tags.Add(s.Trim());
+                }
+                else
+                {
+                    ReadStringArray("skill_tags");
+                    ReadStringArray("skills");
+                    ReadStringArray("skillTags");
+                    ReadStringArray("stack");
+                }
+
+                var cleaned = tags
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Select(x => x.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(20)
+                    .ToList();
+
+                return (string.IsNullOrWhiteSpace(primary) ? null : primary.Trim(), cleaned);
+            }
+            catch
+            {
+                return (null, Array.Empty<string>());
+            }
+        }
+
+        var rows = await (
+            from m in db.group_members.AsNoTracking()
+            join u in db.users.AsNoTracking() on m.user_id equals u.user_id
+            join p in db.position_lists.AsNoTracking() on u.desired_position_id equals p.position_id into pj
+            from p in pj.DefaultIfEmpty()
+            where m.group_id == groupId && (m.status == "member" || m.status == "leader")
+            orderby m.status descending, m.joined_at
+            select new
+            {
+                u.user_id,
+                u.display_name,
+                u.email,
+                memberRole = m.status,
+                skills = u.skills,
+                desiredPosition = p == null ? null : p.position_name,
+                groupMemberId = m.group_member_id
+            }
+        ).ToListAsync(ct);
+
+        var memberIds = rows.Select(x => x.groupMemberId).ToList();
+        var assignedRolesLookup = await db.group_member_roles.AsNoTracking()
+            .Where(r => memberIds.Contains(r.group_member_id))
+            .GroupBy(r => r.group_member_id)
+            .Select(g => new { groupMemberId = g.Key, role = g.OrderByDescending(r => r.assigned_at).Select(r => r.role_name).FirstOrDefault() })
+            .ToDictionaryAsync(x => x.groupMemberId, x => x.role, ct);
+
+        return rows.Select(x =>
+        {
+            var parsed = ParseSkills(x.skills);
+            assignedRolesLookup.TryGetValue(x.groupMemberId, out var assignedRole);
+            return new MemberCandidate(
+                x.user_id,
+                x.display_name,
+                x.email,
+                x.memberRole,
+                assignedRole,
+                x.desiredPosition,
+                parsed.PrimaryRole,
+                parsed.SkillTags);
+        }).ToList();
+    }
+
     private static bool IsFollowUpEditRequest(string message)
     {
         var t = (message ?? "").Trim().ToLowerInvariant();
@@ -379,7 +830,9 @@ Update the draft accordingly. Keep the same schema and keep the title unless the
 
         // If user is explicitly creating a new item, don't treat as follow-up.
         if (t.Contains("create a task") || t.Contains("new task") || t.Contains("add a task")
-            || t.Contains("tạo task") || t.Contains("tao task") || t.Contains("tạo công việc") || t.Contains("tao cong viec"))
+            || t.Contains("tạo task") || t.Contains("tao task") || t.Contains("tạo công việc") || t.Contains("tao cong viec")
+            || t.Contains("create a milestone") || t.Contains("new milestone") || t.Contains("create milestone")
+            || t.Contains("tạo milestone") || t.Contains("tao milestone"))
             return false;
 
         return t.Contains("write")
@@ -390,6 +843,33 @@ Update the draft accordingly. Keep the same schema and keep the title unless the
                || t.Contains("acceptance")
                || t.Contains("criteria")
                || t.Contains("test")
+               || t.Contains("due date")
+               || t.Contains("deadline")
+               || t.Contains("tomorrow")
+               || t.Contains("next week")
+               || t.Contains("next month")
+               || t.Contains("rename")
+               || t.Contains("change")
+               || t.Contains("update")
+               || t.Contains("the name is")
+               || t.Contains("name is")
+               || t.Contains("milestone name")
+               || t.Contains("target date")
+               || t.Contains("ngày")
+               || t.Contains("ngay")
+               || t.Contains("ngày mai")
+               || t.Contains("ngay mai")
+               || t.Contains("mai")
+               || t.Contains("hạn")
+               || t.Contains("han")
+               || t.Contains("deadline")
+               || t.Contains("đổi")
+               || t.Contains("doi")
+               || t.Contains("đổi tên")
+               || t.Contains("doi ten")
+               || t.Contains("tên")
+               || t.Contains("ten")
+               || t.Contains("milestone")
                || t.Contains("chi tiết")
                || t.Contains("chi tiet")
                || t.Contains("bổ sung")
@@ -427,17 +907,24 @@ Update the draft accordingly. Keep the same schema and keep the title unless the
 
     [HttpPost("commit")]
     [Authorize]
-    public async Task<IActionResult> Commit(Guid groupId, [FromBody] ProjectAssistantCommitRequest req, CancellationToken ct)
+    public async Task<IActionResult> Commit(Guid groupId, [FromBody] JsonElement body, CancellationToken ct)
     {
         var userId = GetUserId();
 
-        if (req.ApprovedDraft.ValueKind != JsonValueKind.Object)
-            return BadRequest(new { error = "approvedDraft must be an object" });
+        if (body.ValueKind != JsonValueKind.Object)
+            return BadRequest(new { error = "request body must be a JSON object" });
 
-        // Expected: the payload is the Phase A response shape; tolerate either:
-        // - { draft: { ... } }
-        // - { ...draft fields... }
-        var root = req.ApprovedDraft;
+        // Accepted request shapes (FE should send the 1st one):
+        // 1) { actionType, actionPayload }                       (NEW)
+        // 2) { approvedDraft: { actionType, actionPayload } }     (legacy)
+        // 3) { draft: { actionType, actionPayload }, ... }        (Phase-A full response)
+        var root = body;
+        if (root.TryGetProperty("approvedDraft", out var approved)
+            && approved.ValueKind == JsonValueKind.Object)
+        {
+            root = approved;
+        }
+
         var draft = root.TryGetProperty("draft", out var d) && d.ValueKind == JsonValueKind.Object ? d : root;
 
         // Action-based schema (new)
@@ -459,6 +946,9 @@ Update the draft accordingly. Keep the same schema and keep the title unless the
                     var priority = GetString(payload, "priority");
                     var dueDate = GetDateTime(payload, "dueDate");
                     var milestoneId = GetGuid(payload, "milestoneId");
+                    var milestoneName = GetString(payload, "milestoneName");
+                    var milestoneDescription = GetString(payload, "milestoneDescription");
+                    var milestoneTargetDate = GetDateOnly(payload, "milestoneTargetDate");
                     var columnId = GetGuid(payload, "columnId");
                     var assigneeIds = GetGuidList(payload, "assigneeIds");
 
@@ -472,6 +962,18 @@ Update the draft accordingly. Keep the same schema and keep the title unless the
                             DueDate: dueDate,
                             OwnerUserId: null),
                         ct);
+
+                    // If user asked for a new milestone, Draft may carry milestoneName (with milestoneId null).
+                    // Create it deterministically here so Commit remains a single safe operation.
+                    if (!milestoneId.HasValue && !string.IsNullOrWhiteSpace(milestoneName))
+                    {
+                        milestoneId = await tracking.CreateMilestoneAsync(groupId, userId,
+                            new CreateMilestoneRequest(
+                                Name: milestoneName!,
+                                Description: string.IsNullOrWhiteSpace(milestoneDescription) ? null : milestoneDescription,
+                                TargetDate: milestoneTargetDate),
+                            ct);
+                    }
 
                     if (milestoneId.HasValue)
                     {
