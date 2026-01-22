@@ -381,32 +381,204 @@ USER_MESSAGE:
                        || msgNorm.Contains("toàn bộ")
                        || msgNorm.Contains("toan bo");
 
-                static bool MentionsFrontend(string msgNorm)
-                    => msgNorm.Contains("front-end")
-                       || msgNorm.Contains("frontend")
-                       || msgNorm.Contains("front end")
-                       || msgNorm.Contains("fe ")
-                       || msgNorm.EndsWith(" fe")
-                       || msgNorm.Contains("fe member")
-                       || msgNorm.Contains("front end member")
-                       || msgNorm.Contains("frontend member");
-
-                static bool LooksLikeFrontendMember(MemberCandidate m)
+                static IReadOnlyList<string> ExtractRequestedRoles(string msgNorm)
                 {
-                    bool Has(string? v, string token)
-                        => !string.IsNullOrWhiteSpace(v) && v.Trim().Contains(token, StringComparison.OrdinalIgnoreCase);
+                    // Roles are fuzzy in natural language; we normalize to a small set.
+                    var roles = new List<string>();
 
-                    if (Has(m.PrimaryRole, "frontend")) return true;
-                    if (Has(m.AssignedRole, "frontend") || Has(m.AssignedRole, "front-end") || Has(m.AssignedRole, "front end")) return true;
-                    if (Has(m.DesiredPosition, "frontend") || Has(m.DesiredPosition, "front-end") || Has(m.DesiredPosition, "front end")) return true;
-                    if (m.SkillTags.Any(t => t.Equals("react", StringComparison.OrdinalIgnoreCase)
-                                             || t.Equals("vue", StringComparison.OrdinalIgnoreCase)
-                                             || t.Equals("angular", StringComparison.OrdinalIgnoreCase)
-                                             || t.Equals("typescript", StringComparison.OrdinalIgnoreCase)
-                                             || t.Equals("tailwind", StringComparison.OrdinalIgnoreCase)))
-                        return true;
+                    // Frontend
+                    if (msgNorm.Contains("front-end") || msgNorm.Contains("frontend") || msgNorm.Contains("front end")
+                        || msgNorm.Contains("fe ") || msgNorm.EndsWith(" fe") || msgNorm.Contains("fe member"))
+                        roles.Add("frontend");
+
+                    // Backend
+                    if (msgNorm.Contains("back-end") || msgNorm.Contains("backend") || msgNorm.Contains("back end")
+                        || msgNorm.Contains("be ") || msgNorm.EndsWith(" be") || msgNorm.Contains("be member"))
+                        roles.Add("backend");
+
+                    // Fullstack
+                    if (msgNorm.Contains("fullstack") || msgNorm.Contains("full-stack") || msgNorm.Contains("full stack"))
+                        roles.Add("fullstack");
+
+                    // Mobile
+                    if (msgNorm.Contains("mobile") || msgNorm.Contains("android") || msgNorm.Contains("ios")
+                        || msgNorm.Contains("flutter") || msgNorm.Contains("react native") || msgNorm.Contains("react-native"))
+                        roles.Add("mobile");
+
+                    // QA / Tester
+                    if (msgNorm.Contains("qa") || msgNorm.Contains("tester") || msgNorm.Contains("test") || msgNorm.Contains("kiểm thử") || msgNorm.Contains("kiem thu"))
+                        roles.Add("qa");
+
+                    // DevOps
+                    if (msgNorm.Contains("devops") || msgNorm.Contains("dev ops") || msgNorm.Contains("infra") || msgNorm.Contains("deployment") || msgNorm.Contains("ci/cd") || msgNorm.Contains("cicd"))
+                        roles.Add("devops");
+
+                    // UI/UX / Design
+                    if (msgNorm.Contains("ui") || msgNorm.Contains("ux") || msgNorm.Contains("ui/ux") || msgNorm.Contains("designer") || msgNorm.Contains("design") || msgNorm.Contains("thiết kế") || msgNorm.Contains("thiet ke"))
+                        roles.Add("design");
+
+                    return roles.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                }
+
+                static IReadOnlyList<string> ExtractRequestedSkills(string msgNorm)
+                {
+                    // Normalize common language/tool keywords to the tags we expect in skills.
+                    var wanted = new List<string>();
+                    void AddIfContains(string keyword, string tag)
+                    {
+                        if (msgNorm.Contains(keyword)) wanted.Add(tag);
+                    }
+
+                    // Languages / runtime
+                    AddIfContains("c#", "dotnet");
+                    AddIfContains("csharp", "dotnet");
+                    AddIfContains(".net", "dotnet");
+                    AddIfContains("dotnet", "dotnet");
+                    AddIfContains("java", "java");
+                    AddIfContains("python", "python");
+                    AddIfContains("golang", "go");
+                    AddIfContains(" go ", "go");
+                    AddIfContains("node", "nodejs");
+                    AddIfContains("nodejs", "nodejs");
+                    AddIfContains("php", "php");
+                    AddIfContains("ruby", "ruby");
+
+                    // FE ecosystem
+                    AddIfContains("react", "react");
+                    AddIfContains("vue", "vue");
+                    AddIfContains("angular", "angular");
+                    AddIfContains("typescript", "typescript");
+                    AddIfContains("tailwind", "tailwind");
+                    AddIfContains("nextjs", "nextjs");
+                    AddIfContains("next.js", "nextjs");
+
+                    // Mobile
+                    AddIfContains("flutter", "flutter");
+                    AddIfContains("dart", "dart");
+                    AddIfContains("kotlin", "kotlin");
+                    AddIfContains("swift", "swift");
+
+                    // BE / data
+                    AddIfContains("postgres", "postgres");
+                    AddIfContains("postgresql", "postgres");
+                    AddIfContains("sql", "sql");
+                    AddIfContains("redis", "redis");
+                    AddIfContains("grpc", "grpc");
+
+                    // DevOps
+                    AddIfContains("docker", "docker");
+                    AddIfContains("kubernetes", "kubernetes");
+                    AddIfContains("k8s", "kubernetes");
+                    AddIfContains("azure", "azure");
+                    AddIfContains("aws", "aws");
+                    AddIfContains("github actions", "github-actions");
+                    AddIfContains("gitlab", "gitlab-ci");
+                    AddIfContains("ci/cd", "cicd");
+                    AddIfContains("cicd", "cicd");
+
+                    return wanted.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                }
+
+                static bool LooksLikeRole(MemberCandidate m, string role)
+                {
+                    bool Has(string? v, params string[] tokens)
+                        => !string.IsNullOrWhiteSpace(v) && tokens.Any(t => v.Trim().Contains(t, StringComparison.OrdinalIgnoreCase));
+
+                    if (role.Equals("frontend", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (Has(m.PrimaryRole, "frontend")) return true;
+                        if (Has(m.AssignedRole, "frontend", "front-end", "front end")) return true;
+                        if (Has(m.DesiredPosition, "Frontend")) return true;
+                        if (m.SkillTags.Any(t => t.Equals("react", StringComparison.OrdinalIgnoreCase)
+                                                 || t.Equals("vue", StringComparison.OrdinalIgnoreCase)
+                                                 || t.Equals("angular", StringComparison.OrdinalIgnoreCase)
+                                                 || t.Equals("typescript", StringComparison.OrdinalIgnoreCase)
+                                                 || t.Equals("tailwind", StringComparison.OrdinalIgnoreCase)))
+                            return true;
+                        return false;
+                    }
+
+                    if (role.Equals("backend", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (Has(m.PrimaryRole, "backend")) return true;
+                        if (Has(m.AssignedRole, "backend", "back-end", "back end")) return true;
+                        if (Has(m.DesiredPosition, "Backend")) return true;
+                        if (m.SkillTags.Any(t => t.Equals("dotnet", StringComparison.OrdinalIgnoreCase)
+                                                 || t.Equals("java", StringComparison.OrdinalIgnoreCase)
+                                                 || t.Equals("postgres", StringComparison.OrdinalIgnoreCase)
+                                                 || t.Equals("redis", StringComparison.OrdinalIgnoreCase)
+                                                 || t.Equals("grpc", StringComparison.OrdinalIgnoreCase)))
+                            return true;
+                        return false;
+                    }
+
+                    if (role.Equals("fullstack", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (Has(m.PrimaryRole, "full", "fullstack", "full-stack")) return true;
+                        if (Has(m.AssignedRole, "full", "fullstack", "full-stack")) return true;
+                        if (Has(m.DesiredPosition, "Full")) return true;
+                        // Heuristic: has at least one FE + one BE skill tag
+                        var hasFe = m.SkillTags.Any(t => t.Equals("react", StringComparison.OrdinalIgnoreCase)
+                                                        || t.Equals("vue", StringComparison.OrdinalIgnoreCase)
+                                                        || t.Equals("angular", StringComparison.OrdinalIgnoreCase)
+                                                        || t.Equals("typescript", StringComparison.OrdinalIgnoreCase));
+                        var hasBe = m.SkillTags.Any(t => t.Equals("dotnet", StringComparison.OrdinalIgnoreCase)
+                                                        || t.Equals("java", StringComparison.OrdinalIgnoreCase)
+                                                        || t.Equals("postgres", StringComparison.OrdinalIgnoreCase)
+                                                        || t.Equals("redis", StringComparison.OrdinalIgnoreCase));
+                        return hasFe && hasBe;
+                    }
+
+                    if (role.Equals("mobile", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (Has(m.PrimaryRole, "mobile")) return true;
+                        if (Has(m.AssignedRole, "mobile")) return true;
+                        if (Has(m.DesiredPosition, "Mobile")) return true;
+                        return m.SkillTags.Any(t => t.Equals("flutter", StringComparison.OrdinalIgnoreCase)
+                                                    || t.Equals("dart", StringComparison.OrdinalIgnoreCase)
+                                                    || t.Equals("kotlin", StringComparison.OrdinalIgnoreCase)
+                                                    || t.Equals("swift", StringComparison.OrdinalIgnoreCase));
+                    }
+
+                    if (role.Equals("qa", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (Has(m.PrimaryRole, "qa", "test")) return true;
+                        if (Has(m.AssignedRole, "qa", "test", "tester")) return true;
+                        if (Has(m.DesiredPosition, "QA", "Tester")) return true;
+                        return false;
+                    }
+
+                    if (role.Equals("devops", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (Has(m.PrimaryRole, "devops", "dev ops")) return true;
+                        if (Has(m.AssignedRole, "devops", "dev ops")) return true;
+                        if (Has(m.DesiredPosition, "DevOps")) return true;
+                        return m.SkillTags.Any(t => t.Equals("docker", StringComparison.OrdinalIgnoreCase)
+                                                    || t.Equals("kubernetes", StringComparison.OrdinalIgnoreCase)
+                                                    || t.Equals("azure", StringComparison.OrdinalIgnoreCase)
+                                                    || t.Equals("aws", StringComparison.OrdinalIgnoreCase));
+                    }
+
+                    if (role.Equals("design", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (Has(m.PrimaryRole, "design", "ui", "ux")) return true;
+                        if (Has(m.AssignedRole, "design", "ui", "ux")) return true;
+                        if (Has(m.DesiredPosition, "Designer", "UI/UX")) return true;
+                        return m.SkillTags.Any(t => t.Equals("figma", StringComparison.OrdinalIgnoreCase)
+                                                    || t.Equals("ux", StringComparison.OrdinalIgnoreCase));
+                    }
 
                     return false;
+                }
+
+                static int ScoreMember(MemberCandidate m, IReadOnlyList<string> roles, IReadOnlyList<string> skills)
+                {
+                    var score = 0;
+                    foreach (var r in roles)
+                        if (LooksLikeRole(m, r)) score += 3;
+                    foreach (var s in skills)
+                        if (m.SkillTags.Any(t => t.Equals(s, StringComparison.OrdinalIgnoreCase))) score += 2;
+                    return score;
                 }
 
                 // Infer task from message by matching candidate task titles (unique match only).
@@ -450,18 +622,52 @@ USER_MESSAGE:
                 // Infer "assign all members" when user explicitly says all.
                 if (payloadObj["assigneeIds"] is null)
                 {
-                    var wantsFrontend = MentionsFrontend(msgNorm);
                     var wantsAll = MentionsAll(msgNorm);
+                    var requestedRoles = ExtractRequestedRoles(msgNorm);
+                    var requestedSkills = ExtractRequestedSkills(msgNorm);
 
-                    // If user says "Front-End member" without specifying names, interpret as "assign all Front-End members".
-                    // This is safe because Draft is editable and Commit validates.
-                    if (wantsFrontend)
+                    // If user mentions a role/skills without providing names, interpret as assigning matching members.
+                    // Default behavior: assign ALL matches (Draft is editable; Commit validates).
+                    if (requestedRoles.Count > 0 || requestedSkills.Count > 0)
                     {
-                        var fe = members.Where(LooksLikeFrontendMember).ToList();
-                        if (fe.Count > 0)
+                        IEnumerable<MemberCandidate> pool = members;
+                        if (requestedRoles.Count > 0)
+                            pool = pool.Where(m => requestedRoles.Any(r => LooksLikeRole(m, r)));
+                        if (requestedSkills.Count > 0)
+                            pool = pool.Where(m => requestedSkills.All(s => m.SkillTags.Any(t => t.Equals(s, StringComparison.OrdinalIgnoreCase))));
+
+                        var selected = pool
+                            .Select(m => new { Member = m, Score = ScoreMember(m, requestedRoles, requestedSkills) })
+                            .Where(x => x.Score > 0)
+                            .OrderByDescending(x => x.Score)
+                            .Select(x => x.Member)
+                            .ToList();
+
+                        // If no one matches strict role+skills, relax to OR scoring so we still provide a helpful draft.
+                        if (selected.Count == 0)
                         {
-                            payloadObj["assigneeIds"] = new JsonArray(fe.Select(x => (JsonNode?)JsonValue.Create(x.UserId.ToString())).ToArray());
-                            payloadObj["assigneeNames"] = new JsonArray(fe.Select(x => (JsonNode?)JsonValue.Create(x.DisplayName)).ToArray());
+                            selected = members
+                                .Select(m => new { Member = m, Score = ScoreMember(m, requestedRoles, requestedSkills) })
+                                .Where(x => x.Score > 0)
+                                .OrderByDescending(x => x.Score)
+                                .Select(x => x.Member)
+                                .ToList();
+                        }
+
+                        if (selected.Count > 0)
+                        {
+                            payloadObj["assigneeIds"] = new JsonArray(selected.Select(x => (JsonNode?)JsonValue.Create(x.UserId.ToString())).ToArray());
+                            payloadObj["assigneeNames"] = new JsonArray(selected.Select(x => (JsonNode?)JsonValue.Create(x.DisplayName)).ToArray());
+                        }
+                        else if (wantsAll)
+                        {
+                            // Explicit "all" fallback if we can't infer the filter properly.
+                            var ids = members.Select(m => m.UserId.ToString()).ToList();
+                            if (ids.Count > 0)
+                            {
+                                payloadObj["assigneeIds"] = new JsonArray(ids.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray());
+                                payloadObj["assigneeNames"] = new JsonArray(members.Select(m => (JsonNode?)JsonValue.Create(m.DisplayName)).ToArray());
+                            }
                         }
                     }
                     else if (wantsAll)
