@@ -691,6 +691,171 @@ USER_MESSAGE:
                     responseNode["answerText"] = $"Got it. I prepared an assignee update for task '{title}'. Review/edit the assignees and confirm to commit.";
                 }
             }
+
+            // Deterministic Draft enrichment: create milestone + add an EXISTING task.
+            // This should not rely on the upstream LLM knowing board tasks.
+            static bool MentionsMilestone(string msgNorm)
+                => msgNorm.Contains("milestone") || msgNorm.Contains("mốc") || msgNorm.Contains("moc");
+
+            static bool MentionsCreateNewMilestone(string msgNorm)
+                => msgNorm.Contains("create new milestone")
+                   || msgNorm.Contains("new milestone")
+                   || msgNorm.Contains("create milestone")
+                   || msgNorm.Contains("tạo milestone")
+                   || msgNorm.Contains("tao milestone")
+                   || msgNorm.Contains("tạo mốc")
+                   || msgNorm.Contains("tao moc")
+                   || msgNorm.Contains("mốc mới")
+                   || msgNorm.Contains("moc moi");
+
+            static bool MentionsAssignIntoMilestone(string msgNorm)
+                => msgNorm.Contains("into milestone")
+                   || msgNorm.Contains("to milestone")
+                   || msgNorm.Contains("for ")
+                   || msgNorm.Contains("cho ")
+                   || msgNorm.Contains("add")
+                   || msgNorm.Contains("gán")
+                   || msgNorm.Contains("gan")
+                   || msgNorm.Contains("thêm")
+                   || msgNorm.Contains("them")
+                   || msgNorm.Contains("đưa")
+                   || msgNorm.Contains("dua");
+
+            static string SuggestMilestoneNameFromTaskTitle(string? taskTitle)
+            {
+                var t = (taskTitle ?? "").Trim().ToLowerInvariant();
+                if (t.Contains("diagram") || t.Contains("design") || t.Contains("architecture") || t.Contains("class")) return "Design";
+                if (t.Contains("api") || t.Contains("backend") || t.Contains("server")) return "Backend";
+                if (t.Contains("ui") || t.Contains("ux") || t.Contains("frontend") || t.Contains("front-end")) return "Frontend";
+                return "Milestone";
+            }
+
+            static string? TryExtractQuoted(string message)
+            {
+                if (string.IsNullOrWhiteSpace(message)) return null;
+                var s = message;
+                int i1 = s.IndexOf('"');
+                if (i1 >= 0)
+                {
+                    int i2 = s.IndexOf('"', i1 + 1);
+                    if (i2 > i1 + 1) return s[(i1 + 1)..i2].Trim();
+                }
+
+                int j1 = s.IndexOf('\'');
+                if (j1 >= 0)
+                {
+                    int j2 = s.IndexOf('\'', j1 + 1);
+                    if (j2 > j1 + 1) return s[(j1 + 1)..j2].Trim();
+                }
+
+                return null;
+            }
+
+            static string? TryExtractMilestoneName(string message)
+            {
+                if (string.IsNullOrWhiteSpace(message)) return null;
+                var q = TryExtractQuoted(message);
+                if (!string.IsNullOrWhiteSpace(q)) return q;
+
+                var t = message.Trim();
+                var keyLen = 0;
+                var idx = t.IndexOf("milestone", StringComparison.OrdinalIgnoreCase);
+                if (idx >= 0) keyLen = "milestone".Length;
+                if (idx < 0)
+                {
+                    idx = t.IndexOf("mốc", StringComparison.OrdinalIgnoreCase);
+                    if (idx >= 0) keyLen = "mốc".Length;
+                }
+                if (idx < 0)
+                {
+                    idx = t.IndexOf("moc", StringComparison.OrdinalIgnoreCase);
+                    if (idx >= 0) keyLen = "moc".Length;
+                }
+                if (idx < 0 || keyLen == 0) return null;
+
+                var after = t[(idx + keyLen)..].Trim();
+                if (after.StartsWith(":", StringComparison.Ordinal)) after = after[1..].Trim();
+                if (after.Length == 0) return null;
+
+                // take first 1-3 words, avoid grabbing trailing "task".
+                var words = after.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                if (words.Length == 0) return null;
+                var take = Math.Min(3, words.Length);
+                var name = string.Join(' ', words.Take(take)).Trim();
+                name = name.TrimEnd('.', ',', ';', ':');
+                if (name.Equals("task", StringComparison.OrdinalIgnoreCase)) return null;
+                if (name.Length < 2) return null;
+                return name;
+            }
+
+            // Apply only when user is clearly talking about milestones + an existing task.
+            // Also fix the case where upstream drafts a new task due to missing context.
+            {
+                var msgNorm = Norm(userMessage);
+                if (MentionsMilestone(msgNorm) && MentionsAssignIntoMilestone(msgNorm))
+                {
+                    Guid? matchedTaskId = null;
+                    string? matchedTaskTitle = null;
+
+                    // Prefer quoted title first.
+                    var quoted = TryExtractQuoted(userMessage ?? "");
+                    if (!string.IsNullOrWhiteSpace(quoted))
+                    {
+                        var qn = Norm(quoted);
+                        var exact = taskCands.Where(t => Norm(t.title) == qn).ToList();
+                        if (exact.Count == 1)
+                        {
+                            matchedTaskId = exact[0].taskId;
+                            matchedTaskTitle = exact[0].title;
+                        }
+                    }
+
+                    // Fallback: contains match (unique best length only).
+                    if (!matchedTaskId.HasValue)
+                    {
+                        var matches = taskCands
+                            .Where(t => !string.IsNullOrWhiteSpace(t.title) && msgNorm.Contains(Norm(t.title)))
+                            .OrderByDescending(t => t.title.Length)
+                            .ToList();
+
+                        if (matches.Count > 0)
+                        {
+                            var bestLen = matches[0].title.Length;
+                            var best = matches.Where(m => m.title.Length == bestLen).ToList();
+                            if (best.Count == 1)
+                            {
+                                matchedTaskId = best[0].taskId;
+                                matchedTaskTitle = best[0].title;
+                            }
+                        }
+                    }
+
+                    if (matchedTaskId.HasValue)
+                    {
+                        var wantsNew = MentionsCreateNewMilestone(msgNorm);
+                        var milestoneName = TryExtractMilestoneName(userMessage ?? "");
+                        if (string.IsNullOrWhiteSpace(milestoneName))
+                            milestoneName = SuggestMilestoneNameFromTaskTitle(matchedTaskTitle);
+
+                        var nextActionType = wantsNew ? "create_milestone_and_assign_task" : "assign_task_to_milestone";
+
+                        draftObj["actionType"] = nextActionType;
+                        draftObj["actionPayload"] = new JsonObject
+                        {
+                            ["taskId"] = matchedTaskId.Value.ToString(),
+                            ["taskTitle"] = matchedTaskTitle,
+                            ["milestoneName"] = milestoneName,
+                            ["milestoneDescription"] = null,
+                            ["milestoneTargetDate"] = null
+                        };
+
+                        responseNode["questions"] = new JsonArray();
+                        responseNode["answerText"] = wantsNew
+                            ? $"Got it. I prepared a draft to create a milestone '{milestoneName}' and add the existing task '{matchedTaskTitle}'. Review/edit and confirm to commit."
+                            : $"Got it. I prepared a draft to add the existing task '{matchedTaskTitle}' into milestone '{milestoneName}'. Review/edit and confirm to commit.";
+                    }
+                }
+            }
         }
 
         // Persist the latest draft for follow-up turns in this chat.
@@ -1034,6 +1199,114 @@ USER_MESSAGE:
 
                     await board.UpdateTaskAsync(groupId, taskId.Value, userId, updateReq, ct);
                     return Ok(new { ok = true, updated = true, taskId });
+                }
+
+                case "create_milestone_and_assign_task":
+                {
+                    var taskId = GetGuid(payload, "taskId");
+                    if (!taskId.HasValue)
+                        return BadRequest(new { error = "actionPayload.taskId is required" });
+
+                    var milestoneName = GetString(payload, "milestoneName");
+                    if (string.IsNullOrWhiteSpace(milestoneName))
+                        return BadRequest(new { error = "actionPayload.milestoneName is required" });
+
+                    var milestoneDescription = GetString(payload, "milestoneDescription");
+                    var milestoneTargetDate = GetDateOnly(payload, "milestoneTargetDate");
+
+                    var task = await db.tasks.FirstOrDefaultAsync(t => t.group_id == groupId && t.task_id == taskId.Value, ct);
+                    if (task is null)
+                        return NotFound(new { error = "task_not_found", taskId });
+
+                    Guid backlogItemId;
+                    if (task.backlog_item_id.HasValue)
+                    {
+                        backlogItemId = task.backlog_item_id.Value;
+                    }
+                    else
+                    {
+                        backlogItemId = await tracking.CreateBacklogItemAsync(groupId, userId,
+                            new CreateBacklogItemRequest(
+                                Title: task.title,
+                                Description: string.IsNullOrWhiteSpace(task.description) ? null : task.description,
+                                Priority: string.IsNullOrWhiteSpace(task.priority) ? null : task.priority,
+                                Category: null,
+                                StoryPoints: null,
+                                DueDate: task.due_date,
+                                OwnerUserId: null),
+                            ct);
+
+                        task.backlog_item_id = backlogItemId;
+                        task.updated_at = DateTime.UtcNow;
+                        await db.SaveChangesAsync(ct);
+                    }
+
+                    var milestoneId = await tracking.CreateMilestoneAsync(groupId, userId,
+                        new CreateMilestoneRequest(
+                            Name: milestoneName!,
+                            Description: string.IsNullOrWhiteSpace(milestoneDescription) ? null : milestoneDescription,
+                            TargetDate: milestoneTargetDate),
+                        ct);
+
+                    await tracking.AssignMilestoneItemsAsync(groupId, milestoneId, userId,
+                        new AssignMilestoneItemsRequest(new[] { backlogItemId }), ct);
+
+                    return Ok(new { ok = true, created = true, milestoneId, taskId, backlogItemId });
+                }
+
+                case "assign_task_to_milestone":
+                {
+                    var taskId = GetGuid(payload, "taskId");
+                    if (!taskId.HasValue)
+                        return BadRequest(new { error = "actionPayload.taskId is required" });
+
+                    var milestoneId = GetGuid(payload, "milestoneId");
+                    var milestoneName = GetString(payload, "milestoneName");
+                    if (!milestoneId.HasValue)
+                    {
+                        if (string.IsNullOrWhiteSpace(milestoneName))
+                            return BadRequest(new { error = "actionPayload.milestoneId or milestoneName is required" });
+
+                        var milestones = await tracking.ListMilestonesAsync(groupId, userId, ct);
+                        var nameNorm = (milestoneName ?? "").Trim().ToLowerInvariant();
+                        var match = milestones.FirstOrDefault(m => (m.Name ?? "").Trim().ToLowerInvariant() == nameNorm)
+                                    ?? milestones.FirstOrDefault(m => (m.Name ?? "").Trim().ToLowerInvariant().Contains(nameNorm) || nameNorm.Contains((m.Name ?? "").Trim().ToLowerInvariant()));
+                        if (match is null)
+                            return NotFound(new { error = "milestone_not_found", milestoneName });
+                        milestoneId = match.MilestoneId;
+                    }
+
+                    var task = await db.tasks.FirstOrDefaultAsync(t => t.group_id == groupId && t.task_id == taskId.Value, ct);
+                    if (task is null)
+                        return NotFound(new { error = "task_not_found", taskId });
+
+                    Guid backlogItemId;
+                    if (task.backlog_item_id.HasValue)
+                    {
+                        backlogItemId = task.backlog_item_id.Value;
+                    }
+                    else
+                    {
+                        backlogItemId = await tracking.CreateBacklogItemAsync(groupId, userId,
+                            new CreateBacklogItemRequest(
+                                Title: task.title,
+                                Description: string.IsNullOrWhiteSpace(task.description) ? null : task.description,
+                                Priority: string.IsNullOrWhiteSpace(task.priority) ? null : task.priority,
+                                Category: null,
+                                StoryPoints: null,
+                                DueDate: task.due_date,
+                                OwnerUserId: null),
+                            ct);
+
+                        task.backlog_item_id = backlogItemId;
+                        task.updated_at = DateTime.UtcNow;
+                        await db.SaveChangesAsync(ct);
+                    }
+
+                    await tracking.AssignMilestoneItemsAsync(groupId, milestoneId.Value, userId,
+                        new AssignMilestoneItemsRequest(new[] { backlogItemId }), ct);
+
+                    return Ok(new { ok = true, assigned = true, milestoneId, taskId, backlogItemId });
                 }
 
                 case "delete_task":
