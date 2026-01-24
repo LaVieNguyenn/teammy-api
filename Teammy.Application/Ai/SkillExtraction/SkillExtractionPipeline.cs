@@ -21,21 +21,38 @@ public static class SkillExtractionPipeline
         Guid sourceId,
         string fullText,
         CancellationToken ct,
-        int chunkSize = DefaultChunkChars)
+        int chunkSize = DefaultChunkChars,
+        int? maxChunks = null,
+        TimeSpan? perChunkTimeout = null,
+        TimeSpan? totalTimeout = null)
     {
         if (llmClient is null)
             throw new ArgumentNullException(nameof(llmClient));
         if (string.IsNullOrWhiteSpace(fullText))
             return Array.Empty<string>();
 
-        var segments = ChunkText(fullText, chunkSize).ToList();
+        var effectiveMaxChunks = maxChunks.HasValue && maxChunks.Value > 0
+            ? Math.Min(maxChunks.Value, MaxChunks)
+            : MaxChunks;
+
+        var segments = ChunkText(fullText, chunkSize, effectiveMaxChunks).ToList();
         if (segments.Count == 0)
             return Array.Empty<string>();
+
+        using var totalCts = totalTimeout.HasValue && totalTimeout.Value > TimeSpan.Zero
+            ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+            : null;
+        if (totalCts is not null)
+            totalCts.CancelAfter(totalTimeout!.Value);
+
+        var effectiveCt = totalCts?.Token ?? ct;
 
         var scores = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
 
         for (var i = 0; i < segments.Count; i++)
         {
+            effectiveCt.ThrowIfCancellationRequested();
+
             var content = segments[i];
             var request = new AiSkillExtractionRequest(
                 sourceType,
@@ -45,7 +62,16 @@ public static class SkillExtractionPipeline
             AiSkillExtractionResponse? response = null;
             try
             {
-                response = await llmClient.ExtractSkillsAsync(request, ct);
+                if (perChunkTimeout.HasValue && perChunkTimeout.Value > TimeSpan.Zero)
+                {
+                    using var chunkCts = CancellationTokenSource.CreateLinkedTokenSource(effectiveCt);
+                    chunkCts.CancelAfter(perChunkTimeout.Value);
+                    response = await llmClient.ExtractSkillsAsync(request, chunkCts.Token);
+                }
+                else
+                {
+                    response = await llmClient.ExtractSkillsAsync(request, effectiveCt);
+                }
             }
             catch
             {
@@ -78,7 +104,7 @@ public static class SkillExtractionPipeline
             .ToList();
     }
 
-    private static IEnumerable<string> ChunkText(string text, int chunkSize)
+    private static IEnumerable<string> ChunkText(string text, int chunkSize, int maxChunks)
     {
         if (chunkSize <= 0)
             chunkSize = DefaultChunkChars;
@@ -90,7 +116,7 @@ public static class SkillExtractionPipeline
 
         var chunkIndex = 0;
         var cursor = 0;
-        while (cursor < total && chunkIndex < MaxChunks)
+        while (cursor < total && chunkIndex < maxChunks)
         {
             var remaining = total - cursor;
             var length = Math.Min(chunkSize, remaining);

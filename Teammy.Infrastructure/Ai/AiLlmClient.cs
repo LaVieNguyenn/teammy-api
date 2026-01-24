@@ -230,47 +230,70 @@ public sealed class AiLlmClient : IAiLlmClient
         };
 
         using var httpRequest = CreateRequest("llm/extract-skills", upstreamRequest);
-        using var response = await _httpClient.SendAsync(httpRequest, ct);
-        response.EnsureSuccessStatusCode();
 
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+        var sw = Stopwatch.StartNew();
+        var requestJson = JsonSerializer.Serialize(upstreamRequest, SerializerOptions);
+        int statusCode = 0;
+        string responseJson = "";
 
-        // Expected local response:
-        // {"primaryRole":"...", "skills":["C#","SQL"], "evidence":[{"skill":"C#","quote":"..."}]}
-        if (!document.RootElement.TryGetProperty("skills", out var skillsEl) || skillsEl.ValueKind != JsonValueKind.Array)
-            return new AiSkillExtractionResponse(Array.Empty<AiSkillEvidence>());
-
-        var evidenceBySkill = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        if (document.RootElement.TryGetProperty("evidence", out var evidenceEl) && evidenceEl.ValueKind == JsonValueKind.Array)
+        try
         {
-            foreach (var ev in evidenceEl.EnumerateArray())
+            using var response = await _httpClient.SendAsync(httpRequest, ct);
+            statusCode = (int)response.StatusCode;
+            responseJson = await response.Content.ReadAsStringAsync(ct);
+            response.EnsureSuccessStatusCode();
+
+            using var document = JsonDocument.Parse(responseJson);
+
+            // Expected local response:
+            // {"primaryRole":"...", "skills":["C#","SQL"], "evidence":[{"skill":"C#","quote":"..."}]}
+            if (!document.RootElement.TryGetProperty("skills", out var skillsEl) || skillsEl.ValueKind != JsonValueKind.Array)
+                return new AiSkillExtractionResponse(Array.Empty<AiSkillEvidence>());
+
+            var evidenceBySkill = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (document.RootElement.TryGetProperty("evidence", out var evidenceEl) && evidenceEl.ValueKind == JsonValueKind.Array)
             {
-                if (ev.ValueKind != JsonValueKind.Object)
-                    continue;
+                foreach (var ev in evidenceEl.EnumerateArray())
+                {
+                    if (ev.ValueKind != JsonValueKind.Object)
+                        continue;
 
-                var skill = ev.TryGetProperty("skill", out var s) ? (s.GetString() ?? s.ToString()) : null;
-                var quote = ev.TryGetProperty("quote", out var q) ? (q.GetString() ?? q.ToString()) : null;
-                if (string.IsNullOrWhiteSpace(skill) || string.IsNullOrWhiteSpace(quote))
-                    continue;
+                    var skill = ev.TryGetProperty("skill", out var s) ? (s.GetString() ?? s.ToString()) : null;
+                    var quote = ev.TryGetProperty("quote", out var q) ? (q.GetString() ?? q.ToString()) : null;
+                    if (string.IsNullOrWhiteSpace(skill) || string.IsNullOrWhiteSpace(quote))
+                        continue;
 
-                if (!evidenceBySkill.ContainsKey(skill))
-                    evidenceBySkill[skill] = quote;
+                    if (!evidenceBySkill.ContainsKey(skill))
+                        evidenceBySkill[skill] = quote;
+                }
             }
-        }
 
-        var results = new List<AiSkillEvidence>();
-        foreach (var skillEl in skillsEl.EnumerateArray())
+            var results = new List<AiSkillEvidence>();
+            foreach (var skillEl in skillsEl.EnumerateArray())
+            {
+                var name = skillEl.ValueKind == JsonValueKind.String ? skillEl.GetString() : skillEl.ToString();
+                if (string.IsNullOrWhiteSpace(name))
+                    continue;
+
+                evidenceBySkill.TryGetValue(name.Trim(), out var quote);
+                results.Add(new AiSkillEvidence(name.Trim(), 1.0, quote));
+            }
+
+            return new AiSkillExtractionResponse(results);
+        }
+        finally
         {
-            var name = skillEl.ValueKind == JsonValueKind.String ? skillEl.GetString() : skillEl.ToString();
-            if (string.IsNullOrWhiteSpace(name))
-                continue;
-
-            evidenceBySkill.TryGetValue(name.Trim(), out var quote);
-            results.Add(new AiSkillEvidence(name.Trim(), 1.0, quote));
+            sw.Stop();
+            _traceStore.Add(new AiGatewayTraceEntry(
+                AtUtc: DateTime.UtcNow,
+                Operation: "llm/extract-skills",
+                Mode: null,
+                QueryType: "skills_extraction",
+                RequestJson: requestJson,
+                StatusCode: statusCode,
+                ResponseJson: responseJson,
+                ElapsedMs: sw.ElapsedMilliseconds));
         }
-
-        return new AiSkillExtractionResponse(results);
     }
 
     private HttpRequestMessage CreateRequest<T>(string path, T payload)

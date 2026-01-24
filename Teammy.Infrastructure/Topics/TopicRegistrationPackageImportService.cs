@@ -594,6 +594,12 @@ public sealed class TopicRegistrationPackageImportService : ITopicImportService
             return Array.Empty<string>();
 
         var dictionaryMatches = ExtractSkillTagsFromDictionary(text, dictionary);
+
+        // Topic import is an interactive HTTP request; avoid long-running LLM calls that can cause reverse-proxy timeouts.
+        // If dictionary heuristics already found enough signals, skip AI extraction.
+        if (dictionaryMatches.Count >= 18)
+            return dictionaryMatches;
+
         IReadOnlyList<string> aiMatches = Array.Empty<string>();
 
         try
@@ -603,7 +609,11 @@ public sealed class TopicRegistrationPackageImportService : ITopicImportService
                 "topic_registration",
                 Guid.NewGuid(),
                 text,
-                ct);
+                ct,
+                chunkSize: 3500,
+                maxChunks: 2,
+                perChunkTimeout: TimeSpan.FromSeconds(8),
+                totalTimeout: TimeSpan.FromSeconds(15));
         }
         catch
         {

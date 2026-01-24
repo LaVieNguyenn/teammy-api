@@ -52,7 +52,10 @@ Send the approved draft directly (no wrapper):
         "columnId": "73bd50e4-1b38-4996-aea8-2082813f030f",
         "name": "Done",
         "isDone": true
-       }
+  
+ 
+ 
+      }
     ],
     "milestones": [],
     "backlogItems": [],
